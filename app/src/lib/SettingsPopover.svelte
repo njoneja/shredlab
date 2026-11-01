@@ -1,7 +1,7 @@
 <script lang="ts">
   import { app } from "./store.svelte";
   import { THEMES, type ModelInfo, type Quality } from "./types";
-  import { THEME_INFO } from "./theme";
+  import { THEME_NAME, isTheme } from "./theme";
 
   let { onclose }: { onclose: () => void } = $props();
 
@@ -34,19 +34,18 @@
 
 <div class="pop" role="dialog" aria-label="Settings">
   <h2>Settings</h2>
-  <div class="field">
-    <div class="label" id="theme-label">Theme</div>
-    <div class="themes" role="radiogroup" aria-labelledby="theme-label">
+  <div class="row">
+    <label class="label" for="theme-select">Theme</label>
+    <select
+      id="theme-select"
+      class="compact"
+      value={app.theme}
+      onchange={(e) => isTheme(e.currentTarget.value) && app.setTheme(e.currentTarget.value)}
+    >
       {#each THEMES as t (t)}
-        <button role="radio" aria-checked={app.theme === t} onclick={() => app.setTheme(t)}>
-          <span class="swatch" style:background={THEME_INFO[t].bg} aria-hidden="true"
-            ><span class="swatch-dot" style:background={THEME_INFO[t].accent}></span></span
-          >
-          <span class="tname">{THEME_INFO[t].name}{#if t === THEMES[0]}<span class="muted note default">(default)</span>{/if}</span>
-          <span class="tick" aria-hidden="true">{app.theme === t ? "✓" : ""}</span>
-        </button>
+        <option value={t}>{THEME_NAME[t]}</option>
       {/each}
-    </div>
+    </select>
   </div>
   {#if !st}
     <p class="muted">Settings are not available.</p>
@@ -136,62 +135,32 @@
     border-color: var(--accent);
     background: var(--accent-soft);
   }
-  .themes {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-  }
-  .themes button {
+  /* Label left, control right. */
+  .row {
     display: flex;
     align-items: center;
-    gap: 10px;
-    padding: 5px 8px;
-    background: none;
-    border: 1px solid transparent;
-    border-radius: var(--radius-sm);
-    text-align: left;
-  }
-  .themes button:hover {
-    background: var(--surface-2);
-  }
-  .themes button[aria-checked="true"] {
-    background: var(--surface-2);
-    border-color: var(--border);
-  }
-  .swatch {
-    flex: none;
-    width: 22px;
-    height: 16px;
-    border-radius: 4px;
-    border: 1px solid var(--border);
-    display: grid;
-    place-items: center;
-  }
-  .swatch-dot {
-    width: 7px;
-    height: 7px;
-    border-radius: 50%;
-  }
-  .tname {
-    flex: 1;
-  }
-  .default {
-    margin-left: 6px;
-  }
-  .tick {
-    width: 14px;
-    color: var(--accent);
-    font-weight: 700;
+    justify-content: space-between;
+    gap: 12px;
   }
   select {
     width: 100%;
     text-overflow: ellipsis;
     font: inherit;
+    font-size: 13px;
     color: inherit;
-    height: 32px;
+    height: 28px;
     padding: 0 8px;
     background: var(--surface-2);
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
+  }
+  select.compact {
+    width: 160px;
+    height: 28px;
+  }
+  /* Readable native option list in every theme (color-scheme follows the theme too). */
+  option {
+    background: var(--surface);
+    color: var(--fg);
   }
 </style>

@@ -5,11 +5,11 @@ import { THEMES, type Theme } from "./types";
 
 const MIRROR_KEY = "shredlab.theme";
 
-export const THEME_INFO: Record<Theme, { name: string; bg: string; accent: string }> = {
-  stage: { name: "Stage", bg: "#0B0C10", accent: "#FF3D7F" },
-  rosewood: { name: "Rosewood", bg: "#1A0F10", accent: "#E0875A" },
-  valve: { name: "Valve", bg: "#16120E", accent: "#F0A83A" },
-  manuscript: { name: "Manuscript", bg: "#F4EFE4", accent: "#C2412D" },
+export const THEME_NAME: Record<Theme, string> = {
+  stage: "Stage",
+  rosewood: "Rosewood",
+  valve: "Valve",
+  manuscript: "Manuscript",
 };
 
 export function isTheme(t: unknown): t is Theme {
