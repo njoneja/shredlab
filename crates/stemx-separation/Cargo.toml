@@ -9,3 +9,29 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
+stemx-dsp.workspace = true
+num_cpus.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+
+# ONNX Runtime. `download-binaries` fetches pyke's prebuilt ORT at build time
+# and `copy-dylibs` places the runtime DLLs (e.g. DirectML.dll) next to the
+# built binaries. Execution providers are added per platform below.
+ort = { version = "=2.0.0-rc.15", default-features = false, features = ["std", "download-binaries", "copy-dylibs", "tls-native"] }
+
+[target.'cfg(windows)'.dependencies]
+ort = { version = "=2.0.0-rc.15", default-features = false, features = ["directml"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+ort = { version = "=2.0.0-rc.15", default-features = false, features = ["coreml"] }
+
+[features]
+default = []
+# NVIDIA CUDA execution provider (needs the CUDA/cuDNN runtime on the machine).
+cuda = ["ort/cuda"]
+# Load onnxruntime.dll/.so/.dylib at runtime (ORT_DYLIB_PATH, or next to the
+# executable) instead of linking pyke's static build. For testing against
+# Microsoft's official builds.
+load-dynamic = ["ort/load-dynamic"]
