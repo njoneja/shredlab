@@ -238,11 +238,13 @@ the README.
 
 ## Licensing
 
-- Code: MIT.
+- Code: GPL-3.0-or-later, with a section 7 permission for combining with
+  Microsoft DirectML ([LICENSE-EXCEPTION](../LICENSE-EXCEPTION)). The name
+  and logo are trademarks ([TRADEMARKS.md](../TRADEMARKS.md)). Some
+  dependencies are Apache-2.0 only, so the code cannot move to GPL-2.0.
 - Model weights carry their own licenses, declared in each `model.json` and
   shown in the model picker. Both bundled models are MIT.
 - Signalsmith Stretch and Signalsmith Linear are vendored (MIT).
 - MP3 export uses LAME (LGPL), compiled from source and statically linked.
-  Publishing the full source satisfies the relinking requirement. It is the
-  only copyleft component; details in
+  Publishing the full source satisfies the relinking requirement. Details in
   [crates/stemx-audio/THIRD_PARTY.md](../crates/stemx-audio/THIRD_PARTY.md).

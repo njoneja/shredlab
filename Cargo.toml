@@ -14,8 +14,8 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-license = "MIT"
-authors = ["Stem Extractor contributors"]
+license = "GPL-3.0-or-later"
+authors = ["Navneet Joneja"]
 rust-version = "1.92"
 
 [workspace.dependencies]

@@ -167,7 +167,10 @@ executable), e.g. to test against Microsoft's official builds.
 
 ## License
 
-[MIT](LICENSE). Bundled model weights carry their own licenses (see
+[GPL-3.0-or-later](LICENSE), with an additional permission for combining
+with Microsoft DirectML ([LICENSE-EXCEPTION](LICENSE-EXCEPTION)). The name
+and logo are not covered by the GPL; see [TRADEMARKS.md](TRADEMARKS.md).
+Bundled model weights carry their own licenses (see
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)).
 Third-party notices: [app/THIRD_PARTY.md](app/THIRD_PARTY.md) (fonts) and
 [crates/stemx-audio/THIRD_PARTY.md](crates/stemx-audio/THIRD_PARTY.md)
