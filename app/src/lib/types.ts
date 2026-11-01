@@ -154,6 +154,27 @@ export interface LibraryEntry {
   last_opened_ms: number;
 }
 
+/** One song in the storage view (`list_library`). */
+export interface StoredSongInfo {
+  song_id: string;
+  path: string;
+  title: string;
+  artist: string | null;
+  size_bytes: number;
+  last_opened_ms: number;
+  source_exists: boolean;
+  /** Removed from the recent list. */
+  hidden: boolean;
+  /** Currently open (cannot be deleted). */
+  open: boolean;
+}
+
+export interface LibraryListing {
+  dir: string;
+  total_bytes: number;
+  songs: StoredSongInfo[];
+}
+
 export type SeparationStage = "loading_model" | "decoding" | "separating" | "writing" | "beats";
 
 export type SeparationStarted = SeparatedWith;
@@ -301,6 +322,10 @@ export interface Backend {
   openSong(path: string): Promise<SongInfo>;
   closeSong(): Promise<void>;
   getLibrary(): Promise<LibraryEntry[]>;
+  hideRecent(songId: string): Promise<void>;
+  listLibrary(): Promise<LibraryListing>;
+  /** Returns the bytes freed. */
+  deleteSong(songId: string): Promise<number>;
   startSeparation(): Promise<SeparationStarted>;
   cancelSeparation(): Promise<void>;
   play(): Promise<void>;

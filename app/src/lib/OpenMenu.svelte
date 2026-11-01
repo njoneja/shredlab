@@ -63,6 +63,11 @@
       e.preventDefault();
       hide();
       return;
+    } else if (e.key === "Delete" && i >= 0 && all[i].dataset.song) {
+      e.preventDefault();
+      const entry = items.find((x) => x.song_id === all[i].dataset.song);
+      if (entry) remove(null, entry);
+      return;
     } else if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
       if (i >= 0) all[i].click();
@@ -81,6 +86,20 @@
     // The current song: just close the menu (re-opening would reset playback and the mix).
     if (entry.song_id === app.song?.song_id) return;
     app.openPath(entry.path);
+  }
+
+  // Hide from the recent list only (stems stay); keeps focus in the menu on the next row.
+  async function remove(ev: MouseEvent | null, entry: LibraryEntry) {
+    ev?.stopPropagation();
+    const all = menuItems();
+    const at = all.findIndex((el) => el.dataset.song === entry.song_id);
+    const keyboard = menu?.contains(document.activeElement) ?? false;
+    await app.hideRecent(entry.song_id);
+    await tick();
+    if (!keyboard) return;
+    const rest = menuItems().filter((el) => el.dataset.song || el.classList.contains("file"));
+    const songsLeft = rest.filter((el) => el.dataset.song);
+    (songsLeft[Math.min(Math.max(at, 0) / 2, songsLeft.length - 1)] ?? rest[rest.length - 1])?.focus();
   }
 
   function openFile() {
@@ -117,20 +136,34 @@
       <div class="head" role="presentation">Recent songs</div>
       {#each items as e (e.song_id)}
         {@const current = e.song_id === app.song?.song_id}
-        <button
-          class="item"
-          class:current
-          role="menuitem"
-          tabindex="-1"
-          aria-current={current ? "true" : undefined}
-          title={e.path}
-          onclick={() => choose(e)}
-        >
-          <span class="t">{e.title}</span>
-          <span class="badge" class:ready={e.stems_cached}>{recentStatus(e)}</span>
-          <span class="meta muted">{[e.artist, formatTime(e.duration_sec)].filter(Boolean).join(" · ")}</span>
-          {#if current}<span class="now">Open now</span>{/if}
-        </button>
+        <div class="row" role="none">
+          <button
+            class="item"
+            class:current
+            role="menuitem"
+            tabindex="-1"
+            aria-current={current ? "true" : undefined}
+            aria-keyshortcuts="Delete"
+            title={e.path}
+            data-song={e.song_id}
+            onclick={() => choose(e)}
+          >
+            <span class="t">{e.title}</span>
+            <span class="badge" class:ready={e.stems_cached}>{recentStatus(e)}</span>
+            <span class="meta muted">{[e.artist, formatTime(e.duration_sec)].filter(Boolean).join(" · ")}</span>
+            {#if current}<span class="now">Open now</span>{/if}
+          </button>
+          <button
+            class="x"
+            role="menuitem"
+            tabindex="-1"
+            aria-label={`Remove ${e.title} from recent`}
+            title="Remove from recent (stems are kept)"
+            onclick={(ev) => remove(ev, e)}
+          >
+            <Icon name="close" size={12} />
+          </button>
+        </div>
       {:else}
         <div class="none muted" role="presentation">No recent songs</div>
       {/each}
@@ -183,6 +216,40 @@
     letter-spacing: 0.06em;
     color: var(--muted);
     padding: 4px 8px 6px;
+  }
+  .row {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+  }
+  .row .item {
+    flex: 1;
+    min-width: 0;
+  }
+  .x {
+    flex: none;
+    width: 24px;
+    height: 24px;
+    display: grid;
+    place-items: center;
+    padding: 0;
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: none;
+    color: var(--muted);
+    opacity: 0;
+  }
+  .row:hover .x,
+  .row:focus-within .x {
+    opacity: 1;
+  }
+  .x:hover,
+  .x:focus {
+    background: var(--surface-2);
+    color: var(--fg);
+  }
+  .x:focus:not(:focus-visible) {
+    outline: none;
   }
   .item {
     display: grid;

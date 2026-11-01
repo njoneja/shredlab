@@ -11,6 +11,7 @@ import type {
   EventMap,
   EventName,
   LibraryEntry,
+  LibraryListing,
   LoopState,
   ModelInfo,
   Quality,
@@ -41,6 +42,9 @@ const LS_APP = "stemx.mock.app_settings";
 const LS_THEME = "stemx.mock.theme";
 const LS_REFINE = "stemx.mock.refine.";
 const LS_STRENGTH = "stemx.mock.strength.";
+// Song ids removed from the recent list, and demo songs whose data was deleted.
+const LS_HIDDEN = "stemx.mock.hidden";
+const LS_GONE = "stemx.mock.deleted";
 
 function lsGet<T>(key: string, fallback: T): T {
   try {
@@ -329,6 +333,7 @@ function startTicking() {
 }
 
 function addToLibrary(s: SongInfo) {
+  for (const k of [LS_HIDDEN, LS_GONE]) lsSet(k, lsGet<string[]>(k, []).filter((id) => id !== s.song_id));
   const lib = lsGet<LibraryEntry[]>(LS_LIB, []).filter((e) => e.song_id !== s.song_id);
   lib.unshift({
     song_id: s.song_id,
@@ -340,6 +345,24 @@ function addToLibrary(s: SongInfo) {
     last_opened_ms: Date.now(),
   });
   lsSet(LS_LIB, lib.slice(0, 20));
+}
+
+// Every library entry, hidden ones included.
+function allEntries(): LibraryEntry[] {
+  const lib = lsGet<LibraryEntry[]>(LS_LIB, []);
+  const gone = lsGet<string[]>(LS_GONE, []);
+  // Pad with the demo songs (older than anything opened) so the start screen and the
+  // header's Open menu always have a few recents to show.
+  const seeds = DEMO_SONGS.slice(1).map((s, i) => ({
+    song_id: songIdFor(s.path),
+    path: s.path,
+    title: s.title,
+    artist: s.artist,
+    duration_sec: s.duration_sec,
+    stems_cached: false,
+    last_opened_ms: Date.now() - (i + 1) * 86400000,
+  }));
+  return [...lib, ...seeds.filter((d) => !gone.includes(d.song_id) && !lib.some((e) => e.song_id === d.song_id))];
 }
 
 function stopSeparation() {
@@ -428,21 +451,59 @@ export const mockBackend: Backend = {
     playing = false;
   },
   async getLibrary() {
-    const lib = lsGet<LibraryEntry[]>(LS_LIB, []);
-    // Pad with the demo songs (older than anything opened) so the start screen and the
-    // header's Open menu always have a few recents to show.
-    const seeds = DEMO_SONGS.slice(1).map((s, i) => ({
-      song_id: songIdFor(s.path),
-      path: s.path,
-      title: s.title,
-      artist: s.artist,
-      duration_sec: s.duration_sec,
-      stems_cached: false,
-      last_opened_ms: Date.now() - (i + 1) * 86400000,
-    }));
-    return [...lib, ...seeds.filter((d) => !lib.some((e) => e.song_id === d.song_id))];
+    const hidden = lsGet<string[]>(LS_HIDDEN, []);
+    return allEntries().filter((e) => !hidden.includes(e.song_id));
+  },
+  async hideRecent(songId) {
+    lsSet(LS_HIDDEN, [...lsGet<string[]>(LS_HIDDEN, []).filter((id) => id !== songId), songId]);
+  },
+  async listLibrary(): Promise<LibraryListing> {
+    await delay(400); // the app walks the song folders
+    const hidden = lsGet<string[]>(LS_HIDDEN, []);
+    const cached = lsGet<string[]>(LS_CACHED, []);
+    const songs = allEntries().map((e) => {
+      // 16-bit stereo at 44.1 kHz: the original copy plus 6 stems per cached set.
+      const sets = cached.filter((k) => k.startsWith(e.song_id + "|")).length;
+      const wav = Math.round(e.duration_sec * 44100 * 4);
+      return {
+        song_id: e.song_id,
+        path: e.path,
+        title: e.title,
+        artist: e.artist,
+        size_bytes: 2048 + (sets ? wav * (1 + 6 * sets) : 0),
+        last_opened_ms: e.last_opened_ms,
+        // Pretend the last demo song's file was moved.
+        source_exists: e.path !== DEMO_SONGS[DEMO_SONGS.length - 1].path,
+        hidden: hidden.includes(e.song_id),
+        open: e.song_id === song?.song_id,
+      };
+    });
+    songs.sort((a, b) => b.size_bytes - a.size_bytes);
+    return {
+      dir: "C:\\Users\\you\\AppData\\Roaming\\com.shredlab.app\\library",
+      total_bytes: songs.reduce((n, s) => n + s.size_bytes, 0),
+      songs,
+    };
+  },
+  async deleteSong(songId) {
+    await delay(150);
+    if (song?.song_id === songId) throw new Error("This song is open. Close it before deleting its stems.");
+    const freed = (await mockBackend.listLibrary()).songs.find((s) => s.song_id === songId)?.size_bytes ?? 0;
+    lsSet(LS_LIB, lsGet<LibraryEntry[]>(LS_LIB, []).filter((e) => e.song_id !== songId));
+    lsSet(LS_CACHED, lsGet<string[]>(LS_CACHED, []).filter((k) => !k.startsWith(songId + "|")));
+    lsSet(LS_HIDDEN, lsGet<string[]>(LS_HIDDEN, []).filter((id) => id !== songId));
+    lsSet(LS_GONE, [...lsGet<string[]>(LS_GONE, []), songId]);
+    for (const k of [LS_SETTINGS, LS_REFINE, LS_STRENGTH]) {
+      try {
+        localStorage.removeItem(k + songId);
+      } catch {
+        /* ignore */
+      }
+    }
+    return freed;
   },
   async startSeparation() {
+
     if (!song) throw new Error("No song open");
     if (sepTimer != null) throw new Error("Separation already running");
     const id = song.song_id;

@@ -97,6 +97,14 @@
             <li>3/4 and 6/8 can't be told apart; 6/8 usually shows as 2 beats per bar. Use subdivision 3.</li>
           </ul>
         </section>
+
+        <section>
+          <h3>Your songs</h3>
+          <ul>
+            <li><b>✕</b> on a recent song removes it from the list. Its stems are kept: open the file again and it's back, instantly.</li>
+            <li><b>Settings → Manage storage…</b> shows how much space each song's stems take. <b>Delete stems</b> frees it; opening the song again means separating it again. The open song can't be deleted.</li>
+          </ul>
+        </section>
       </div>
 
       <section class="keys">

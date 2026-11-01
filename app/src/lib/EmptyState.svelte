@@ -41,6 +41,14 @@
               <span class="muted mono d">{formatTime(e.duration_sec)}</span>
               <span class="muted w">{ago(e.last_opened_ms)}</span>
             </button>
+            <button
+              class="x"
+              aria-label={`Remove ${e.title} from recent`}
+              title="Remove from recent (stems are kept)"
+              onclick={() => app.hideRecent(e.song_id)}
+            >
+              <Icon name="close" size={12} />
+            </button>
           </li>
         {/each}
       </ul>
@@ -113,8 +121,35 @@
     flex-direction: column;
     gap: 2px;
   }
-  li button {
-    width: 100%;
+  li {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+  }
+  .x {
+    flex: none;
+    width: 26px;
+    height: 26px;
+    display: grid;
+    place-items: center;
+    padding: 0;
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: none;
+    color: var(--muted);
+    opacity: 0;
+  }
+  li:hover .x,
+  li:focus-within .x {
+    opacity: 1;
+  }
+  li .x:hover {
+    background: var(--surface-2);
+    color: var(--fg);
+  }
+  li button:not(.x) {
+    flex: 1;
+    min-width: 0;
     display: grid;
     grid-template-columns: minmax(0, 2fr) minmax(0, 1.3fr) auto 48px 84px;
     gap: 12px;
@@ -125,7 +160,7 @@
     padding: 8px 10px;
     border-radius: var(--radius-sm);
   }
-  li button:hover:not(:disabled) {
+  li button:not(.x):hover:not(:disabled) {
     background: var(--surface-2);
   }
   .t {

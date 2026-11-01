@@ -111,6 +111,13 @@
     class="btn ghost small about"
     onclick={() => {
       onclose();
+      app.openStorage();
+    }}>Manage storage…</button
+  >
+  <button
+    class="btn ghost small about"
+    onclick={() => {
+      onclose();
       app.openAbout();
     }}>About ShredLab</button
   >

@@ -113,6 +113,8 @@ class AppState {
   helpSection = $state<HelpSection | null>(null);
   // About dialog (AboutDialog.svelte)
   aboutOpen = $state(false);
+  // Manage storage dialog (StorageDialog.svelte)
+  storageOpen = $state(false);
 
   // export
   exportOpen = $state(false);
@@ -392,6 +394,17 @@ class AppState {
     } catch (e) {
       console.warn("get_library failed", e);
     }
+  }
+
+  /** Removes a song from the recent list only; its stems stay and opening it brings it back. */
+  async hideRecent(songId: string) {
+    this.library = this.library.filter((e) => e.song_id !== songId);
+    try {
+      await api.hideRecent(songId);
+    } catch (e) {
+      this.report(e);
+    }
+    this.refreshLibrary();
   }
 
   showToast(msg: string) {
@@ -834,6 +847,16 @@ class AppState {
 
   closeAbout() {
     this.aboutOpen = false;
+  }
+
+  // ---- storage ----
+  openStorage() {
+    this.storageOpen = true;
+  }
+
+  closeStorage() {
+    this.storageOpen = false;
+    this.refreshLibrary();
   }
 
   // ---- export ----
