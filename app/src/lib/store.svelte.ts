@@ -155,9 +155,7 @@ class AppState {
       if (p.song_id !== this.song?.song_id) return;
       this.separating = false;
       this.stemsReady = true;
-      // separation-done carries no original_available; after a separation (or a
-      // cached-set load) the backend has the original loaded too (API.md P1).
-      this.song = { ...this.song, stems_cached: true, separated_with: p.separated_with, original_available: true };
+      this.song = { ...this.song, stems_cached: true, separated_with: p.separated_with, original_available: p.original_available };
       this.showToast("Stems ready");
       this.refreshLibrary();
     });

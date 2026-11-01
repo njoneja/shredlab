@@ -1098,6 +1098,7 @@ impl Backend {
                     return;
                 }
                 let with = separated_with(&info);
+                let mut original_available = false;
                 if let Some(song) = st.song.as_mut() {
                     if let Ok(Some(m)) = self.library.load(&song_id) {
                         song.meta.stem_sets = m.stem_sets;
@@ -1109,6 +1110,7 @@ impl Backend {
                         song.original = Some(original_track(&song.mix));
                     }
                     song.check_alignment();
+                    original_available = song.backing_from_original();
                     if let Some(e) = &self.engine {
                         song.load_into(e);
                     }
@@ -1120,6 +1122,7 @@ impl Backend {
                     &SeparationDone {
                         song_id,
                         separated_with: with,
+                        original_available,
                     },
                 );
             }
@@ -1713,6 +1716,35 @@ impl Backend {
 
     pub fn data_dir(&self) -> &Path {
         &self.cfg.data_dir
+    }
+
+    /// Autotest helper: (original - stem) and the plain sum of the other
+    /// stems, unstretched, for checking a P1 export. `None` without stems
+    /// or original.
+    #[cfg(debug_assertions)]
+    pub fn debug_backing_reference(&self, without: &str) -> Option<[[Vec<f32>; 2]; 2]> {
+        let st = lock(&self.st);
+        let song = st.song.as_ref()?;
+        let o = song.original.as_ref()?;
+        let stems = song.stems.as_ref()?;
+        let x = stems.iter().find(|t| t.name == without)?;
+        let p1 = [0, 1].map(|c| {
+            o.channels[c]
+                .iter()
+                .zip(x.channels[c].iter())
+                .map(|(a, b)| a - b)
+                .collect::<Vec<f32>>()
+        });
+        let sum = [0, 1].map(|c| {
+            let mut v = vec![0.0f32; o.channels[c].len()];
+            for t in stems.iter().filter(|t| t.name != without) {
+                for (s, y) in v.iter_mut().zip(t.channels[c].iter()) {
+                    *s += y;
+                }
+            }
+            v
+        });
+        Some([p1, sum])
     }
 }
 

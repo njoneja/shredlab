@@ -81,6 +81,7 @@ export interface SeparationProgress {
 export interface SeparationDone {
   song_id: string;
   separated_with: SeparatedWith;
+  original_available: boolean;
 }
 
 export interface SeparationError {

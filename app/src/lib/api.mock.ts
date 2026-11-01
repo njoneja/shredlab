@@ -381,7 +381,7 @@ export const mockBackend: Backend = {
           song.original_available = true;
           addToLibrary(song);
         }
-        emit("separation-done", { song_id: id, separated_with: sw });
+        emit("separation-done", { song_id: id, separated_with: sw, original_available: true });
       }
     }, 100);
     return sw;

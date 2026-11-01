@@ -175,7 +175,7 @@ SongSettings   // OPAQUE to the backend: store the JSON value and return it verb
 |---|---|---|
 | `playback-position` | `{ position_sec: number, playing: boolean, count_in_beats_left: number }` | ~30 Hz while playing (including during count-in) **and** once immediately after every play, pause, seek, loop wrap, and end of song. `count_in_beats_left` = count-in clicks still to come (0 when not counting in). |
 | `separation-progress` | `{ song_id, stage: SeparationStage, fraction: number, model_name, device_label }` | Throttle to ≤ 10 Hz. `fraction` is **overall** progress 0..1, monotonic across stages. |
-| `separation-done` | `{ song_id, separated_with: SeparatedWith }` | Stems written and cached. Playback switches from the original to the stems seamlessly at the current position (keep playing if playing). |
+| `separation-done` | `{ song_id, separated_with: SeparatedWith, original_available: boolean }` | Stems written and cached. Playback switches from the original to the stems seamlessly at the current position (keep playing if playing). |
 | `separation-error` | `{ song_id, message: string, cancelled: boolean }` | Failure or cancel. Playback of the original continues. |
 | `beats-ready` | `{ song_id }` | Beat grid for that song is available via `get_beats`. Also fine to emit after separation if beats are computed in the `beats` stage. |
 | `export-progress` | `{ fraction: number }` | ≤ 10 Hz, 0..1. |

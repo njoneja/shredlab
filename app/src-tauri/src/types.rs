@@ -234,6 +234,8 @@ pub struct SeparationProgress {
 pub struct SeparationDone {
     pub song_id: String,
     pub separated_with: SeparatedWith,
+    /// Same as `SongInfo.original_available` after the switch to stems.
+    pub original_available: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
