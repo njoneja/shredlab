@@ -161,6 +161,29 @@ impl CountInPlan {
 /// Beats closer than this after the start count as "on" it.
 const ON_BEAT: f64 = 0.005;
 
+/// Where playback (or an export range) asked to start at `start` really
+/// starts, given that it must not go past `limit` (the loop end or the
+/// export range end).
+///
+/// With a count-in and a [`ClickConfig::music_start`], a start at the song
+/// start (0, or before the first beat) jumps to the music start, so the
+/// count-in leads straight into the music instead of a quiet intro. A start
+/// the user placed later is never moved. Otherwise returns `start`.
+pub fn effective_start(cfg: &ClickConfig, start: f64, limit: f64) -> f64 {
+    let Some(ms) = cfg.music_start.filter(|m| m.is_finite()) else {
+        return start;
+    };
+    if cfg.count_in_beats == 0 || ms <= start || ms >= limit {
+        return start;
+    }
+    let at_song_start = start <= ON_BEAT || cfg.beats.first().is_some_and(|&b| start < b - ON_BEAT);
+    if at_song_start {
+        ms
+    } else {
+        start
+    }
+}
+
 /// Plans the count-in for playback starting at song time `start`.
 /// `None` when the count-in is off. Without a beat at or after `start`, the
 /// count-in plays over silence and the audio starts one interval after the
@@ -212,6 +235,7 @@ mod tests {
             count_in_beats: 0,
             beats_per_bar: 4,
             volume: 1.0,
+            music_start: None,
         }
     }
 
@@ -274,6 +298,32 @@ mod tests {
         // Past the last beat: count-in over silence, at the last tempo.
         let p = plan_count_in(&c, 50.0, 1.0).unwrap();
         assert!((p.audio_start - 2.0).abs() < 1e-12 && p.first_click == 0.0);
+    }
+
+    #[test]
+    fn effective_start_skips_a_quiet_intro_only_from_the_song_start() {
+        let beats: Vec<f64> = (0..40).map(|i| 2.0 + i as f64 * 0.5).collect();
+        let mut c = cfg(beats, vec![], 1);
+        c.count_in_beats = 4;
+        c.music_start = Some(8.4);
+        // From 0 or before the first beat: jump to the music start.
+        assert_eq!(effective_start(&c, 0.0, 100.0), 8.4);
+        assert_eq!(effective_start(&c, 1.5, 100.0), 8.4);
+        // A start the user placed on or after the first beat stays.
+        assert_eq!(effective_start(&c, 2.0, 100.0), 2.0);
+        assert_eq!(effective_start(&c, 5.0, 100.0), 5.0);
+        // Never past the end of the loop / export range.
+        assert_eq!(effective_start(&c, 0.0, 8.0), 0.0);
+        // No count-in, or no music start: unchanged.
+        let mut off = c.clone();
+        off.count_in_beats = 0;
+        assert_eq!(effective_start(&off, 0.0, 100.0), 0.0);
+        let mut none = c.clone();
+        none.music_start = None;
+        assert_eq!(effective_start(&none, 0.0, 100.0), 0.0);
+        // The count-in from there leads into the beat at or after it.
+        let p = plan_count_in(&c, effective_start(&c, 0.0, 100.0), 1.0).unwrap();
+        assert!((p.audio_start - (2.0 - 0.1)).abs() < 1e-12, "{p:?}");
     }
 
     #[test]

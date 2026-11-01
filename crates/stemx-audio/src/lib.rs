@@ -4,8 +4,8 @@
 //!   default output device with per-track gains, tempo change without pitch
 //!   change, pitch shift, A–B loop, click track and count-in.
 //! - [`render`] + [`encode`]: offline "export what you hear" (same mix and
-//!   stretch path, whole song, no loop; click track and count-in optional)
-//!   to WAV, FLAC or MP3.
+//!   stretch path, the whole song or a time range; click track and count-in
+//!   optional) to WAV, FLAC or MP3.
 //!
 //! # Architecture
 //!
@@ -39,7 +39,7 @@ use std::sync::Arc;
 pub use encode::{encode, limiter_gain, peak, ExportFormat};
 pub use engine::{Engine, EngineStats};
 pub use mix::{choose_mode, MixMode};
-pub use render::{render, RenderRequest};
+pub use render::{render, render_range, RenderRequest, EDGE_FADE_SECS};
 
 /// Version of this crate, from `Cargo.toml`.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -73,6 +73,12 @@ pub struct ClickConfig {
     pub beats_per_bar: u32,
     /// Linear click gain (0..1).
     pub volume: f32,
+    /// Where the music really starts (song seconds), when the song opens
+    /// with a quiet intro (e.g. studio talk) that the count-in should skip.
+    /// With a count-in, a start at the song start jumps here (see
+    /// [`click::effective_start`]). `None` = never skip. The crate does not
+    /// detect this itself; the caller decides.
+    pub music_start: Option<f64>,
 }
 
 impl Default for ClickConfig {
@@ -85,6 +91,7 @@ impl Default for ClickConfig {
             count_in_beats: 0,
             beats_per_bar: 4,
             volume: 0.8,
+            music_start: None,
         }
     }
 }

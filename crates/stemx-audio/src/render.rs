@@ -1,5 +1,6 @@
 //! Offline render for export: the same mix and stretch path as playback,
-//! whole song, no loop, optionally with the click track and a count-in.
+//! the whole song or a time range (played once), optionally with the click
+//! track and a count-in.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -25,15 +26,47 @@ pub struct RenderRequest {
     pub semitones: f64,
     /// Click track (`enabled`) and count-in (`count_in_beats > 0`), exactly
     /// as in playback. [`ClickConfig::default`] = neither (plain music).
+    /// With a count-in and [`ClickConfig::music_start`], a range that starts
+    /// at the song start begins at the music start instead
+    /// ([`crate::click::effective_start`]).
     pub click: ClickConfig,
+    /// Range start, song seconds (0 = the song start).
+    pub start: f64,
+    /// Range end, song seconds (`None` = the song end).
+    pub end: Option<f64>,
 }
 
 const BLOCK: usize = 16_384;
 
-/// Renders the whole song at the tracks' sample rate. Output length is
-/// `round(len / speed)` (exactly `len` without stretching), plus the
-/// count-in if `req.click` has one. `progress` gets 0..=1 (at most ~100
-/// calls); `cancel` is polled between blocks.
+/// Fade at cut points inside the song (range edges that aren't the song's
+/// real start or end), so the file doesn't start or stop with a click.
+pub const EDGE_FADE_SECS: f64 = 0.008;
+
+/// The range [`render`] really renders for `req`, in song seconds:
+/// `(start, end)` after clamping to `[0, duration]` and moving the start to
+/// the music start if that applies. `None` if the range is empty.
+pub fn render_range(req: &RenderRequest, duration: f64) -> Option<(f64, f64)> {
+    let end = req
+        .end
+        .filter(|e| e.is_finite())
+        .map_or(duration, |e| e.clamp(0.0, duration));
+    let start = if req.start.is_finite() {
+        req.start.clamp(0.0, duration)
+    } else {
+        0.0
+    };
+    if end - start < 0.01 {
+        return None;
+    }
+    Some((crate::click::effective_start(&req.click, start, end), end))
+}
+
+/// Renders the range ([`render_range`]; the whole song by default) at the
+/// tracks' sample rate. Output length is `round(range / speed)` (exactly the
+/// range's frames without stretching), plus the count-in if `req.click` has
+/// one; the count-in leads into the first beat at or after the range start.
+/// Range edges inside the song get an [`EDGE_FADE_SECS`] fade. `progress`
+/// gets 0..=1 (at most ~100 calls); `cancel` is polled between blocks.
 ///
 /// Without click and count-in the output is the raw mix (the encoder's
 /// limiter takes care of peaks). With them, it mirrors playback, where
@@ -55,19 +88,29 @@ pub fn render(
     p.load_with_original(req.tracks.clone(), req.original.clone());
     p.set_speed(req.speed);
     p.set_pitch(req.semitones);
-    if with_click {
-        p.set_click(req.click.clone());
-        p.set_click_track(req.click.enabled);
-    }
     let duration = p.duration();
     if duration <= 0.0 {
         return Err(AudioError::Invalid("tracks are empty".into()));
     }
+    let (start, end) =
+        render_range(req, duration).ok_or(AudioError::Invalid("empty export range".into()))?;
+    if with_click {
+        // The start is resolved above (against the range end); the pipeline
+        // must not move it again.
+        p.set_click(ClickConfig {
+            music_start: None,
+            ..req.click.clone()
+        });
+        p.set_click_track(req.click.enabled);
+    }
+    let cut_start = start > 0.0;
+    let cut_end = end < duration;
+    p.seek(start);
     let sr = p.sample_rate();
     let speed = req.speed.clamp(0.5, 1.5);
     let count_in =
-        crate::click::plan_count_in(&req.click, 0.0, speed).map_or(0.0, |c| c.audio_start());
-    let expect = ((duration / speed + count_in) * sr as f64).round() as usize;
+        crate::click::plan_count_in(&req.click, start, speed).map_or(0.0, |c| c.audio_start());
+    let expect = (((end - start) / speed + count_in) * sr as f64).round() as usize;
     let mut out = [
         Vec::with_capacity(expect + BLOCK),
         Vec::with_capacity(expect + BLOCK),
@@ -89,7 +132,10 @@ pub fn render(
         } else {
             p.render(&mut l, &mut r, &mut meta);
         }
-        let n = meta.iter().position(|m| !m.playing()).unwrap_or(BLOCK);
+        let n = meta
+            .iter()
+            .position(|m| !m.playing() || (cut_end && m.pos >= end))
+            .unwrap_or(BLOCK);
         out[0].extend_from_slice(&l[..n]);
         out[1].extend_from_slice(&r[..n]);
         if with_click {
@@ -98,17 +144,48 @@ pub fn render(
         if n < BLOCK {
             break;
         }
-        let f = (meta[n - 1].pos / duration) as f32;
+        let f = ((meta[n - 1].pos - start) / (end - start)) as f32;
         if f - last_report >= 0.01 {
-            progress(f.min(1.0));
+            progress(f.clamp(0.0, 1.0));
             last_report = f;
         }
+    }
+    let fade = ((EDGE_FADE_SECS * sr as f64).round() as usize).max(1);
+    if cut_start {
+        // The music starts after the count-in's lead (silence before it).
+        let a0 = ((count_in * sr as f64).round() as usize).min(out[0].len());
+        for ch in out.iter_mut() {
+            fade_in(&mut ch[a0..], fade);
+        }
+    }
+    if cut_end {
+        for ch in out.iter_mut() {
+            fade_out(ch, fade);
+        }
+        fade_out(&mut clicks, fade);
     }
     if with_click {
         add_clicks_after_limiter(&mut out, &clicks, sr);
     }
     progress(1.0);
     Ok(out)
+}
+
+/// Linear fade-in over the first `len` samples.
+fn fade_in(x: &mut [f32], len: usize) {
+    let n = len.min(x.len());
+    for (i, v) in x[..n].iter_mut().enumerate() {
+        *v *= i as f32 / len as f32;
+    }
+}
+
+/// Linear fade-out over the last `len` samples (the last one is silent).
+fn fade_out(x: &mut [f32], len: usize) {
+    let n = len.min(x.len());
+    let from = x.len() - n;
+    for (i, v) in x[from..].iter_mut().enumerate() {
+        *v *= (n - 1 - i) as f32 / len as f32;
+    }
 }
 
 /// Limits the music to [`CEILING`] (as the encoder would), then adds the
@@ -163,6 +240,8 @@ mod tests {
             speed: 1.0,
             semitones: 0.0,
             click: ClickConfig::default(),
+            start: 0.0,
+            end: None,
         };
         let mut calls = 0;
         let out = render(&req, &mut |_| calls += 1, &AtomicBool::new(false)).unwrap();
@@ -183,6 +262,8 @@ mod tests {
                 speed,
                 semitones: semis,
                 click: ClickConfig::default(),
+                start: 0.0,
+                end: None,
             };
             let out = render(&req, &mut |_| {}, &AtomicBool::new(false)).unwrap();
             let want = (88_200.0 / speed).round() as usize;
@@ -220,6 +301,8 @@ mod tests {
             speed: 1.0,
             semitones: 0.0,
             click: ClickConfig::default(),
+            start: 0.0,
+            end: None,
         };
         let out = render(&req, &mut |_| {}, &AtomicBool::new(false)).unwrap();
         for i in 0..n {
@@ -237,6 +320,8 @@ mod tests {
             speed: 0.9,
             semitones: 0.0,
             click: ClickConfig::default(),
+            start: 0.0,
+            end: None,
         };
         let r = render(&req, &mut |_| {}, &AtomicBool::new(true));
         assert!(matches!(r, Err(AudioError::Cancelled)));
@@ -251,6 +336,7 @@ mod tests {
             count_in_beats: 0,
             beats_per_bar: 4,
             volume: 0.8,
+            music_start: None,
         }
     }
 
@@ -289,6 +375,8 @@ mod tests {
             speed: 0.9,
             semitones: 1.0,
             click: ClickConfig::default(),
+            start: 0.0,
+            end: None,
         };
         let mut off = click_cfg(vec![0.0, 0.5], vec![0.0]);
         off.enabled = false;
@@ -314,6 +402,8 @@ mod tests {
             speed: 0.8,
             semitones: 2.0,
             click: click_cfg(beats.clone(), vec![0.5, 2.5]),
+            start: 0.0,
+            end: None,
         };
         let out = render(&req, &mut |_| {}, &AtomicBool::new(false)).unwrap();
         assert!(out[0].len().abs_diff((4.0 * 44_100.0 / 0.8) as usize) <= 2);
@@ -344,6 +434,8 @@ mod tests {
             speed,
             semitones: 0.0,
             click: ClickConfig::default(),
+            start: 0.0,
+            end: None,
         };
         let mut c = click_cfg(beats, vec![0.0, 2.0]);
         c.enabled = false;
@@ -396,6 +488,131 @@ mod tests {
         assert_eq!(&out[1][ci..], &plain[1][..]);
     }
 
+    fn range_req(secs: f32, start: f64, end: Option<f64>) -> RenderRequest {
+        RenderRequest {
+            tracks: vec![sine_track("mix", 220.0, secs)],
+            original: None,
+            mode: MixMode::Stems,
+            gains: vec![("mix".into(), 1.0)],
+            speed: 1.0,
+            semitones: 0.0,
+            click: ClickConfig::default(),
+            start,
+            end,
+        }
+    }
+
+    #[test]
+    fn range_render_has_exact_length_and_faded_edges() {
+        let req = range_req(2.0, 0.5, Some(1.25));
+        let src = req.tracks[0].channels[0].clone();
+        let out = render(&req, &mut |_| {}, &AtomicBool::new(false)).unwrap();
+        let (a, b) = (22_050usize, 55_125usize);
+        assert_eq!(out[0].len(), b - a);
+        let fade = (EDGE_FADE_SECS * 44_100.0).round() as usize;
+        // Inside the fades: the source, bit for bit.
+        assert_eq!(&out[0][fade..out[0].len() - fade], &src[a + fade..b - fade]);
+        // Fades: silent at the very edges, ramping in between.
+        assert_eq!(out[0][0], 0.0);
+        assert_eq!(*out[0].last().unwrap(), 0.0);
+        for i in 0..fade {
+            assert!(out[0][i].abs() <= src[a + i].abs() + 1e-7);
+        }
+        // The song's real start and end are not faded.
+        let whole = range_req(2.0, 0.0, Some(2.0));
+        let out = render(&whole, &mut |_| {}, &AtomicBool::new(false)).unwrap();
+        assert_eq!(out[0], *src);
+        let tail = range_req(2.0, 1.0, None);
+        let out = render(&tail, &mut |_| {}, &AtomicBool::new(false)).unwrap();
+        assert_eq!(out[0].len(), 44_100);
+        assert_eq!(out[0][44_099], src[88_199]);
+        // Empty range: error.
+        let bad = range_req(2.0, 1.0, Some(1.0));
+        assert!(render(&bad, &mut |_| {}, &AtomicBool::new(false)).is_err());
+    }
+
+    #[test]
+    fn stretched_range_has_scaled_length() {
+        let mut req = range_req(3.0, 1.0, Some(2.0));
+        req.speed = 0.8;
+        let out = render(&req, &mut |_| {}, &AtomicBool::new(false)).unwrap();
+        let want = (44_100.0 / 0.8f64).round() as usize;
+        assert!(
+            out[0].len().abs_diff(want) <= 2,
+            "{} vs {want}",
+            out[0].len()
+        );
+        let mid = &out[0][want / 4..want * 3 / 4];
+        assert!((rms(mid) / rms(&req.tracks[0].channels[0]) - 1.0).abs() < 0.15);
+    }
+
+    #[test]
+    fn count_in_and_click_follow_the_range_start() {
+        // 120 bpm grid; range starts mid-beat at 1.2 s, so the count-in
+        // leads into the beat at 1.5 s and the 0.3 s pickup plays under it.
+        let beats: Vec<f64> = (0..8).map(|i| i as f64 * 0.5).collect();
+        let mut c = click_cfg(beats.clone(), vec![0.0, 2.0]);
+        c.enabled = false;
+        c.count_in_beats = 4;
+        let mut req = range_req(4.0, 1.2, Some(2.6));
+        req.click = c.clone();
+        let out = render(&req, &mut |_| {}, &AtomicBool::new(false)).unwrap();
+        let lead = 2.0 - 0.3;
+        let want = ((2.6 - 1.2 + lead) * 44_100.0f64).round() as usize;
+        assert!(
+            out[0].len().abs_diff(want) <= 1,
+            "{} vs {want}",
+            out[0].len()
+        );
+        let a0 = (lead * 44_100.0f64).round() as usize;
+        // Silence before the music, except the count-in clicks.
+        let on = onsets(&out[0][..a0], 2000);
+        assert_eq!(on.len(), 4, "{on:?}");
+        for (j, &o) in on.iter().enumerate() {
+            assert!(o.abs_diff(j * 22_050) <= 2, "{on:?}");
+        }
+        assert!(out[0][on[3] + 1400..a0].iter().all(|&x| x == 0.0));
+        // The music fades in at the cut.
+        assert!(out[0][a0].abs() < 1e-6 && peak_at(&out[0], a0 + 400) > 0.3);
+
+        // Click track: only the beats inside the range (silent music).
+        let mut c = click_cfg(beats, vec![0.0, 2.0]);
+        c.count_in_beats = 0;
+        let mut req = range_req(4.0, 1.0, Some(2.0));
+        req.gains = vec![];
+        req.click = c;
+        let out = render(&req, &mut |_| {}, &AtomicBool::new(false)).unwrap();
+        assert_eq!(out[0].len(), 44_100);
+        let on = onsets(&out[0], 2000);
+        assert_eq!(on.len(), 2, "{on:?}");
+        assert!(on[0] <= 2 && on[1].abs_diff(22_050) <= 2, "{on:?}");
+    }
+
+    #[test]
+    fn whole_song_export_with_count_in_starts_at_the_music_start() {
+        let beats: Vec<f64> = (0..12).map(|i| 1.0 + i as f64 * 0.5).collect();
+        let mut c = click_cfg(beats, vec![]);
+        c.enabled = false;
+        c.count_in_beats = 4;
+        c.music_start = Some(2.0);
+        let mut req = range_req(4.0, 0.0, None);
+        req.click = c;
+        assert_eq!(render_range(&req, 4.0), Some((2.0, 4.0)));
+        let out = render(&req, &mut |_| {}, &AtomicBool::new(false)).unwrap();
+        assert_eq!(out[0].len(), 4 * 22_050 + 2 * 44_100);
+        // The music after the count-in is the song from 2.0 s (faded in).
+        let src = &req.tracks[0].channels[0];
+        let fade = (EDGE_FADE_SECS * 44_100.0).round() as usize;
+        assert_eq!(&out[0][4 * 22_050 + fade..], &src[88_200 + fade..]);
+        // A loop range ending before the music start: no skip.
+        req.end = Some(1.5);
+        assert_eq!(render_range(&req, 4.0), Some((0.0, 1.5)));
+        // Count-in off: the whole song, unchanged.
+        req.end = None;
+        req.click.count_in_beats = 0;
+        assert_eq!(render_range(&req, 4.0), Some((0.0, 4.0)));
+    }
+
     #[test]
     fn click_is_added_after_the_music_limiter_and_the_file_cannot_clip() {
         // Music far above full scale (+6 dB on a 0.8 sine) plus clicks.
@@ -418,6 +635,8 @@ mod tests {
             speed: 1.0,
             semitones: 0.0,
             click: ClickConfig::default(),
+            start: 0.0,
+            end: None,
         };
         let req = RenderRequest {
             click: c,

@@ -683,6 +683,7 @@ impl Backend {
             } else {
                 0.8
             },
+            music_start: None,
         }
     }
 
@@ -1626,6 +1627,8 @@ impl Backend {
             speed: (req.speed_percent / 100.0).clamp(0.25, 4.0),
             semitones: req.semitones.clamp(-24.0, 24.0) + req.cents.clamp(-100.0, 100.0) / 100.0,
             click,
+            start: 0.0,
+            end: None,
         };
         log!(
             "export started: {} ({:?}, {} of {} stems, {:?} mode, speed {}, shift {:.2} st, click {}, count-in {})",

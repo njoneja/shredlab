@@ -415,6 +415,10 @@ impl Pipeline {
             return self.position();
         }
         let start = resolve_play_start(self.paused_pos, self.duration(), self.loop_region);
+        let limit = self
+            .loop_region
+            .map_or(self.duration(), |(_, b)| b.min(self.duration()));
+        let start = click::effective_start(&self.click, start, limit);
         self.paused_pos = start;
         let p = start * self.sr as f64;
         let stretching = self.stretching();
@@ -944,6 +948,7 @@ mod tests {
             count_in_beats: 3,
             beats_per_bar: 2,
             volume: 1.0,
+            music_start: None,
         });
         p.set_speed(0.8);
         p.seek(1.0);
@@ -1011,6 +1016,7 @@ mod tests {
             count_in_beats: 4,
             beats_per_bar: 4,
             volume: 1.0,
+            music_start: None,
         });
         p
     }
@@ -1066,6 +1072,40 @@ mod tests {
     }
 
     #[test]
+    fn play_from_the_song_start_jumps_to_the_music_start() {
+        let mut p = lead_in_pipeline(5.0);
+        p.set_click(ClickConfig {
+            music_start: Some(6.0),
+            ..p.click.clone()
+        });
+        // From 0: the playhead goes to the music start and the count-in leads into it.
+        let pos = p.play();
+        assert!(pos.playing && pos.seconds == 6.0 && pos.count_in_beats_left == 4);
+        let (on, m) = count_in_onsets(&mut p, 3 * SR);
+        assert_eq!(on.len(), 4, "{on:?}");
+        let a = m.iter().position(|x| x.pos > 6.0).unwrap();
+        assert!(a.abs_diff(2 * SR) <= 2, "{a}");
+        // A start the user placed after the first beat stays where it is.
+        p.pause();
+        p.seek(5.5);
+        assert_eq!(p.play().seconds, 5.5);
+        // With a loop that ends before the music start: no jump.
+        p.pause();
+        p.seek(0.0);
+        p.set_loop(Some((0.0, 4.0)));
+        assert_eq!(p.play().seconds, 0.0);
+        // Count-in off: old behaviour.
+        p.pause();
+        p.set_loop(None);
+        p.seek(0.0);
+        p.set_click(ClickConfig {
+            count_in_beats: 0,
+            ..p.click.clone()
+        });
+        assert_eq!(p.play().seconds, 0.0);
+    }
+
+    #[test]
     fn click_track_follows_song_time_at_any_speed() {
         let len = 6 * SR;
         let mut p = Pipeline::new(vec![ramp_track(len)], &[], true);
@@ -1077,6 +1117,7 @@ mod tests {
             count_in_beats: 0,
             beats_per_bar: 4,
             volume: 0.5,
+            music_start: None,
         });
         p.set_speed(0.5);
         p.seek(0.5);

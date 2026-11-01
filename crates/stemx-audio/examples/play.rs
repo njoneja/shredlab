@@ -162,6 +162,8 @@ fn main() {
             speed: args.speed,
             semitones: args.pitch,
             click: ClickConfig::default(),
+            start: 0.0,
+            end: None,
         };
         let t = Instant::now();
         let mut last = -1;
@@ -246,6 +248,7 @@ fn main() {
         count_in_beats: args.count_in,
         beats_per_bar: 4,
         volume: 0.7,
+        music_start: None,
     });
     engine.set_on_end(Box::new(|| println!("[end of song]")));
     engine.set_on_loop_wrap(Box::new(|| println!("[loop wrap]")));
