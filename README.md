@@ -168,3 +168,6 @@ executable), e.g. to test against Microsoft's official builds.
 
 [MIT](LICENSE). Bundled model weights carry their own licenses (see
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)).
+Third-party notices: [app/THIRD_PARTY.md](app/THIRD_PARTY.md) (fonts) and
+[crates/stemx-audio/THIRD_PARTY.md](crates/stemx-audio/THIRD_PARTY.md)
+(audio).
