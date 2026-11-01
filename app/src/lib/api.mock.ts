@@ -17,11 +17,15 @@ import type {
   SeparatedWith,
   SeparationStage,
   SongInfo,
+  RefineParams,
   SongSettings,
   StemMixState,
+  StemName,
+  StrengthSetting,
   Theme,
 } from "./types";
 import { THEMES } from "./types";
+import { isIdentity, mockPresets } from "./refine";
 
 type Handler = (payload: unknown) => void;
 const handlers = new Map<string, Set<Handler>>();
@@ -35,6 +39,8 @@ const LS_SETTINGS = "stemx.mock.settings.";
 const LS_CACHED = "stemx.mock.cached_sets";
 const LS_APP = "stemx.mock.app_settings";
 const LS_THEME = "stemx.mock.theme";
+const LS_REFINE = "stemx.mock.refine.";
+const LS_STRENGTH = "stemx.mock.strength.";
 
 function lsGet<T>(key: string, fallback: T): T {
   try {
@@ -147,6 +153,68 @@ let sepTimer: number | null = null;
 let exportTimer: number | null = null;
 let beatsTimer: number | null = null;
 let lastBeatIdx = -1;
+let analysisStem: StemName | null = null;
+let fieldTimer: number | null = null;
+let strengthTimer: number | null = null;
+let strengthJob = 0;
+
+/** Where each stem's energy sits in the synthetic stereo field: (pan, weight, spread). */
+const FIELD_SHAPE: Record<StemName, [number, number, number][]> = {
+  vocals: [[0, 1, 0.08]],
+  guitar: [[-0.72, 0.8, 0.12], [0.65, 0.6, 0.12], [0, 0.35, 0.15]],
+  bass: [[0, 1, 0.06]],
+  drums: [[0, 0.8, 0.2], [-0.4, 0.3, 0.2], [0.45, 0.3, 0.2]],
+  piano: [[0.25, 0.7, 0.3]],
+  other: [[-0.5, 0.4, 0.35], [0.5, 0.4, 0.35]],
+};
+
+/** A fake `refine-field` frame: 3 bands × 41 pan bins, wobbling a little. */
+function syntheticField(stem: StemName): number[] {
+  const t = performance.now() / 1000;
+  const bins: number[] = [];
+  for (let b = 0; b < 3; b++) {
+    const bandW = [0.5, 1, 0.35][b] * (stem === "bass" ? [3, 0.6, 0.1][b] : 1);
+    for (let i = 0; i < 41; i++) {
+      const pan = -1 + i / 20;
+      let v = 0;
+      for (const [c, w, sp] of FIELD_SHAPE[stem]) v += w * Math.exp(-(((pan - c) / sp) ** 2));
+      const wob = 0.75 + 0.25 * Math.sin(t * 3.1 + i * 0.7 + b) * Math.sin(t * 1.3 + b * 2);
+      bins.push(1e-3 * bandW * (v * wob + 0.002));
+    }
+  }
+  return bins;
+}
+
+function updateFieldTimer() {
+  if (analysisStem && fieldTimer == null) {
+    fieldTimer = window.setInterval(() => {
+      if (analysisStem && playing && countInLeft === 0) emit("refine-field", { stem: analysisStem, bins: syntheticField(analysisStem) });
+    }, 33);
+  } else if (!analysisStem && fieldTimer != null) {
+    clearInterval(fieldTimer);
+    fieldTimer = null;
+  }
+}
+
+/** Fake re-derivation with progress (about 1.2 s). */
+function runStrength(song_id: string, strength: StrengthSetting): number {
+  if (strengthTimer != null) {
+    clearInterval(strengthTimer);
+    emit("strength-error", { song_id, job: strengthJob, message: "Cancelled", cancelled: true });
+  }
+  const job = ++strengthJob;
+  const t0 = performance.now();
+  strengthTimer = window.setInterval(() => {
+    const f = Math.min(1, (performance.now() - t0) / 1200);
+    emit("strength-progress", { song_id, job, fraction: f });
+    if (f >= 1) {
+      clearInterval(strengthTimer!);
+      strengthTimer = null;
+      emit("strength-done", { song_id, job, strength });
+    }
+  }, 100);
+  return job;
+}
 
 let audio: AudioContext | null = null;
 function blip(accent: boolean, soft = false) {
@@ -324,8 +392,18 @@ export const mockBackend: Backend = {
       bpm: cached ? d.bpm : null,
       settings: lsGet<SongSettings | null>(LS_SETTINGS + song_id, null),
       original_available: cached,
+      refine: lsGet<Partial<Record<StemName, RefineParams>>>(LS_REFINE + song_id, {}),
+      strength: lsGet<StrengthSetting>(LS_STRENGTH + song_id, { level: 0, smooth: false }),
+      strength_job: 0,
       bpmVal: d.bpm,
     };
+    analysisStem = null;
+    updateFieldTimer();
+    // A saved strength is re-applied on open, like the app does.
+    if (cached && song.strength.level > 0) {
+      const { song_id: id, strength } = song;
+      song.strength_job = runStrength(id, strength);
+    }
     if (!cached) {
       // Beats are analysed separately from stems; pretend it takes a moment.
       const id = song_id;
@@ -344,6 +422,8 @@ export const mockBackend: Backend = {
   },
   async closeSong() {
     stopSeparation();
+    analysisStem = null;
+    updateFieldTimer();
     song = null;
     playing = false;
   },
@@ -508,6 +588,32 @@ export const mockBackend: Backend = {
     toMusicStart = on;
     lsSet(LS_MUSIC_START, on);
     return appSettings();
+  },
+  async getRefinePresets() {
+    return mockPresets();
+  },
+  async setRefine(stem, params) {
+    if (!song) throw new Error("No song open");
+    const key = LS_REFINE + song.song_id;
+    const all = lsGet<Partial<Record<StemName, RefineParams>>>(key, {});
+    if (isIdentity(params)) delete all[stem];
+    else all[stem] = params;
+    lsSet(key, all);
+    song.refine = all;
+  },
+  async setRefineAnalysis(stem) {
+    analysisStem = stem;
+    updateFieldTimer();
+  },
+  async setStrength(strength) {
+    if (!song) throw new Error("No song open");
+    const s = { level: Math.max(0, Math.min(4, Math.round(strength.level))), smooth: !!strength.smooth };
+    const prev = song.strength;
+    song.strength = s;
+    lsSet(LS_STRENGTH + song.song_id, s);
+    const same = prev.level === s.level && (s.level === 0 || prev.smooth === s.smooth);
+    if (!song.stems_cached || same) return { job: 0 };
+    return { job: runStrength(song.song_id, s) };
   },
   async setTheme(theme) {
     if (!THEMES.includes(theme)) throw new Error(`Unknown theme: ${theme}`);

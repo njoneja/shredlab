@@ -33,6 +33,87 @@ export interface SongInfo {
   settings: SongSettings | null;
   /** Stems and the sample-aligned original are loaded (backing track from the original, P1). */
   original_available: boolean;
+  /** Refine settings of the refined stems (others are unrefined). */
+  refine: Partial<Record<StemName, RefineParams>>;
+  /** Saved separation strength of the song. */
+  strength: StrengthSetting;
+  /** Strength job the backend started while opening (0 = none); its done/error event has this id. */
+  strength_job: number;
+}
+
+// ---- Refine panel (P5) ----
+
+export type PanMode = "keep" | "remove";
+
+/** Stereo selection: a raised-cosine window over pan −1 (left) … +1 (right). */
+export interface PanParams {
+  enabled: boolean;
+  center: number; // −1 … +1
+  width: number; // full width between the −6 dB points, 0 … 2
+  softness: number; // edge width in pan units (0.2 default)
+  mode: PanMode;
+}
+
+/** Low/high end of the EQ: a 24 dB/oct cut or a shelf (±12 dB). */
+export type EndMode = "cut" | "shelf";
+export interface EndParams {
+  enabled: boolean;
+  freq: number; // Hz (cut: −3 dB point; shelf: half-gain point)
+  mode: EndMode;
+  gain_db: number; // shelf only
+}
+
+export interface BandParams {
+  enabled: boolean;
+  freq: number;
+  gain_db: number;
+  q: number;
+}
+
+export interface EqParams {
+  low_cut: EndParams;
+  high_cut: EndParams;
+  bands: [BandParams, BandParams, BandParams];
+}
+
+export interface RefineParams {
+  pan: PanParams;
+  eq: EqParams;
+}
+
+export interface RefinePreset {
+  id: string;
+  name: string;
+  eq: EqParams;
+}
+
+/** `refine-field`: 3 bands × 41 pan bins (band-major, hard left first), linear power. */
+export interface RefineFieldEvent {
+  stem: StemName;
+  bins: number[];
+}
+
+/** Separation strength: level 0 = Natural (cached stems) … 4 = Tight. */
+export interface StrengthSetting {
+  level: number;
+  smooth: boolean;
+}
+
+export interface StrengthProgress {
+  song_id: string;
+  job: number;
+  fraction: number;
+}
+export interface StrengthDone {
+  song_id: string;
+  job: number;
+  strength: StrengthSetting;
+}
+export interface StrengthError {
+  song_id: string;
+  job: number;
+  message: string;
+  cancelled: boolean;
 }
 
 export interface ModelInfo {
@@ -200,6 +281,10 @@ export interface EventMap {
   "export-progress": ExportProgress;
   "export-done": ExportDone;
   "export-error": ExportError;
+  "refine-field": RefineFieldEvent;
+  "strength-progress": StrengthProgress;
+  "strength-done": StrengthDone;
+  "strength-error": StrengthError;
 }
 export type EventName = keyof EventMap;
 export type Unlisten = () => void;
@@ -231,6 +316,13 @@ export interface Backend {
   setAppSettings(settings: AppSettingsUpdate): Promise<AppSettingsInfo>;
   setTheme(theme: Theme): Promise<AppSettingsInfo>;
   setCountInToMusicStart(on: boolean): Promise<AppSettingsInfo>;
+  getRefinePresets(): Promise<RefinePreset[]>;
+  /** Live: heard at once; saved with the song shortly after the last change. */
+  setRefine(stem: StemName, params: RefineParams): Promise<void>;
+  /** Stereo-field analysis (`refine-field` events) for this stem, or off. */
+  setRefineAnalysis(stem: StemName | null): Promise<void>;
+  /** Saves the song's strength and re-derives the stems in the background; job 0 = nothing to do. */
+  setStrength(strength: StrengthSetting): Promise<{ job: number }>;
   /** Paths dropped onto the window (Tauri drag-drop; HTML5 drop in the mock). */
   onFileDrop(cb: (paths: string[]) => void): Promise<Unlisten>;
   listen<E extends EventName>(event: E, cb: (payload: EventMap[E]) => void): Promise<Unlisten>;

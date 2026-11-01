@@ -10,17 +10,21 @@ import type {
   LoopState,
   MeterOverride,
   Quality,
+  RefineParams,
+  RefinePreset,
   SeparationStage,
   SongInfo,
   SongSettings,
   StemMixState,
   StemName,
+  StrengthSetting,
   Subdivision,
   Theme,
 } from "./types";
 import { STEMS } from "./types";
 import { backingFromOriginal, clampGain } from "./mix";
 import { applyTheme, currentTheme, isTheme } from "./theme";
+import { defaultRefine, isIdentity, mockPresets, normalise, STRENGTH_NAMES } from "./refine";
 import { barAt, commonBeatsPerBar, effectiveDownbeats, formatTime, nearestBeatIndex, normaliseOverrides } from "./meter";
 
 export interface StemUi {
@@ -49,6 +53,10 @@ const MIN_LOOP = 0.05;
 export type ExportRange = "song" | "playhead" | "loop";
 /** Sections of the help dialog that other panels can link to. */
 export type HelpSection = "practice" | "play-along" | "click" | "keys";
+
+function defaultRefineAll(): Record<StemName, RefineParams> {
+  return Object.fromEntries(STEMS.map((s) => [s, defaultRefine()])) as Record<StemName, RefineParams>;
+}
 
 function defaultMix(): Record<StemName, StemUi> {
   return Object.fromEntries(STEMS.map((s) => [s, { on: true, volume: 1, solo: false }])) as Record<StemName, StemUi>;
@@ -114,6 +122,23 @@ class AppState {
   /** The user's range pick in the dialog (null = the default, re-chosen each time it opens). */
   exportRangePick = $state<ExportRange | null>(null);
 
+  // refine (P5)
+  refine = $state<Record<StemName, RefineParams>>(defaultRefineAll());
+  /** Stem whose Refine panel is open (one at a time). */
+  refineOpen = $state<StemName | null>(null);
+  refinePresets = $state.raw<RefinePreset[]>(mockPresets());
+  /** Latest stereo field of the open panel's stem (3 × 41 linear powers). */
+  field = $state.raw<number[] | null>(null);
+
+  // strength (P4)
+  strength = $state<StrengthSetting>({ level: 0, smooth: false });
+  strengthBusy = $state(false);
+  strengthFraction = $state(0);
+  strengthError = $state<string | null>(null);
+  /** Newest job the UI waits for, and the newest job that finished (any song). */
+  private strengthWait = 0;
+  private strengthDoneJob = 0;
+
   downbeats = $derived(effectiveDownbeats(this.grid, this.overrides));
   beatsPerBar = $derived(commonBeatsPerBar(this.grid, this.downbeats));
   anySolo = $derived(STEMS.some((s) => this.mix[s].solo));
@@ -169,9 +194,18 @@ class AppState {
     if (this.exportRange === "playhead" && start > 0.05) return ` · from ${formatTime(start)}`;
     return "";
   });
+  /** Refined stems (a dot on their row; mentioned in the export summary). */
+  refinedStems = $derived(STEMS.filter((s) => !isIdentity(this.refine[s])));
+  /** " · guitar refined" when refined stems take part in the export. */
+  exportRefineNote = $derived.by(() => {
+    // In the backing-track mode an off stem's selection is still removed, so
+    // its refine matters too; with solo only the soloed stems count.
+    const r = this.refinedStems.filter((s) => (this.anySolo ? this.mix[s].solo : true));
+    return r.length ? ` · ${r.join(", ")} refined` : "";
+  });
   exportSummary = $derived.by(() => {
     const on = this.exportStems;
-    const extras = (this.exportExtras ? ` + ${this.exportExtras}` : "") + this.exportRangeNote;
+    const extras = (this.exportExtras ? ` + ${this.exportExtras}` : "") + this.exportRangeNote + this.exportRefineNote;
     if (this.anySolo) return `Exports: ${on.join(", ")} (soloed)${extras}`;
     const off = STEMS.filter((s) => !on.includes(s));
     if (!on.length) return "Nothing to export: all stems are off";
@@ -246,6 +280,26 @@ class AppState {
       this.exporting = false;
       this.exportError = p.cancelled ? null : p.message;
     });
+    await api.listen("refine-field", (p) => {
+      if (p.stem === this.refineOpen) this.field = p.bins;
+    });
+    await api.listen("strength-progress", (p) => {
+      if (p.song_id !== this.song?.song_id || p.job < this.strengthWait) return;
+      this.strengthBusy = true;
+      this.strengthFraction = p.fraction;
+    });
+    const strengthEnd = (job: number, songId: string, err: string | null) => {
+      this.strengthDoneJob = Math.max(this.strengthDoneJob, job);
+      if (songId !== this.song?.song_id || job < this.strengthWait) return;
+      this.strengthBusy = false;
+      this.strengthError = err;
+    };
+    await api.listen("strength-done", (p) => strengthEnd(p.job, p.song_id, null));
+    await api.listen("strength-error", (p) => strengthEnd(p.job, p.song_id, p.cancelled ? null : p.message));
+    api
+      .getRefinePresets()
+      .then((p) => (this.refinePresets = p))
+      .catch((e) => console.warn("get_refine_presets failed", e));
     await api.onFileDrop((paths) => this.openPath(paths[0]));
     await Promise.all([this.refreshLibrary(), this.loadAppSettings()]);
   }
@@ -363,6 +417,17 @@ class AppState {
       this.peaks = null;
       this.grid = null;
       this.applySettings(info.settings);
+      this.refineOpen = null;
+      this.field = null;
+      this.refine = defaultRefineAll();
+      for (const [stem, p] of Object.entries(info.refine ?? {})) {
+        if (stem in this.refine) this.refine[stem as StemName] = normalise(p);
+      }
+      this.strength = { ...(info.strength ?? { level: 0, smooth: false }) };
+      this.strengthError = null;
+      this.strengthWait = info.strength_job ?? 0;
+      this.strengthBusy = this.strengthWait > this.strengthDoneJob;
+      this.strengthFraction = 0;
       // Push the full UI state so the backend matches what the UI shows.
       await Promise.all([
         api.setMix(this.mixPayload()),
@@ -580,6 +645,71 @@ class AppState {
     for (const s of STEMS) this.mix[s].solo = false;
     this.mix[stem].solo = next;
     await this.pushMix(false);
+  }
+
+  // ---- refine (P5) ----
+  refined(stem: StemName): boolean {
+    return !isIdentity(this.refine[stem]);
+  }
+
+  /** Opens the stem's Refine panel (closing any other), or closes it. */
+  async toggleRefine(stem: StemName) {
+    const next = this.refineOpen === stem ? null : stem;
+    this.refineOpen = next;
+    this.field = null;
+    await api.setRefineAnalysis(next).catch((e) => console.warn("set_refine_analysis failed", e));
+  }
+
+  async closeRefine() {
+    if (this.refineOpen) await this.toggleRefine(this.refineOpen);
+  }
+
+  /** Live change from the panel (heard at once; the backend saves it). */
+  async setRefine(stem: StemName, p: RefineParams) {
+    this.refine[stem] = p;
+    try {
+      await api.setRefine(stem, $state.snapshot(this.refine[stem]));
+    } catch (e) {
+      this.report(e);
+    }
+  }
+
+  async resetRefine(stem: StemName) {
+    await this.setRefine(stem, defaultRefine());
+  }
+
+  /** A preset sets the EQ and keeps the stereo selection. */
+  async applyPreset(stem: StemName, id: string) {
+    const pr = this.refinePresets.find((p) => p.id === id);
+    if (!pr) return;
+    const cur = $state.snapshot(this.refine[stem]);
+    await this.setRefine(stem, { ...cur, eq: normalise({ eq: structuredClone(pr.eq) }).eq });
+  }
+
+  // ---- strength (P4) ----
+  /** Strength needs cached stems and the original (it re-derives from it). */
+  strengthAvailable = $derived(this.stemsReady && !!this.song?.original_available && !this.separating);
+  strengthLabel = $derived(STRENGTH_NAMES[this.strength.level] ?? "Natural");
+
+  async setStrength(change: Partial<StrengthSetting>) {
+    if (!this.song) return;
+    const next = { ...this.strength, ...change };
+    next.level = clamp(Math.round(next.level), 0, STRENGTH_NAMES.length - 1);
+    if (next.level === this.strength.level && next.smooth === this.strength.smooth) return;
+    this.strength = next;
+    this.strengthError = null;
+    try {
+      const { job } = await api.setStrength(next);
+      if (job > 0) {
+        this.strengthWait = job;
+        this.strengthBusy = job > this.strengthDoneJob;
+        this.strengthFraction = 0;
+      } else {
+        this.strengthBusy = false;
+      }
+    } catch (e) {
+      this.strengthError = e instanceof Error ? e.message : String(e);
+    }
   }
 
   // ---- speed / pitch ----

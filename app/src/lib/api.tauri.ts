@@ -33,6 +33,10 @@ export const tauriBackend: Backend = {
   setAppSettings: (settings) => invoke("set_app_settings", { settings }),
   setTheme: (theme) => invoke("set_theme", { theme }),
   setCountInToMusicStart: (on) => invoke("set_count_in_to_music_start", { on }),
+  getRefinePresets: () => invoke("get_refine_presets"),
+  setRefine: (stem, params) => invoke("set_refine", { update: { stem, params } }),
+  setRefineAnalysis: (stem) => invoke("set_refine_analysis", { stem }),
+  setStrength: (strength) => invoke("set_strength", { strength }),
   async onFileDrop(cb) {
     return getCurrentWebview().onDragDropEvent((e) => {
       if (e.payload.type === "drop" && e.payload.paths.length) cb(e.payload.paths);

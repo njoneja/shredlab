@@ -2,6 +2,8 @@
   import { app } from "./store.svelte";
   import { STEMS, type StemName } from "./types";
   import { SLIDER_MAX, formatDb, gainToSlider, sliderToGain } from "./mix";
+  import { STRENGTH_NAMES } from "./refine";
+  import RefinePanel from "./RefinePanel.svelte";
 
   /** Full names: tooltips and every accessible name (never the tape abbreviation). */
   const LABEL: Record<StemName, string> = {
@@ -66,6 +68,40 @@
       All on
     </button>
   </div>
+  <div class="strength" class:busy={app.strengthBusy}>
+    <label class="s-label" for="strength-slider" title="How strictly each stem keeps only its own sound. Tighter: less bleed from other instruments, but thinner and more watery.">Separation</label>
+    <span class="end">Natural</span>
+    <input
+      id="strength-slider"
+      type="range"
+      min="0"
+      max={STRENGTH_NAMES.length - 1}
+      step="1"
+      value={app.strength.level}
+      disabled={!app.strengthAvailable}
+      aria-valuetext={app.strengthLabel}
+      title={app.strengthAvailable
+        ? "Natural: the stems as separated. Tighter: less bleed, thinner sound. Takes a few seconds to apply."
+        : "Available once the song is separated (needs the original file)"}
+      oninput={(e) => app.setStrength({ level: Number(e.currentTarget.value) })}
+      onkeydown={sliderKeys}
+    />
+    <span class="end">Tight</span>
+    <span class="s-val mono" aria-live="polite">
+      {#if app.strengthBusy}Applying… {Math.round(app.strengthFraction * 100)}%{:else}{app.strengthLabel}{/if}
+    </span>
+    <label class="smooth" title="Smooth: gentler first steps, but the stems no longer add up exactly to the original, so “All but this” may leave a faint trace or gap.">
+      <input
+        type="checkbox"
+        checked={app.strength.smooth}
+        disabled={!app.strengthAvailable}
+        onchange={(e) => app.setStrength({ smooth: e.currentTarget.checked })}
+      />
+      Smooth
+    </label>
+    <span class="s-note">Gentler first steps, but stems no longer add up exactly, so “All but this” may leave a faint trace.</span>
+    {#if app.strengthError}<span class="s-err" role="alert">{app.strengthError}</span>{/if}
+  </div>
   {#if disabled}
     <div class="notice">
       {#if app.separating}
@@ -123,6 +159,9 @@
         <span class="dot" aria-hidden="true"></span>
         <span class="tape" style:--tilt="{TILT[stem]}deg" title={LABEL[stem]} aria-hidden="true">{SHORT[stem]}</span>
         <span class="sr-only">{LABEL[stem]}</span>
+        {#if app.refined(stem)}
+          <span class="refined" title="{LABEL[stem]} is refined (stereo position or EQ)"><span class="sr-only">(refined)</span></span>
+        {/if}
         <kbd class="key" aria-hidden="true">{i + 1}</kbd>
       </span>
       <!-- dB-linear from −40 to +6 dB in 0.5 dB steps; the bottom position is off (−∞). -->
@@ -142,7 +181,21 @@
         onkeydown={sliderKeys}
       />
       <span class="readout mono">{formatDb(m.volume)}</span>
+      <button
+        class="btn small refine-btn"
+        aria-expanded={app.refineOpen === stem}
+        aria-controls="refine-{stem}"
+        aria-label="Refine {LABEL[stem]}"
+        title="Refine {LABEL[stem]}: pick a stereo position, shape the tone"
+        {disabled}
+        onclick={() => app.toggleRefine(stem)}
+      >
+        Refine
+      </button>
     </div>
+    {#if app.refineOpen === stem && !disabled}
+      <RefinePanel {stem} label={LABEL[stem]} />
+    {/if}
   {/each}
   {#if app.anySolo && !disabled}
     <div class="solo-note">Solo is on: only the soloed stem plays, and Export follows what you hear.</div>
@@ -172,7 +225,7 @@
   }
   .head {
     display: grid;
-    grid-template-columns: 40px 24px 24px minmax(120px, 160px) minmax(80px, 1fr) 62px;
+    grid-template-columns: 40px 24px 24px minmax(120px, 160px) minmax(80px, 1fr) 62px 58px;
     align-items: center;
     gap: 10px;
     /* Rows have a 3px stem-colour border plus 8px padding. */
@@ -202,6 +255,78 @@
     letter-spacing: 0.06em;
     color: var(--muted);
   }
+  /* Separation strength: one compact line, label left, control right. */
+  .strength {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    column-gap: 8px;
+    row-gap: 0;
+    padding: 0 8px 4px 11px;
+    font-size: 12px;
+  }
+  .s-label {
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--muted);
+    margin-right: 4px;
+  }
+  .strength .end {
+    color: var(--faint);
+    font-size: 11.5px;
+  }
+  .strength input[type="range"] {
+    width: 140px;
+  }
+  .s-val {
+    min-width: 92px;
+    font-size: 11.5px;
+    color: var(--muted);
+  }
+  .strength.busy .s-val {
+    color: var(--accent);
+  }
+  .smooth {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    color: var(--muted);
+  }
+  .smooth input {
+    margin: 0;
+    width: 14px;
+    height: 14px;
+    accent-color: var(--accent);
+  }
+  .s-note {
+    flex: 1 1 260px;
+    font-size: 11.5px;
+    color: var(--faint);
+  }
+  .s-err {
+    flex-basis: 100%;
+    font-size: 11.5px;
+    color: var(--danger);
+  }
+  .refined {
+    flex: none;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 25%, transparent);
+  }
+  .refine-btn {
+    justify-content: center;
+    padding: 0 6px;
+  }
+  .refine-btn[aria-expanded="true"] {
+    background: var(--accent-soft);
+    border-color: var(--accent);
+    color: var(--accent);
+  }
   .notice {
     font-size: 12.5px;
     color: var(--muted);
@@ -209,7 +334,7 @@
   }
   .row {
     display: grid;
-    grid-template-columns: 40px 24px 24px minmax(120px, 160px) minmax(80px, 1fr) 62px;
+    grid-template-columns: 40px 24px 24px minmax(120px, 160px) minmax(80px, 1fr) 62px 58px;
     align-items: center;
     gap: 10px;
     padding: 5px 8px;
@@ -383,7 +508,7 @@
   @media (max-width: 960px) {
     .row,
     .head {
-      grid-template-columns: 40px 24px 24px minmax(100px, 130px) minmax(60px, 1fr) 58px;
+      grid-template-columns: 40px 24px 24px minmax(100px, 130px) minmax(60px, 1fr) 58px 58px;
       gap: 8px;
     }
     .key {
