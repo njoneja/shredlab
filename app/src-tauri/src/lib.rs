@@ -27,7 +27,7 @@ pub mod types;
 #[cfg(windows)]
 mod win_icon;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use stemx_separation::DevicePref;
@@ -45,13 +45,45 @@ fn device_env(name: &str, default: DevicePref) -> DevicePref {
     }
 }
 
+/// Bundle identifier before the rename; the app data folder was named after it.
+const OLD_IDENTIFIER: &str = "dev.stemextractor.app";
+
+/// Moves the data folder of the old identifier to `data_dir` (library, stem
+/// cache, settings, personal models), if `data_dir` doesn't exist yet and the
+/// old sibling folder does. Returns a message for the log when it tried.
+fn migrate_old_data_dir(data_dir: &Path) -> Option<String> {
+    if data_dir.exists() {
+        return None;
+    }
+    let old = data_dir.parent()?.join(OLD_IDENTIFIER);
+    if !old.is_dir() {
+        return None;
+    }
+    Some(match std::fs::rename(&old, data_dir) {
+        Ok(()) => format!(
+            "moved data folder {} -> {}",
+            old.display(),
+            data_dir.display()
+        ),
+        Err(e) => format!(
+            "could not move data folder {} -> {}: {e}; starting with an empty one",
+            old.display(),
+            data_dir.display()
+        ),
+    })
+}
+
 fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+    let mut migrated = None;
     let data_dir = match std::env::var_os("STEMX_DATA_DIR") {
         Some(d) => PathBuf::from(d),
-        None => app
-            .path()
-            .app_data_dir()
-            .unwrap_or_else(|_| std::env::temp_dir().join("stem-extractor")),
+        None => match app.path().app_data_dir() {
+            Ok(d) => {
+                migrated = migrate_old_data_dir(&d);
+                d
+            }
+            Err(_) => std::env::temp_dir().join("shredlab"),
+        },
     };
     log::init(&data_dir);
     log!(
@@ -68,6 +100,9 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             "stemx-audio"
         }
     );
+    if let Some(m) = migrated {
+        log!("{m}");
+    }
     #[cfg(windows)]
     win_icon::apply(app);
     let resource_dir = app.path().resource_dir().ok();
@@ -155,5 +190,54 @@ pub fn run() {
     if let Err(e) = result {
         log!("fatal: {e}");
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp(name: &str) -> PathBuf {
+        let d =
+            std::env::temp_dir().join(format!("shredlab-migrate-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn old_data_dir_moves_only_when_new_is_missing() {
+        // New folder missing: the old one is moved, contents and all.
+        let root = temp("move");
+        let old = root.join(OLD_IDENTIFIER);
+        std::fs::create_dir_all(old.join("library")).unwrap();
+        std::fs::write(old.join("settings.json"), "{}").unwrap();
+        let new = root.join("io.github.njoneja.shredlab");
+        let msg = migrate_old_data_dir(&new).unwrap();
+        assert!(msg.starts_with("moved"), "{msg}");
+        assert!(!old.exists());
+        assert!(new.join("library").is_dir());
+        assert_eq!(
+            std::fs::read_to_string(new.join("settings.json")).unwrap(),
+            "{}"
+        );
+        // Nothing left to move.
+        assert_eq!(migrate_old_data_dir(&new), None);
+
+        // New folder exists: the old one is left alone.
+        let root = temp("keep");
+        let old = root.join(OLD_IDENTIFIER);
+        std::fs::create_dir_all(&old).unwrap();
+        let new = root.join("io.github.njoneja.shredlab");
+        std::fs::create_dir_all(&new).unwrap();
+        assert_eq!(migrate_old_data_dir(&new), None);
+        assert!(old.is_dir());
+
+        // Neither exists: nothing to do.
+        let root = temp("none");
+        assert_eq!(
+            migrate_old_data_dir(&root.join("io.github.njoneja.shredlab")),
+            None
+        );
     }
 }

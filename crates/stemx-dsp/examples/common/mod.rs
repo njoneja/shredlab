@@ -84,12 +84,12 @@ pub fn load_song(dir: &Path, set: Option<&str>) -> Song {
 }
 
 /// Finds a library song folder by (case-insensitive) title substring under
-/// `%APPDATA%\dev.stemextractor.app\library\songs` or `STEMX_DATA_DIR`.
+/// `%APPDATA%\io.github.njoneja.shredlab\library\songs` or `STEMX_DATA_DIR`.
 pub fn find_song(title: &str) -> Option<PathBuf> {
     let base = std::env::var_os("STEMX_DATA_DIR")
         .map(PathBuf::from)
         .or_else(|| {
-            std::env::var_os("APPDATA").map(|a| PathBuf::from(a).join("dev.stemextractor.app"))
+            std::env::var_os("APPDATA").map(|a| PathBuf::from(a).join("io.github.njoneja.shredlab"))
         })?;
     let songs = base.join("library").join("songs");
     let want = title.to_lowercase();
