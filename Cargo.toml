@@ -4,6 +4,7 @@ members = [
     "crates/stemx-dsp",
     "crates/stemx-io",
     "crates/stemx-separation",
+    "crates/stemx-beats",
     "crates/stemx-audio",
     "crates/stemx-library",
     "crates/stemx-cli",
@@ -21,6 +22,7 @@ rust-version = "1.92"
 stemx-dsp = { path = "crates/stemx-dsp" }
 stemx-io = { path = "crates/stemx-io" }
 stemx-separation = { path = "crates/stemx-separation" }
+stemx-beats = { path = "crates/stemx-beats" }
 stemx-audio = { path = "crates/stemx-audio" }
 stemx-library = { path = "crates/stemx-library" }
 

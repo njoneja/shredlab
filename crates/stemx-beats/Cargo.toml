@@ -1,26 +1,20 @@
 [package]
 name = "stemx-beats"
 description = "Beat This! beat/downbeat tracking glue (preprocessing, chunking, postprocessing) for Stem Extractor"
-version = "0.1.0"
-edition = "2021"
-license = "MIT"
-authors = ["Stem Extractor contributors"]
-rust-version = "1.92"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
 publish = false
 
-# TEMPORARY: standalone workspace so this crate builds while it is not yet a
-# member of the root workspace. When wiring it in, remove this table, add
-# "crates/stemx-beats" to the root `members`, and (optionally) switch the
-# versions below to `.workspace = true`.
-[workspace]
-
 [dependencies]
-realfft = "3.4"
-rubato = "0.16"
-thiserror = "2"
+realfft.workspace = true
+rubato.workspace = true
+thiserror.workspace = true
 
 [dev-dependencies]
 # Only for the end-to-end example / tests; the library API is ORT-free.
 # Same pin as crates/stemx-separation.
 ort = { version = "=2.0.0-rc.15", default-features = false, features = ["std", "download-binaries", "copy-dylibs", "tls-native"] }
-symphonia = { version = "0.5", default-features = false, features = ["mp3", "flac", "wav", "pcm", "vorbis", "ogg", "aac", "isomp4", "alac", "adpcm"] }
+symphonia.workspace = true

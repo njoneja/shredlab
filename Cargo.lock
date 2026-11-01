@@ -3361,6 +3361,17 @@ name = "stemx-audio"
 version = "0.1.0"
 
 [[package]]
+name = "stemx-beats"
+version = "0.1.0"
+dependencies = [
+ "ort",
+ "realfft",
+ "rubato",
+ "symphonia",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "stemx-cli"
 version = "0.1.0"
 dependencies = [
