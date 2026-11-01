@@ -1,6 +1,6 @@
 # Architecture
 
-Stem Extractor takes a song file, separates it into instruments (vocals,
+ShredLab takes a song file, separates it into instruments (vocals,
 drums, bass, guitar, piano, other) with an ONNX model running locally, and
 then plays the stems back through a mixer. Musicians use it to practice with
 an instrument removed, or to listen to one instrument by itself, with speed

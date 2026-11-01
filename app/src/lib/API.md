@@ -1,4 +1,4 @@
-# ShredLab (Stem Extractor): UI ↔ backend contract
+# ShredLab: UI ↔ backend contract
 
 This file is the contract between the Svelte UI (`app/src`) and the Tauri
 backend (`app/src-tauri`). The backend implements **exactly** this. TypeScript

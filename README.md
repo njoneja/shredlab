@@ -1,6 +1,6 @@
-# Stem Extractor
+# ShredLab
 
-Stem Extractor is a desktop practice and transcription tool for musicians.
+ShredLab is a desktop practice and transcription tool for musicians.
 It separates a song into instruments (vocals, drums, bass, guitar, piano,
 other) on your own machine, so you can play along with an instrument
 removed or listen to one by itself, with speed change without pitch change,
