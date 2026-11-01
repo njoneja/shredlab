@@ -1601,6 +1601,15 @@ impl Backend {
                 vec![(ORIGINAL.to_string(), 1.0)],
             ),
         };
+        // Click and count-in exactly as in playback (same beats, effective
+        // downbeats, subdivision, bar length and volume), if requested.
+        let mut click = Self::click_config(&st);
+        click.enabled = req.click;
+        click.count_in_beats = if req.count_in {
+            st.click.count_in_beats.clamp(1, 64)
+        } else {
+            0
+        };
         let cancel = Arc::new(AtomicBool::new(false));
         st.export = Some(cancel.clone());
         drop(st);
@@ -1616,16 +1625,19 @@ impl Backend {
             gains,
             speed: (req.speed_percent / 100.0).clamp(0.25, 4.0),
             semitones: req.semitones.clamp(-24.0, 24.0) + req.cents.clamp(-100.0, 100.0) / 100.0,
+            click,
         };
         log!(
-            "export started: {} ({:?}, {} of {} stems, {:?} mode, speed {}, shift {:.2} st)",
+            "export started: {} ({:?}, {} of {} stems, {:?} mode, speed {}, shift {:.2} st, click {}, count-in {})",
             path.display(),
             format,
             render_req.gains.len(),
             render_req.tracks.len(),
             render_req.mode,
             render_req.speed,
-            render_req.semitones
+            render_req.semitones,
+            render_req.click.enabled,
+            render_req.click.count_in_beats
         );
         let b = self.clone();
         spawn("stemx-export", move || {
@@ -1927,6 +1939,8 @@ mod tests {
             speed_percent: 100.0,
             semitones: 0.0,
             cents: 0.0,
+            click: false,
+            count_in: false,
         })
         .unwrap();
         let t0 = Instant::now();

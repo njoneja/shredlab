@@ -131,9 +131,13 @@ default output device via cpal.
   downbeats.
 
 **Export** (`render` + `encode`) runs the same mix and stretch path offline
-(no click, no loop), so the file matches what you hear, including speed and
-pitch. Formats: WAV 16-bit (dithered) and 24-bit (hound), FLAC 24-bit
-(flacenc), MP3 CBR (LAME). A look-ahead limiter keeps peaks below −0.1 dBFS.
+(whole song, no loop), so the file matches what you hear, including speed
+and pitch. If the click track or count-in is on, the same pipeline renders
+the clicks into a separate buffer; the music goes through the export
+limiter first and the clicks are added after it, as in playback, with the
+count-in before the song start. Formats: WAV 16-bit (dithered) and 24-bit
+(hound), FLAC 24-bit (flacenc), MP3 CBR (LAME). A look-ahead limiter on the
+final sum keeps peaks below −0.1 dBFS.
 
 ## Library and stem cache
 

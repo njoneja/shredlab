@@ -462,6 +462,8 @@ export const mockBackend: Backend = {
   },
   async exportMix(req) {
     if (exportTimer != null) throw new Error("Export already running");
+    // For checking the request in the browser console.
+    (globalThis as { __mockLastExport?: unknown }).__mockLastExport = req;
     const t0 = performance.now();
     exportTimer = window.setInterval(() => {
       const f = Math.min(1, (performance.now() - t0) / 3000);

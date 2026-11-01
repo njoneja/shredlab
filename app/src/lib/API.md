@@ -141,7 +141,11 @@ ExportRequest {
                              // never the P1 backing track. Optional; missing = false.
   speed_percent: number,     // 50..150, apply time-stretch like playback
   semitones: number,         // -12..12
-  cents: number              // -50..50
+  cents: number,             // -50..50
+  click: boolean,            // mix in the click track (the UI sends ClickState.enabled).
+                             // Optional; missing = false.
+  count_in: boolean          // start with the count-in (the UI sends
+                             // ClickState.count_in_enabled). Optional; missing = false.
 }
 
 SongSettings   // OPAQUE to the backend: store the JSON value and return it verbatim.
@@ -226,7 +230,8 @@ Events for a `song_id` that is no longer current are ignored by the UI.
   transparent below −1 dBFS, output ≤ −0.1 dBFS); click and count-in are
   added after it. Export doesn't use the playback limiter. It has its own
   look-ahead peak limiter (no whole-song normalization), so boosted exports
-  don't clip and match the playback level.
+  don't clip and match the playback level; an exported click is added after
+  it (see Export).
 
 ### Audibility (playback)
 - If **any** stem has `solo: true`, only stems with `solo: true` play.
@@ -240,8 +245,22 @@ Events for a `song_id` that is no longer current are ignored by the UI.
   has already picked the audible stems: the soloed ones when any stem is
   soloed (`req.solo: true`, plain sum), else the switched-on ones (P1 rule
   above). Apply `speed_percent`, `semitones`, `cents`
-  as in playback. Whole song, no click, no loop. Avoid clipping (a limiter or
+  as in playback. Whole song, no loop. Avoid clipping (a limiter or
   float WAV is fine; MP3 at ≥ 192 kbps).
+- **Click** (`req.click`): the click track exactly as in playback, from the
+  current `set_click` settings (subdivision, volume) and the effective
+  downbeats (`set_meter_overrides`): same sounds and accents, on the beat
+  grid, respaced for `speed_percent`. As in playback the click is added
+  after the music's limiter: the music alone goes through the export peak
+  limiter, then the click is added; the encoder limits that final sum
+  again (−0.1 dBFS), so the file never clips.
+- **Count-in** (`req.count_in`): the count-in clicks before the song start,
+  with silence under them, exactly as `play` from 0 would play them
+  (`count_in_beats`, `beats_per_bar` accents, spacing = local beat interval
+  at the start / speed). The file is longer by the count-in.
+- Both off (or missing): the export is unchanged (bit for bit). The UI
+  appends " + click", " + count-in" or " + click, count-in" to the export
+  summary when they are on.
 
 ### Playback, loop and count-in
 - `play` at or past the end restarts from 0.

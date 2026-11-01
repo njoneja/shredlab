@@ -156,6 +156,10 @@ export interface ExportRequest {
   speed_percent: number;
   semitones: number;
   cents: number;
+  /** Mix in the click track (current click settings). Optional; missing = false. */
+  click?: boolean;
+  /** Start with the count-in (current count-in settings). Optional; missing = false. */
+  count_in?: boolean;
 }
 
 export interface ExportProgress {

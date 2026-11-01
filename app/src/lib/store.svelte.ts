@@ -113,13 +113,18 @@ class AppState {
    * still counts as on for P1).
    */
   exportStems = $derived(STEMS.filter((s) => (this.anySolo ? this.mix[s].solo : this.mix[s].on)));
+  /** Click and count-in go into the export when they are on ("what you hear"). */
+  exportExtras = $derived(
+    [this.click.enabled && "click", this.click.count_in_enabled && "count-in"].filter(Boolean).join(", "),
+  );
   exportSummary = $derived.by(() => {
     const on = this.exportStems;
-    if (this.anySolo) return `Exports: ${on.join(", ")} (soloed)`;
+    const extras = this.exportExtras ? ` + ${this.exportExtras}` : "";
+    if (this.anySolo) return `Exports: ${on.join(", ")} (soloed)${extras}`;
     const off = STEMS.filter((s) => !on.includes(s));
     if (!on.length) return "Nothing to export: all stems are off";
-    if (!off.length) return "Exports: all stems";
-    return `Exports: ${on.join(", ")} (${off.join(", ")} off)`;
+    if (!off.length) return `Exports: all stems${extras}`;
+    return `Exports: ${on.join(", ")} (${off.join(", ")} off)${extras}`;
   });
   /** Number of stems the loaded song has (from its model; the mixer rows otherwise). */
   songStemCount = $derived.by(() => {
@@ -632,6 +637,8 @@ class AppState {
         speed_percent: this.speed,
         semitones: this.semitones,
         cents: this.cents,
+        click: this.click.enabled,
+        count_in: this.click.count_in_enabled,
       });
     } catch (e) {
       this.exporting = false;

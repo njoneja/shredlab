@@ -216,6 +216,12 @@ pub struct ExportRequest {
     pub speed_percent: f64,
     pub semitones: f64,
     pub cents: f64,
+    /// Include the click track (current click settings). Missing = false.
+    #[serde(default)]
+    pub click: bool,
+    /// Start with the count-in (current count-in settings). Missing = false.
+    #[serde(default)]
+    pub count_in: bool,
 }
 
 // ------------------------------------------------------------------ events
