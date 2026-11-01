@@ -205,6 +205,11 @@ pub struct Pipeline {
     fade_on_start: bool,
     /// Playback safety limiter on the music (before the clicks), if enabled.
     limiter: Option<Limiter>,
+    /// Count-in clicks still due after the audio started (frames since the
+    /// audio start, accent), when a pickup or intro plays under them.
+    lead: Vec<(usize, bool)>,
+    lead_next: usize,
+    lead_elapsed: usize,
 }
 
 impl Pipeline {
@@ -233,6 +238,9 @@ impl Pipeline {
             fade_in_pos: 0,
             fade_in_len: 0,
             gen: 0,
+            lead: Vec::with_capacity(64),
+            lead_next: 0,
+            lead_elapsed: 0,
             pending_flags: 0,
             fade_on_start: realtime,
             limiter: None,
@@ -412,7 +420,12 @@ impl Pipeline {
         let stretching = self.stretching();
         self.voice
             .start(&mut self.mixer, p, stretching, self.speed, self.semis);
+        self.lead.clear();
         match click::plan_count_in(&self.click, start, self.speed) {
+            Some(plan) if (plan.audio_start() * self.sr as f64).round() < 1.0 => {
+                self.set_lead(&plan, 0, 0.0);
+                self.begin_audio();
+            }
             Some(plan) => {
                 let interval = plan.interval * self.sr as f64;
                 self.state = State::CountIn {
@@ -426,6 +439,19 @@ impl Pipeline {
             None => self.begin_audio(),
         }
         self.position()
+    }
+
+    /// Keeps count-in clicks `from..` to fire after the audio starts at wall
+    /// time `audio_at` (frames).
+    fn set_lead(&mut self, plan: &CountInPlan, from: usize, audio_at: f64) {
+        self.lead.clear();
+        self.lead_next = 0;
+        self.lead_elapsed = 0;
+        let sr = self.sr as f64;
+        for j in from..plan.count() as usize {
+            let t = (plan.click_time(j) * sr - audio_at).round().max(0.0) as usize;
+            self.lead.push((t, plan.accents[j]));
+        }
     }
 
     fn begin_audio(&mut self) {
@@ -443,6 +469,7 @@ impl Pipeline {
                 self.state = State::Paused;
             }
             State::Playing => {
+                self.lead.clear();
                 self.paused_pos = (self.voice.heard / self.sr as f64).clamp(0.0, self.duration());
                 self.begin_tail();
                 self.state = State::Paused;
@@ -472,7 +499,10 @@ impl Pipeline {
                     self.semis,
                 );
             }
-            State::Playing => self.transition(s * self.sr as f64),
+            State::Playing => {
+                self.lead.clear();
+                self.transition(s * self.sr as f64);
+            }
         }
         self.position()
     }
@@ -634,14 +664,14 @@ impl Pipeline {
                     start_secs,
                 } => {
                     let count = plan.count();
-                    let audio_at = (count as f64 * interval).round() as usize;
+                    let audio_at = (plan.audio_start() * sr).round() as usize;
                     let mut m = (n - off).min(audio_at.saturating_sub(elapsed));
                     let e0 = elapsed;
                     let mut fired = [(0usize, false); 8];
                     let mut nf = 0;
                     // Clicks due in [e0, e0 + m), at most 8 per sub-block.
                     while (next as u32) < count {
-                        let t = (next as f64 * interval).round() as usize;
+                        let t = (plan.click_time(next) * sr).round() as usize;
                         if t >= e0 + m {
                             break;
                         }
@@ -678,15 +708,17 @@ impl Pipeline {
                     let (tl, tr) = (&mut l[off..off + m], &mut r[off..off + m]);
                     self.mix_tail(tl, tr);
                     off += m;
-                    self.state = State::CountIn {
-                        plan,
-                        interval,
-                        elapsed,
-                        next,
-                        start_secs,
-                    };
                     if done {
+                        self.set_lead(&plan, next, audio_at as f64);
                         self.begin_audio();
+                    } else {
+                        self.state = State::CountIn {
+                            plan,
+                            interval,
+                            elapsed,
+                            next,
+                            start_secs,
+                        };
                     }
                 }
                 State::Playing => {
@@ -728,8 +760,28 @@ impl Pipeline {
                             self.fade_in_pos += m;
                         }
                     }
+                    // Count-in clicks still due over the pickup/intro.
+                    let (le, lead_from) = (self.lead_elapsed, self.lead_next);
+                    while let Some(&(t, accent)) = self.lead.get(self.lead_next) {
+                        if t >= le + m {
+                            break;
+                        }
+                        let kind = if accent {
+                            ClickKind::Accent
+                        } else {
+                            ClickKind::Beat
+                        };
+                        let vol = self.click.volume;
+                        self.trigger(kind, off + t.saturating_sub(le), vol);
+                        self.lead_next += 1;
+                    }
+                    self.lead_elapsed += m;
+                    let mut k = lead_from;
                     for i in 0..m {
-                        let fl = self.flags(true, 0);
+                        while k < self.lead_next && self.lead[k].0 <= le + i {
+                            k += 1;
+                        }
+                        let fl = self.flags(true, (self.lead.len() - k) as u32);
                         meta[off + i] = Meta {
                             pos: ((h0 + i as f64 * step) / sr).max(0.0),
                             flags: fl,
@@ -929,6 +981,88 @@ mod tests {
         assert!((m[a - 1].pos - 1.0).abs() < 1e-9 && m[a - 1].count_in_left() == 0);
         assert!((m[a].pos - 1.0).abs() < 1e-9);
         assert!(m[a + 1000].pos > 1.0);
+    }
+
+    fn count_in_onsets(p: &mut Pipeline, frames: usize) -> (Vec<usize>, Vec<Meta>) {
+        let (l, _, m) = run(p, frames, 700);
+        let mut onsets = vec![];
+        let mut quiet = 1000;
+        for (i, &x) in l.iter().enumerate() {
+            if x.abs() > 1e-4 {
+                if quiet > 500 {
+                    onsets.push(i);
+                }
+                quiet = 0;
+            } else {
+                quiet += 1;
+            }
+        }
+        (onsets, m)
+    }
+
+    fn lead_in_pipeline(first_beat: f64) -> Pipeline {
+        let mut p = Pipeline::new(vec![ramp_track(10 * SR)], &[], true);
+        let beats: Vec<f64> = (0..8).map(|i| first_beat + i as f64 * 0.5).collect();
+        p.set_click(ClickConfig {
+            enabled: false,
+            beats,
+            downbeats: vec![first_beat],
+            subdivision: 1,
+            count_in_beats: 4,
+            beats_per_bar: 4,
+            volume: 1.0,
+        });
+        p
+    }
+
+    #[test]
+    fn count_in_lands_on_the_first_beat_after_a_pickup() {
+        // First beat 0.8 s into the song: the audio starts under the count-in
+        // so that beat lands one interval after the last click.
+        let mut p = lead_in_pipeline(0.8);
+        p.play();
+        let iv = SR / 2;
+        let (on, m) = count_in_onsets(&mut p, 3 * SR);
+        assert_eq!(on.len(), 4, "{on:?}");
+        for (j, &o) in on.iter().enumerate() {
+            assert!(o.abs_diff(j * iv) <= 2, "{on:?}");
+        }
+        let a = (1.2 * SR as f64).round() as usize;
+        assert!(m[a - 1].pos == 0.0 && m[a + 100].pos > 0.0);
+        // Song time 0.8 (the beat) is reached one interval after click 4.
+        let beat = m.iter().position(|x| x.pos >= 0.8).unwrap();
+        assert!(beat.abs_diff(on[3] + iv) <= 2, "{beat}");
+        // The countdown keeps going over the pickup.
+        assert_eq!(m[a + 100].count_in_left(), 1);
+        assert_eq!(m[on[3] + 10].count_in_left(), 0);
+    }
+
+    #[test]
+    fn count_in_comes_in_over_a_long_intro() {
+        let mut p = lead_in_pipeline(5.0);
+        let pos = p.play();
+        assert!(pos.playing && pos.count_in_beats_left == 0);
+        let (on, m) = count_in_onsets(&mut p, 6 * SR);
+        let want: Vec<usize> = (0..4).map(|j| 3 * SR + j * SR / 2).collect();
+        assert_eq!(on.len(), 4, "{on:?}");
+        for (o, w) in on.iter().zip(&want) {
+            assert!(o.abs_diff(*w) <= 2, "{on:?}");
+        }
+        assert!(m[1000].pos > 0.0, "audio starts at once");
+        assert_eq!(m[1000].count_in_left(), 4);
+        // Pausing drops the remaining clicks.
+        let mut p = lead_in_pipeline(5.0);
+        p.play();
+        run(&mut p, SR, 700);
+        p.pause();
+        p.seek(0.0);
+        p.set_click(ClickConfig {
+            count_in_beats: 0,
+            ..p.click.clone()
+        });
+        p.play();
+        let (on, _) = count_in_onsets(&mut p, 6 * SR);
+        assert!(on.is_empty(), "{on:?}");
     }
 
     #[test]

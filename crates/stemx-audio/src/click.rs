@@ -123,13 +123,23 @@ pub fn local_beat_interval(beats: &[f64], t: f64) -> f64 {
 }
 
 /// A planned count-in, in wall-clock seconds from the moment `play` starts.
+///
+/// The clicks lead into the first beat at or after the start position: the
+/// last click sounds one interval before that beat. Music before the beat
+/// (a pickup, or the rest of the bar when starting mid-beat) plays under the
+/// last clicks; with a long intro before the first beat, the audio starts
+/// right away and the clicks come in over it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CountInPlan {
     /// Spacing between clicks (wall seconds) = local beat interval / speed.
     pub interval: f64,
-    /// Click `j` (0-based) sounds at `j * interval`; its number (beats before
-    /// the start) is `count - j`. Accent flag per click.
+    /// Click `j` (0-based) sounds at `first_click + j * interval`; its number
+    /// (beats before the target beat) is `count - j`. Accent flag per click.
     pub accents: Vec<bool>,
+    /// When click 0 sounds (wall seconds).
+    pub first_click: f64,
+    /// When the audio starts at the start position (wall seconds).
+    pub audio_start: f64,
 }
 
 impl CountInPlan {
@@ -137,23 +147,56 @@ impl CountInPlan {
         self.accents.len() as u32
     }
 
-    /// When the audio starts (wall seconds): one interval after the last click.
+    /// When the audio starts (wall seconds).
     pub fn audio_start(&self) -> f64 {
-        self.interval * self.accents.len() as f64
+        self.audio_start
+    }
+
+    /// When click `j` sounds (wall seconds).
+    pub fn click_time(&self, j: usize) -> f64 {
+        self.first_click + j as f64 * self.interval
     }
 }
 
+/// Beats closer than this after the start count as "on" it.
+const ON_BEAT: f64 = 0.005;
+
 /// Plans the count-in for playback starting at song time `start`.
-/// `None` when the count-in is off.
+/// `None` when the count-in is off. Without a beat at or after `start`, the
+/// count-in plays over silence and the audio starts one interval after the
+/// last click.
 pub fn plan_count_in(cfg: &ClickConfig, start: f64, speed: f64) -> Option<CountInPlan> {
     let n = cfg.count_in_beats.min(64);
     if n == 0 {
         return None;
     }
+    let speed = speed.clamp(0.25, 4.0);
     let bpb = cfg.beats_per_bar.max(1);
-    let interval = local_beat_interval(&cfg.beats, start) / speed.clamp(0.25, 4.0);
+    let target = cfg
+        .beats
+        .get(cfg.beats.partition_point(|&b| b < start - ON_BEAT))
+        .copied()
+        .filter(|b| b.is_finite());
+    let (interval, gap) = match target {
+        Some(b) => (
+            local_beat_interval(&cfg.beats, b) / speed,
+            (b - start).max(0.0) / speed,
+        ),
+        None => (local_beat_interval(&cfg.beats, start) / speed, 0.0),
+    };
+    let lead = n as f64 * interval;
+    let (first_click, audio_start) = if gap <= lead {
+        (0.0, lead - gap)
+    } else {
+        (gap - lead, 0.0)
+    };
     let accents = (0..n).map(|j| (n - j).is_multiple_of(bpb)).collect();
-    Some(CountInPlan { interval, accents })
+    Some(CountInPlan {
+        interval,
+        accents,
+        first_click,
+        audio_start,
+    })
 }
 
 #[cfg(test)]
@@ -198,6 +241,39 @@ mod tests {
 
         c.count_in_beats = 0;
         assert!(plan_count_in(&c, 3.0, 1.0).is_none());
+    }
+
+    #[test]
+    fn count_in_leads_into_the_first_beat_after_the_start() {
+        // First beat at 0.8 s, then 120 bpm.
+        let beats: Vec<f64> = (0..20).map(|i| 0.8 + i as f64 * 0.5).collect();
+        let mut c = cfg(beats, vec![], 1);
+        c.count_in_beats = 4;
+        // From 0: the last click is one beat before 0.8 s of song time, so
+        // the audio starts 0.8 s before that beat lands.
+        let p = plan_count_in(&c, 0.0, 1.0).unwrap();
+        assert_eq!(p.first_click, 0.0);
+        assert!((p.audio_start - (2.0 - 0.8)).abs() < 1e-12);
+        assert!((p.click_time(3) + p.interval - (p.audio_start + 0.8)).abs() < 1e-12);
+        // Slowed down: gaps and spacing scale together.
+        let p = plan_count_in(&c, 0.0, 0.5).unwrap();
+        assert!((p.audio_start - (4.0 - 1.6)).abs() < 1e-12);
+        // Mid-beat start: lead into the next beat.
+        let p = plan_count_in(&c, 1.0, 1.0).unwrap();
+        assert!((p.audio_start - (2.0 - 0.3)).abs() < 1e-12);
+        // On a beat (within 5 ms): unchanged, audio one interval after the last click.
+        let p = plan_count_in(&c, 1.302, 1.0).unwrap();
+        assert!((p.audio_start - (2.0 - 0.0)).abs() < 1e-12);
+        // Long intro: audio starts at once, the clicks come in over it.
+        let beats: Vec<f64> = (0..20).map(|i| 5.0 + i as f64 * 0.5).collect();
+        let mut c = cfg(beats, vec![], 1);
+        c.count_in_beats = 4;
+        let p = plan_count_in(&c, 0.0, 1.0).unwrap();
+        assert_eq!(p.audio_start, 0.0);
+        assert!((p.first_click - 3.0).abs() < 1e-12);
+        // Past the last beat: count-in over silence, at the last tempo.
+        let p = plan_count_in(&c, 50.0, 1.0).unwrap();
+        assert!((p.audio_start - 2.0).abs() < 1e-12 && p.first_click == 0.0);
     }
 
     #[test]

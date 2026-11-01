@@ -293,10 +293,23 @@ fn check_click_export(
             let secs = export_wait(b, rx, req(&file, speed, true))?;
             let got = read_wav(&file)?;
             let sr = crate::backend::RATE as f64;
-            let interval =
-                crate::audio::click::local_beat_interval(&grid.beats, 0.0) / (speed / 100.0) * sr;
+            // The count-in leads into the first beat: clicks over silence
+            // first, then any music before that beat under the last clicks.
+            let cfg = crate::audio::ClickConfig {
+                beats: grid.beats.clone(),
+                count_in_beats: 4,
+                beats_per_bar: 4,
+                ..Default::default()
+            };
+            let plan = crate::audio::click::plan_count_in(&cfg, 0.0, speed / 100.0)
+                .ok_or("no count-in plan")?;
+            let interval = plan.interval * sr;
             let ci = got[0].len().saturating_sub(plain[0].len());
-            let ci_want = (4.0 * interval).round() as usize;
+            let ci_want = (plan.audio_start() * sr).round() as usize;
+            let silent: Vec<usize> = (0..4)
+                .map(|j| (plan.click_time(j) * sr).round() as usize)
+                .filter(|&t| t + 2000 <= ci_want)
+                .collect();
             let peak = got
                 .iter()
                 .flat_map(|c| c.iter())
@@ -308,15 +321,15 @@ fn check_click_export(
             if ci.abs_diff(ci_want) > 1 {
                 return Err(format!("count-in is {ci} samples, want {ci_want}"));
             }
-            if on.len() != 4
-                || on
-                    .iter()
-                    .enumerate()
-                    .any(|(j, &o)| o.abs_diff((j as f64 * interval).round() as usize) > 2)
+            if on.len() != silent.len() || on.iter().zip(&silent).any(|(&o, &w)| o.abs_diff(w) > 2)
             {
-                return Err(format!("count-in clicks at {on:?}, interval {interval:.1}"));
+                return Err(format!(
+                    "count-in clicks at {on:?}, want {silent:?} (interval {interval:.1})"
+                ));
             }
-            if window_peak(&got[0], on[0], 1000) < 1.3 * window_peak(&got[0], on[1], 1000) {
+            if on.len() >= 2
+                && window_peak(&got[0], on[0], 1000) < 1.3 * window_peak(&got[0], on[1], 1000)
+            {
                 return Err("first count-in click (a bar before the start) is not accented".into());
             }
             if peak > 1.0 {

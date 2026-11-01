@@ -277,7 +277,7 @@ Events for a `song_id` that is no longer current are ignored by the UI.
   beats before the start they are (`count_in_beats` … 1); click `k` is
   accented iff `k % beats_per_bar == 0`. Example: 7 beats, 4 per bar → clicks
   7 6 5 **4** 3 2 1, then audio (the first bar is a 3-beat pickup).
-  During count-in, `playing: true` and `count_in_beats_left` counts down.
+  During count-in, `playing: true` and `count_in_beats_left` counts down. The count-in leads into the first beat at or after the start: its last click is one beat before that beat, and any music before it (a pickup, or a long intro) plays under the last clicks, so `count_in_beats_left` can still be counting down while `position_sec` advances. Export follows the same rule.
   Without a beat grid, use 0.5 s spacing.
 - **Click track:** if `enabled`, play a click on every beat of the grid that
   playback passes, with an accent on the effective downbeats (see Meter).
