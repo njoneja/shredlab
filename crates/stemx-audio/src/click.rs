@@ -122,6 +122,36 @@ pub fn local_beat_interval(beats: &[f64], t: f64) -> f64 {
     }
 }
 
+/// Beat intervals the count-in tempo is taken from (see [`count_in_interval`]).
+pub const COUNT_IN_TEMPO_BEATS: usize = 4;
+
+/// The count-in spacing (song seconds) for counting into `beats[target]`:
+/// the median of the next [`COUNT_IN_TEMPO_BEATS`] beat intervals starting
+/// at the target beat (fewer near the end of the grid), so the tempo comes
+/// from the section being counted into, never from an intro before it, and
+/// one wobbly beat doesn't skew it. Without an interval after the target,
+/// [`local_beat_interval`] at the target.
+pub fn count_in_interval(beats: &[f64], target: usize) -> f64 {
+    let end = (target + COUNT_IN_TEMPO_BEATS + 1).min(beats.len());
+    let mut d: Vec<f64> = beats
+        .get(target..end)
+        .unwrap_or(&[])
+        .windows(2)
+        .map(|w| w[1] - w[0])
+        .filter(|d| d.is_finite() && *d > 1e-3)
+        .collect();
+    if d.is_empty() {
+        return local_beat_interval(beats, beats.get(target).copied().unwrap_or(0.0));
+    }
+    d.sort_by(f64::total_cmp);
+    let m = d.len();
+    if m % 2 == 1 {
+        d[m / 2]
+    } else {
+        0.5 * (d[m / 2 - 1] + d[m / 2])
+    }
+}
+
 /// A planned count-in, in wall-clock seconds from the moment `play` starts.
 ///
 /// The clicks lead into the first beat at or after the start position: the
@@ -131,7 +161,7 @@ pub fn local_beat_interval(beats: &[f64], t: f64) -> f64 {
 /// right away and the clicks come in over it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CountInPlan {
-    /// Spacing between clicks (wall seconds) = local beat interval / speed.
+    /// Spacing between clicks (wall seconds) = [`count_in_interval`] / speed.
     pub interval: f64,
     /// Click `j` (0-based) sounds at `first_click + j * interval`; its number
     /// (beats before the target beat) is `count - j`. Accent flag per click.
@@ -195,14 +225,11 @@ pub fn plan_count_in(cfg: &ClickConfig, start: f64, speed: f64) -> Option<CountI
     }
     let speed = speed.clamp(0.25, 4.0);
     let bpb = cfg.beats_per_bar.max(1);
-    let target = cfg
-        .beats
-        .get(cfg.beats.partition_point(|&b| b < start - ON_BEAT))
-        .copied()
-        .filter(|b| b.is_finite());
+    let ti = cfg.beats.partition_point(|&b| b < start - ON_BEAT);
+    let target = cfg.beats.get(ti).copied().filter(|b| b.is_finite());
     let (interval, gap) = match target {
         Some(b) => (
-            local_beat_interval(&cfg.beats, b) / speed,
+            count_in_interval(&cfg.beats, ti) / speed,
             (b - start).max(0.0) / speed,
         ),
         None => (local_beat_interval(&cfg.beats, start) / speed, 0.0),
@@ -324,6 +351,31 @@ mod tests {
         // The count-in from there leads into the beat at or after it.
         let p = plan_count_in(&c, effective_start(&c, 0.0, 100.0), 1.0).unwrap();
         assert!((p.audio_start - (2.0 - 0.1)).abs() < 1e-12, "{p:?}");
+    }
+
+    #[test]
+    fn count_in_tempo_is_the_median_of_the_next_beats() {
+        // A slow intro (1.0 s beats), then 0.5 s beats with jitter.
+        let mut beats = vec![0.0, 1.0, 2.0, 3.0];
+        let jitter = [0.0, 0.04, -0.03, 0.02, -0.05, 0.01];
+        for (i, j) in jitter.iter().enumerate() {
+            beats.push(3.5 + i as f64 * 0.5 + j);
+        }
+        // Into the first fast beat (index 4): intervals 0.54 0.43 0.55 0.43
+        // -> median 0.485; not the 1.0 s intro beats, not one noisy pair.
+        let iv = count_in_interval(&beats, 4);
+        assert!((iv - 0.485).abs() < 1e-9, "{iv}");
+        let mut c = cfg(beats.clone(), vec![], 1);
+        c.count_in_beats = 4;
+        let p = plan_count_in(&c, 3.5, 1.0).unwrap();
+        assert!((p.interval - 0.485).abs() < 1e-9, "{p:?}");
+        // Near the end: fewer intervals (last two: 0.43, 0.56 -> 0.495).
+        let n = beats.len();
+        assert!((count_in_interval(&beats, n - 3) - 0.495).abs() < 1e-9);
+        // The last beat: the last pair; no grid: the default.
+        assert!((count_in_interval(&beats, n - 1) - 0.56).abs() < 1e-9);
+        assert_eq!(count_in_interval(&[1.0], 0), DEFAULT_BEAT_INTERVAL);
+        assert_eq!(count_in_interval(&[], 0), DEFAULT_BEAT_INTERVAL);
     }
 
     #[test]
