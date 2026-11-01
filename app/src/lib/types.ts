@@ -53,6 +53,7 @@ export interface AppSettingsInfo {
   default_quality: Quality;
   device_label: string; // predicted device of model_id
   theme: Theme; // UI theme ("stage" by default)
+  count_in_to_music_start: boolean; // "Count in to where the music starts" (on by default)
 }
 
 /** null = use the default. */
@@ -143,6 +144,8 @@ export interface BeatGrid {
   beats: number[];
   downbeats: number[];
   bpm: number | null;
+  /** Where the music starts after a quiet intro (seconds), if the song has one. */
+  music_start: number | null;
 }
 
 export type ExportFormat = "wav" | "flac" | "mp3";
@@ -160,6 +163,10 @@ export interface ExportRequest {
   click?: boolean;
   /** Start with the count-in (current count-in settings). Optional; missing = false. */
   count_in?: boolean;
+  /** Range start (song seconds). Optional; missing = the song start. */
+  start_sec?: number | null;
+  /** Range end (song seconds). Optional; missing = the song end. */
+  end_sec?: number | null;
 }
 
 export interface ExportProgress {
@@ -223,6 +230,7 @@ export interface Backend {
   getAppSettings(): Promise<AppSettingsInfo>;
   setAppSettings(settings: AppSettingsUpdate): Promise<AppSettingsInfo>;
   setTheme(theme: Theme): Promise<AppSettingsInfo>;
+  setCountInToMusicStart(on: boolean): Promise<AppSettingsInfo>;
   /** Paths dropped onto the window (Tauri drag-drop; HTML5 drop in the mock). */
   onFileDrop(cb: (paths: string[]) => void): Promise<Unlisten>;
   listen<E extends EventName>(event: E, cb: (payload: EventMap[E]) => void): Promise<Unlisten>;

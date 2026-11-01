@@ -1,6 +1,8 @@
 <script lang="ts">
+  import { tick } from "svelte";
   import Icon from "./Icon.svelte";
-  import { app } from "./store.svelte";
+  import { formatTime } from "./meter";
+  import { app, type ExportRange } from "./store.svelte";
   import type { ExportFormat } from "./types";
 
   const FORMATS: { v: ExportFormat; label: string; note: string }[] = [
@@ -9,6 +11,31 @@
     { v: "mp3", label: "MP3", note: "Small, plays anywhere" },
   ];
   const changedTempo = $derived(app.speed !== 100 || app.semitones !== 0 || app.cents !== 0);
+
+  const ranges = $derived(
+    [
+      { v: "song" as ExportRange, label: "Whole song", ok: true },
+      { v: "playhead" as ExportRange, label: "From playhead", ok: app.canExportFromPlayhead },
+      { v: "loop" as ExportRange, label: "Loop A–B", ok: app.hasLoop },
+    ].filter((r) => r.v !== "loop" || app.hasLoop),
+  );
+  const rangeText = $derived(
+    `${formatTime(app.exportMusicStart ?? app.exportSpan.start, true)} – ${formatTime(app.exportSpan.end, true)}`,
+  );
+
+  // Radiogroup keys: arrows move the choice (and focus), like native radios.
+  async function rangeKeys(e: KeyboardEvent) {
+    const dir = e.key === "ArrowRight" || e.key === "ArrowDown" ? 1 : e.key === "ArrowLeft" || e.key === "ArrowUp" ? -1 : 0;
+    if (!dir) return;
+    e.preventDefault();
+    const ok = ranges.filter((r) => r.ok);
+    const i = ok.findIndex((r) => r.v === app.exportRange);
+    const next = ok[(i + dir + ok.length) % ok.length];
+    app.exportRangePick = next.v;
+    const group = e.currentTarget as HTMLElement;
+    await tick();
+    group.querySelector<HTMLElement>(`[data-r="${next.v}"]`)?.focus();
+  }
 </script>
 
 <svelte:window onkeydown={(e) => e.key === "Escape" && app.closeExport()} />
@@ -25,6 +52,27 @@
       <p class="muted">
         Includes speed {app.speed}% and pitch {app.semitones > 0 ? "+" : ""}{app.semitones} st {app.cents ? `${app.cents > 0 ? "+" : ""}${app.cents}¢` : ""}.
       </p>
+    {/if}
+    <div class="range">
+      <!-- svelte-ignore a11y_interactive_supports_focus -->
+      <div class="seg" role="radiogroup" aria-label="Export range" tabindex="-1" onkeydown={rangeKeys}>
+        {#each ranges as r (r.v)}
+          <button
+            role="radio"
+            data-r={r.v}
+            aria-checked={app.exportRange === r.v}
+            tabindex={app.exportRange === r.v ? 0 : -1}
+            disabled={app.exporting || !r.ok}
+            onclick={() => (app.exportRangePick = r.v)}
+          >
+            {r.label}
+          </button>
+        {/each}
+      </div>
+      <span class="muted mono times">{rangeText}</span>
+    </div>
+    {#if app.exportMusicStart != null}
+      <p class="muted caption">Starts at {formatTime(app.exportMusicStart, true)} where the music starts (setting)</p>
     {/if}
     <div class="formats" role="radiogroup" aria-label="Format">
       {#each FORMATS as f (f.v)}
@@ -92,6 +140,46 @@
   .caption {
     font-size: 12px;
     margin-top: -6px;
+  }
+  /* Range: one compact line, segmented control left, times right. */
+  .range {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+  .times {
+    font-size: 12.5px;
+    white-space: nowrap;
+  }
+  .seg {
+    display: inline-flex;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    overflow: hidden;
+    flex: none;
+  }
+  .seg button {
+    height: 26px;
+    padding: 0 10px;
+    border: 0;
+    background: var(--surface-2);
+    font-size: 12.5px;
+    font-weight: 500;
+    white-space: nowrap;
+  }
+  .seg button + button {
+    border-left: 1px solid var(--border);
+  }
+  .seg button:hover:not(:disabled):not([aria-checked="true"]) {
+    background: var(--surface-3);
+  }
+  .seg button[aria-checked="true"] {
+    background: var(--accent);
+    color: var(--accent-fg);
+  }
+  .seg button:focus-visible {
+    outline-offset: -2px;
   }
   .formats {
     display: grid;

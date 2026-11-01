@@ -21,7 +21,7 @@ import type {
 import { STEMS } from "./types";
 import { backingFromOriginal, clampGain } from "./mix";
 import { applyTheme, currentTheme, isTheme } from "./theme";
-import { barAt, commonBeatsPerBar, effectiveDownbeats, nearestBeatIndex, normaliseOverrides } from "./meter";
+import { barAt, commonBeatsPerBar, effectiveDownbeats, formatTime, nearestBeatIndex, normaliseOverrides } from "./meter";
 
 export interface StemUi {
   on: boolean;
@@ -44,6 +44,9 @@ export const SPEED_MAX = 150;
 export const SEMI_MAX = 12;
 export const CENTS_MAX = 50;
 const MIN_LOOP = 0.05;
+
+/** What the export covers: the whole song, playhead → end, or the A–B loop once. */
+export type ExportRange = "song" | "playhead" | "loop";
 
 function defaultMix(): Record<StemName, StemUi> {
   return Object.fromEntries(STEMS.map((s) => [s, { on: true, volume: 1, solo: false }])) as Record<StemName, StemUi>;
@@ -102,11 +105,47 @@ class AppState {
   exportFraction = $state(0);
   exportDonePath = $state<string | null>(null);
   exportError = $state<string | null>(null);
+  /** The user's range pick in the dialog (null = the default, re-chosen each time it opens). */
+  exportRangePick = $state<ExportRange | null>(null);
 
   downbeats = $derived(effectiveDownbeats(this.grid, this.overrides));
   beatsPerBar = $derived(commonBeatsPerBar(this.grid, this.downbeats));
   anySolo = $derived(STEMS.some((s) => this.mix[s].solo));
   hasLoop = $derived(this.loop.a_sec != null && this.loop.b_sec != null);
+  /** "Count in to where the music starts" (app setting, on by default). */
+  countInToMusicStart = $derived(this.appSettings?.count_in_to_music_start ?? true);
+  /** Where the music starts after a quiet intro, if the song has one. */
+  musicStart = $derived(this.grid?.music_start ?? null);
+  /** "From the playhead" makes sense only before the end. */
+  canExportFromPlayhead = $derived(!!this.song && this.position < this.song.duration_sec - 0.1);
+  /** Effective range: the pick if still possible, else Loop A–B when a loop is set, else Whole song. */
+  exportRange = $derived.by((): ExportRange => {
+    const p = this.exportRangePick;
+    if (p === "loop" && this.hasLoop) return p;
+    if (p === "playhead" && this.canExportFromPlayhead) return p;
+    if (p === "song") return p;
+    return this.hasLoop ? "loop" : "song";
+  });
+  /** The chosen range in song seconds, before the music-start rule. */
+  exportSpan = $derived.by(() => {
+    const dur = this.song?.duration_sec ?? 0;
+    if (this.exportRange === "loop" && this.loop.a_sec != null && this.loop.b_sec != null) return { start: this.loop.a_sec, end: this.loop.b_sec };
+    if (this.exportRange === "playhead") return { start: this.position, end: dur };
+    return { start: 0, end: dur };
+  });
+  /**
+   * Where the export really starts when "Count in to where the music starts"
+   * applies (count-in on, range starting at the song start, music start
+   * inside the range); null otherwise. Same rule as the backend.
+   */
+  exportMusicStart = $derived.by(() => {
+    const ms = this.musicStart;
+    const { start, end } = this.exportSpan;
+    if (!this.click.count_in_enabled || !this.countInToMusicStart || ms == null) return null;
+    const first = this.grid?.beats[0];
+    const atStart = start <= 0.005 || (first != null && start < first - 0.005);
+    return atStart && ms > start && ms < end ? ms : null;
+  });
   /**
    * Stems the export mixes: exactly what is audible. With a solo, the soloed
    * stems (always the plain sum); otherwise the switched-on ones (on at −∞
@@ -117,9 +156,16 @@ class AppState {
   exportExtras = $derived(
     [this.click.enabled && "click", this.click.count_in_enabled && "count-in"].filter(Boolean).join(", "),
   );
+  /** Short range note for the summary ("" for the whole song). */
+  exportRangeNote = $derived.by(() => {
+    const { start, end } = this.exportSpan;
+    if (this.exportRange === "loop") return ` · loop ${formatTime(start)}–${formatTime(end)}`;
+    if (this.exportRange === "playhead" && start > 0.05) return ` · from ${formatTime(start)}`;
+    return "";
+  });
   exportSummary = $derived.by(() => {
     const on = this.exportStems;
-    const extras = this.exportExtras ? ` + ${this.exportExtras}` : "";
+    const extras = (this.exportExtras ? ` + ${this.exportExtras}` : "") + this.exportRangeNote;
     if (this.anySolo) return `Exports: ${on.join(", ")} (soloed)${extras}`;
     const off = STEMS.filter((s) => !on.includes(s));
     if (!on.length) return "Nothing to export: all stems are off";
@@ -221,6 +267,17 @@ class AppState {
       this.appSettings = await api.setTheme(t);
     } catch (e) {
       this.report(e);
+    }
+  }
+
+  /** Saves "Count in to where the music starts"; playback uses it at once. */
+  async setCountInToMusicStart(on: boolean) {
+    if (this.appSettings) this.appSettings = { ...this.appSettings, count_in_to_music_start: on };
+    try {
+      this.appSettings = await api.setCountInToMusicStart(on);
+    } catch (e) {
+      this.report(e);
+      await this.loadAppSettings();
     }
   }
 
@@ -609,6 +666,7 @@ class AppState {
   // ---- export ----
   openExport() {
     this.exportOpen = true;
+    this.exportRangePick = null;
     this.exportDonePath = null;
     this.exportError = null;
     this.exportFraction = 0;
@@ -639,6 +697,8 @@ class AppState {
         cents: this.cents,
         click: this.click.enabled,
         count_in: this.click.count_in_enabled,
+        start_sec: this.exportRange === "song" ? null : this.exportSpan.start,
+        end_sec: this.exportRange === "loop" ? this.exportSpan.end : null,
       });
     } catch (e) {
       this.exporting = false;

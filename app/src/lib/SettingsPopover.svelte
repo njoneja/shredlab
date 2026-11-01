@@ -67,6 +67,10 @@
       {/each}
     </select>
   </div>
+  <div class="row" title="With the count-in on, playing or exporting from the song start skips a quiet intro (studio talk, silence) and counts straight into the music.">
+    <label class="label" for="music-start">Count in to where the music starts</label>
+    <input id="music-start" type="checkbox" checked={app.countInToMusicStart} disabled={!st} onchange={(e) => app.setCountInToMusicStart(e.currentTarget.checked)} />
+  </div>
   {#if !st}
     <p class="muted">Settings are not available.</p>
   {:else}
@@ -160,7 +164,7 @@
   .seg button + button {
     border-left: 1px solid var(--border);
   }
-  .seg button:hover:not(:disabled) {
+  .seg button:hover:not(:disabled):not([aria-checked="true"]) {
     background: var(--surface-3);
   }
   .seg button[aria-checked="true"] {
@@ -192,6 +196,12 @@
   select.compact {
     width: 160px;
     height: 28px;
+  }
+  input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    margin: 0 4px 0 0;
+    accent-color: var(--accent);
   }
   /* Readable native option list in every theme (color-scheme follows the theme too). */
   option {

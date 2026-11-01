@@ -57,6 +57,8 @@ const DEMO_SONGS = [
   { path: "C:/Users/you/Music/Ozzy Osbourne/Mr. Crowley.mp3", title: "Mr. Crowley", artist: "Ozzy Osbourne", duration_sec: 296.2, bpm: 128 },
   { path: "C:/Users/you/Music/Mr. Big/Green-Tinted Sixties Mind.mp3", title: "Green-Tinted Sixties Mind", artist: "Mr. Big", duration_sec: 213.8, bpm: 132 },
   { path: "C:/Users/you/Music/Extreme/Decadence Dance.mp3", title: "Decadence Dance", artist: "Extreme", duration_sec: 412.0, bpm: 140 },
+  // Quiet studio talk, then the riff at 8.4 s (beats on the talk too).
+  { path: "C:/Users/you/Music/Led Zeppelin/The Ocean.mp3", title: "The Ocean", artist: "Led Zeppelin", duration_sec: 271.0, bpm: 120, music_start: 8.4 },
 ];
 let pickIndex = 0;
 
@@ -71,7 +73,7 @@ function describe(path: string) {
   if (demo) return demo;
   const file = path.split(/[\\/]/).pop() ?? path;
   const title = file.replace(/\.[^.]+$/, "");
-  return { path, title, artist: null, duration_sec: 180 + (title.length % 7) * 20, bpm: 100 + (title.length % 5) * 8 };
+  return { path, title, artist: null, duration_sec: 180 + (title.length % 7) * 20, bpm: 100 + (title.length % 5) * 8, music_start: undefined };
 }
 
 const SIX = ["vocals", "guitar", "bass", "drums", "piano", "other"];
@@ -85,6 +87,8 @@ const DEFAULT_QUALITY: Quality = "high";
 
 let appChoice: AppSettingsUpdate = lsGet<AppSettingsUpdate>(LS_APP, { model_id: null, quality: null });
 let themeChoice: Theme = lsGet<Theme>(LS_THEME, THEMES[0]);
+const LS_MUSIC_START = "stemx.mock.countInToMusicStart";
+let toMusicStart: boolean = lsGet<boolean>(LS_MUSIC_START, true);
 
 function appSettings(): AppSettingsInfo {
   const model_id = appChoice.model_id && MODELS.some((m) => m.id === appChoice.model_id) ? appChoice.model_id : DEFAULT_MODEL;
@@ -98,6 +102,7 @@ function appSettings(): AppSettingsInfo {
     default_quality: DEFAULT_QUALITY,
     device_label: MOCK_DEVICE,
     theme: THEMES.includes(themeChoice) ? themeChoice : THEMES[0],
+    count_in_to_music_start: toMusicStart,
   };
 }
 
@@ -162,7 +167,7 @@ function blip(accent: boolean, soft = false) {
   }
 }
 
-function makeGrid(duration: number, bpm: number): BeatGrid {
+function makeGrid(duration: number, bpm: number, music_start: number | null = null): BeatGrid {
   const beats: number[] = [];
   const downbeats: number[] = [];
   const period = 60 / bpm;
@@ -183,7 +188,7 @@ function makeGrid(duration: number, bpm: number): BeatGrid {
     beatInBar = (beatInBar + 1) % barLen;
     t += period;
   }
-  return { beats, downbeats, bpm };
+  return { beats, downbeats, bpm, music_start };
 }
 
 function localBeatPeriod(at: number) {
@@ -303,7 +308,7 @@ export const mockBackend: Backend = {
     playing = false;
     countInLeft = 0;
     loop = { a_sec: null, b_sec: null, enabled: false };
-    grid = makeGrid(d.duration_sec, d.bpm);
+    grid = makeGrid(d.duration_sec, d.bpm, "music_start" in d ? (d.music_start ?? null) : null);
     downbeatSet = new Set(grid.downbeats);
     song = {
       song_id,
@@ -402,6 +407,11 @@ export const mockBackend: Backend = {
     if (loop.enabled && loop.a_sec != null && loop.b_sec != null && (position < loop.a_sec || position >= loop.b_sec)) {
       position = loop.a_sec;
     }
+    // Count in to where the music starts: a start at the song start jumps there.
+    const ms = grid?.music_start;
+    const limit = loop.enabled && loop.b_sec != null ? loop.b_sec : song.duration_sec;
+    const atStart = position <= 0.005 || (!!grid?.beats.length && position < grid.beats[0] - 0.005);
+    if (click.count_in_enabled && toMusicStart && ms != null && atStart && ms > position && ms < limit) position = ms;
     lastBeatIdx = grid ? grid.beats.findIndex((b) => b >= position) - 1 : -1;
     if (lastBeatIdx < -1) lastBeatIdx = grid ? grid.beats.length : -1;
     playing = true;
@@ -491,6 +501,11 @@ export const mockBackend: Backend = {
     if (update.model_id != null && !MODELS.some((m) => m.id === update.model_id)) throw new Error(`Unknown model: ${update.model_id}`);
     appChoice = { model_id: update.model_id, quality: update.quality };
     lsSet(LS_APP, appChoice);
+    return appSettings();
+  },
+  async setCountInToMusicStart(on) {
+    toMusicStart = on;
+    lsSet(LS_MUSIC_START, on);
     return appSettings();
   },
   async setTheme(theme) {
