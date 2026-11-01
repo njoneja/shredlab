@@ -100,6 +100,24 @@ pub async fn get_library(b: B<'_>) -> R<Vec<LibraryEntry>> {
 }
 
 #[tauri::command]
+pub async fn hide_recent(b: B<'_>, song_id: String) -> R<()> {
+    let b = b.inner().clone();
+    blocking(move || b.hide_recent(&song_id)).await
+}
+
+#[tauri::command]
+pub async fn list_library(b: B<'_>) -> R<LibraryListing> {
+    let b = b.inner().clone();
+    blocking(move || Ok(b.list_library())).await
+}
+
+#[tauri::command]
+pub async fn delete_song(b: B<'_>, song_id: String) -> R<u64> {
+    let b = b.inner().clone();
+    blocking(move || b.delete_song(&song_id)).await
+}
+
+#[tauri::command]
 pub async fn start_separation(b: B<'_>) -> R<SeparatedWith> {
     let b = b.inner().clone();
     blocking(move || b.start_separation()).await

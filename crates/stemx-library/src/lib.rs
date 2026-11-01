@@ -196,6 +196,10 @@ pub struct SongMeta {
     /// Separation strength.
     #[serde(default)]
     pub strength: StrengthSetting,
+    /// Hidden from the recent-songs list (the user removed it there); the
+    /// data stays. Cleared when the song is opened again.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub hidden: bool,
     pub created_ms: u64,
     pub last_opened_ms: u64,
     pub updated_ms: u64,
@@ -222,6 +226,7 @@ impl SongMeta {
             settings: None,
             refine: BTreeMap::new(),
             strength: StrengthSetting::default(),
+            hidden: false,
             created_ms: now,
             last_opened_ms: now,
             updated_ms: now,
@@ -250,6 +255,10 @@ impl SongMeta {
         }
         self.schema = SCHEMA;
     }
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 /// Title/artist read from the file's tags.
@@ -358,6 +367,34 @@ pub struct RecentEntry {
     pub duration_sec: f64,
     pub stems_cached: bool,
     pub last_opened_ms: u64,
+    /// Hidden from the recent list ([`Library::set_hidden`]).
+    pub hidden: bool,
+}
+
+/// One song in the storage view ([`Library::list`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct StoredSong {
+    pub entry: RecentEntry,
+    /// Bytes on disk of the song folder (stems, original copy, manifest).
+    pub size_bytes: u64,
+    /// The source audio file still exists at `entry.path`.
+    pub source_exists: bool,
+}
+
+/// Total size of the regular files under `path`; symlinks are not followed.
+pub fn dir_size(path: &Path) -> u64 {
+    let Ok(md) = fs::symlink_metadata(path) else {
+        return 0;
+    };
+    if md.is_file() {
+        return md.len();
+    }
+    if !md.is_dir() {
+        return 0;
+    }
+    fs::read_dir(path)
+        .map(|rd| rd.filter_map(|e| e.ok()).map(|e| dir_size(&e.path())).sum())
+        .unwrap_or(0)
 }
 
 /// A song library rooted at a directory.
@@ -446,8 +483,9 @@ impl Library {
         Ok(true)
     }
 
-    /// Songs with a readable manifest, most recently opened first.
-    pub fn recent(&self, limit: usize) -> Vec<RecentEntry> {
+    /// All songs with a readable manifest (hidden ones included), most
+    /// recently opened first.
+    pub fn entries(&self) -> Vec<RecentEntry> {
         let Ok(rd) = fs::read_dir(self.root.join("songs")) else {
             return Vec::new();
         };
@@ -462,11 +500,89 @@ impl Library {
                 artist: m.artist,
                 duration_sec: m.duration_sec,
                 last_opened_ms: m.last_opened_ms,
+                hidden: m.hidden,
             })
             .collect();
         out.sort_by_key(|e| std::cmp::Reverse(e.last_opened_ms));
+        out
+    }
+
+    /// Songs for the recent list (not hidden), most recently opened first.
+    pub fn recent(&self, limit: usize) -> Vec<RecentEntry> {
+        let mut out: Vec<RecentEntry> = self.entries().into_iter().filter(|e| !e.hidden).collect();
         out.truncate(limit);
         out
+    }
+
+    /// Hides a song from (or shows it in) the recent list; its data stays.
+    /// `Ok(false)` if the song is not in the library.
+    pub fn set_hidden(&self, song_id: &str, hidden: bool) -> Result<bool> {
+        self.safe_song_dir(song_id)?;
+        self.update(song_id, |m| m.hidden = hidden)
+    }
+
+    /// Every song with its size on disk, most recently opened first. Walks
+    /// the song folders, so call it off the UI thread.
+    pub fn list(&self) -> Vec<StoredSong> {
+        self.entries()
+            .into_iter()
+            .map(|e| StoredSong {
+                size_bytes: dir_size(&self.song_dir(&e.song_id)),
+                source_exists: Path::new(&e.path).is_file(),
+                entry: e,
+            })
+            .collect()
+    }
+
+    /// The folder of `song_id`, checked to be a direct child of
+    /// `<root>/songs` after resolving it (no `..`, separators, absolute
+    /// paths or links pointing elsewhere). Errors for anything else.
+    pub fn safe_song_dir(&self, song_id: &str) -> Result<PathBuf> {
+        let bad = || Error::Input(format!("bad song id {song_id:?}"));
+        if song_id.is_empty()
+            || song_id == "."
+            || song_id == ".."
+            || song_id.contains(['/', '\\', ':', '\0'])
+        {
+            return Err(bad());
+        }
+        let songs = self.root.join("songs");
+        let dir = songs.join(song_id);
+        let songs_c = fs::canonicalize(&songs).map_err(|e| Error::io(&songs, e))?;
+        match fs::symlink_metadata(&dir) {
+            Ok(md) if md.file_type().is_symlink() => return Err(bad()),
+            Ok(_) => {
+                let dir_c = fs::canonicalize(&dir).map_err(|e| Error::io(&dir, e))?;
+                if dir_c.parent() != Some(songs_c.as_path()) {
+                    return Err(bad());
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                if dir.parent() != Some(songs.as_path()) {
+                    return Err(bad());
+                }
+            }
+            Err(e) => return Err(Error::io(&dir, e)),
+        }
+        Ok(dir)
+    }
+
+    /// Deletes everything stored for a song (stems, original copy,
+    /// manifest with its settings) and returns the bytes freed. Only ever
+    /// removes the song's own folder inside the library ([`safe_song_dir`](Self::safe_song_dir)).
+    pub fn delete_song(&self, song_id: &str) -> Result<u64> {
+        let dir = self.safe_song_dir(song_id)?;
+        let size = dir_size(&dir);
+        self.remove_checked(&dir)?;
+        Ok(size)
+    }
+
+    fn remove_checked(&self, dir: &Path) -> Result<()> {
+        match fs::remove_dir_all(dir) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(Error::io(dir, e)),
+        }
     }
 
     /// Writes stereo stems to the cache folder `dir` (relative to the song
@@ -592,12 +708,8 @@ impl Library {
 
     /// Removes a song folder entirely.
     pub fn remove(&self, song_id: &str) -> Result<()> {
-        let dir = self.song_dir(song_id);
-        match fs::remove_dir_all(&dir) {
-            Ok(()) => Ok(()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(e) => Err(Error::io(&dir, e)),
-        }
+        let dir = self.safe_song_dir(song_id)?;
+        self.remove_checked(&dir)
     }
 }
 
@@ -944,6 +1056,101 @@ mod tests {
             .all(|(x, y)| (x - y).abs() < 2.0 * 1.2 / 32767.0));
         fs::remove_file(lib.original_path("o1")).unwrap();
         assert!(lib.read_original("o1", &info).unwrap().is_none());
+    }
+
+    #[test]
+    fn hidden_songs_leave_recent_but_stay_listed() {
+        let lib = Library::open(&tmpdir("hidden")).unwrap();
+        for (id, t) in [("a1", 10), ("b2", 30), ("c3", 20)] {
+            lib.save(&mut meta(id, t)).unwrap();
+        }
+        // Old manifests (no `hidden` field) load as not hidden.
+        assert!(!fs::read_to_string(lib.manifest_path("b2"))
+            .unwrap()
+            .contains("hidden"));
+        assert!(lib.set_hidden("b2", true).unwrap());
+        assert!(!lib.set_hidden("zz", true).unwrap());
+        let ids = |v: Vec<RecentEntry>| v.into_iter().map(|e| e.song_id).collect::<Vec<_>>();
+        assert_eq!(ids(lib.recent(10)), ["c3", "a1"]);
+        assert_eq!(ids(lib.entries()), ["b2", "c3", "a1"]);
+        assert!(lib.entries()[0].hidden);
+        // Data untouched; showing it again brings it back.
+        assert!(lib.load("b2").unwrap().unwrap().hidden);
+        assert!(lib.set_hidden("b2", false).unwrap());
+        assert_eq!(ids(lib.recent(10)), ["b2", "c3", "a1"]);
+    }
+
+    #[test]
+    fn list_reports_sizes_and_source() {
+        let d = tmpdir("list");
+        let lib = Library::open(&d.join("lib")).unwrap();
+        let src = d.join("song.mp3");
+        fs::write(&src, b"x").unwrap();
+        let mut a = SongMeta::new("a1", &src, Tags::default(), 1.0);
+        lib.save(&mut a).unwrap();
+        let mut b = meta("b2", 1);
+        b.hidden = true;
+        lib.save(&mut b).unwrap();
+        let x = [0.1f32; 100];
+        lib.write_stems("a1", &stem_set_dir("m", 1), 44100, &[("bass", [&x, &x])])
+            .unwrap();
+        let l = lib.list();
+        assert_eq!(l.len(), 2);
+        let a = l.iter().find(|s| s.entry.song_id == "a1").unwrap();
+        let b = l.iter().find(|s| s.entry.song_id == "b2").unwrap();
+        assert!(a.source_exists && !b.source_exists);
+        assert!(b.entry.hidden);
+        let manifest = fs::metadata(lib.manifest_path("a1")).unwrap().len();
+        assert_eq!(a.size_bytes, manifest + 44 + 400);
+        assert_eq!(
+            b.size_bytes,
+            fs::metadata(lib.manifest_path("b2")).unwrap().len()
+        );
+    }
+
+    #[test]
+    fn delete_song_stays_inside_the_library() {
+        let d = tmpdir("delete");
+        let lib = Library::open(&d.join("lib")).unwrap();
+        // A folder next to the library that must survive every attempt.
+        let outside = d.join("outside");
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("keep.txt"), b"keep").unwrap();
+        fs::create_dir_all(lib.root().join("songs").join("..").join("outside2")).unwrap();
+        for id in [
+            "",
+            ".",
+            "..",
+            "../outside",
+            "..\\outside",
+            "../../outside",
+            "a/../../outside",
+            "/tmp",
+            "C:\\Windows",
+            "C:outside",
+        ] {
+            assert!(lib.delete_song(id).is_err(), "{id:?} must be refused");
+            assert!(lib.remove(id).is_err(), "{id:?} must be refused");
+            assert!(lib.set_hidden(id, true).is_err(), "{id:?} must be refused");
+        }
+        assert!(lib.safe_song_dir(outside.to_str().unwrap()).is_err());
+        assert!(outside.join("keep.txt").is_file());
+        assert!(lib.root().join("outside2").is_dir());
+        assert!(lib.root().join("songs").is_dir());
+
+        let mut m = meta("s1", 1);
+        lib.save(&mut m).unwrap();
+        let x = [0.5f32; 10];
+        lib.write_stems("s1", &stem_set_dir("m", 1), 44100, &[("drums", [&x, &x])])
+            .unwrap();
+        let size = dir_size(&lib.song_dir("s1"));
+        assert!(size > 0);
+        assert_eq!(lib.delete_song("s1").unwrap(), size);
+        assert!(!lib.song_dir("s1").exists());
+        assert!(lib.load("s1").unwrap().is_none());
+        assert!(lib.entries().is_empty());
+        // Already gone: nothing freed, no error.
+        assert_eq!(lib.delete_song("s1").unwrap(), 0);
     }
 
     #[test]

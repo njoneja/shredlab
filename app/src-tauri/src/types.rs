@@ -105,6 +105,32 @@ pub struct LibraryEntry {
     pub last_opened_ms: u64,
 }
 
+/// One song in the storage view (`list_library`).
+#[derive(Debug, Clone, Serialize)]
+pub struct StoredSongInfo {
+    pub song_id: String,
+    pub path: String,
+    pub title: String,
+    pub artist: Option<String>,
+    pub size_bytes: u64,
+    pub last_opened_ms: u64,
+    pub source_exists: bool,
+    /// Removed from the recent list.
+    pub hidden: bool,
+    /// Currently open (cannot be deleted).
+    pub open: bool,
+}
+
+/// Everything stored in the library (`list_library`).
+#[derive(Debug, Clone, Serialize)]
+pub struct LibraryListing {
+    /// The library folder.
+    pub dir: String,
+    pub total_bytes: u64,
+    /// Largest first.
+    pub songs: Vec<StoredSongInfo>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SeparationStage {

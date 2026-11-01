@@ -870,7 +870,7 @@ impl Backend {
             stemx_library::song_id_for(&path_buf).map_err(|e| e.to_string())?
         } else {
             self.library
-                .recent(usize::MAX)
+                .entries()
                 .into_iter()
                 .find(|e| e.path == path && e.stems_cached)
                 .map(|e| e.song_id)
@@ -999,6 +999,7 @@ impl Backend {
             m.channels = nch;
         }
         m.last_opened_ms = stemx_library::now_ms();
+        m.hidden = false;
         if stems.is_none() {
             m.stem_sets.clear();
         }
@@ -1146,6 +1147,64 @@ impl Backend {
                 last_opened_ms: e.last_opened_ms,
             })
             .collect()
+    }
+
+    /// Hides a song from the recent list (its data stays; opening it again
+    /// brings it back).
+    pub fn hide_recent(&self, song_id: &str) -> Result<(), String> {
+        match self.library.set_hidden(song_id, true) {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(format!("Unknown song {song_id}")),
+            Err(e) => Err(e.to_string()),
+        }
+    }
+
+    /// Every stored song with its size on disk, largest first (walks the
+    /// library; called off the UI thread).
+    pub fn list_library(&self) -> LibraryListing {
+        let open = lock(&self.st).song.as_ref().map(|s| s.meta.song_id.clone());
+        let mut songs: Vec<StoredSongInfo> = self
+            .library
+            .list()
+            .into_iter()
+            .map(|s| StoredSongInfo {
+                open: open.as_deref() == Some(s.entry.song_id.as_str()),
+                song_id: s.entry.song_id,
+                path: s.entry.path,
+                title: s.entry.title,
+                artist: s.entry.artist,
+                size_bytes: s.size_bytes,
+                last_opened_ms: s.entry.last_opened_ms,
+                source_exists: s.source_exists,
+                hidden: s.entry.hidden,
+            })
+            .collect();
+        songs.sort_by_key(|s| std::cmp::Reverse(s.size_bytes));
+        LibraryListing {
+            dir: self.library.root().display().to_string(),
+            total_bytes: songs.iter().map(|s| s.size_bytes).sum(),
+            songs,
+        }
+    }
+
+    /// Deletes everything stored for a song and returns the bytes freed.
+    /// The open song is refused (close it first): its stems are in use.
+    pub fn delete_song(&self, song_id: &str) -> Result<u64, String> {
+        // Serialized with open_song, so the song cannot be opened meanwhile.
+        let _serial = lock(&self.open_lock);
+        if lock(&self.st)
+            .song
+            .as_ref()
+            .is_some_and(|s| s.meta.song_id == song_id)
+        {
+            return Err("This song is open. Close it before deleting its stems.".into());
+        }
+        let freed = self
+            .library
+            .delete_song(song_id)
+            .map_err(|e| e.to_string())?;
+        log!("deleted stored data of {song_id} ({freed} bytes)");
+        Ok(freed)
     }
 
     pub fn save_song_settings(
