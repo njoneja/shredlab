@@ -69,6 +69,8 @@ pub struct AppSettingsInfo {
     pub default_quality: Quality,
     /// Predicted device of `model_id`: "GPU" or "CPU".
     pub device_label: String,
+    /// UI theme: "stage" (default), "rosewood", "valve" or "manuscript".
+    pub theme: String,
 }
 
 /// `set_app_settings` payload. Null = use the default.
@@ -207,6 +209,10 @@ pub struct ExportRequest {
     pub path: String,
     pub format: ExportFormat,
     pub stems: Vec<ExportStem>,
+    /// The stems are the soloed ones: always the plain sum, never the P1
+    /// backing track. Missing = false.
+    #[serde(default)]
+    pub solo: bool,
     pub speed_percent: f64,
     pub semitones: f64,
     pub cents: f64,
@@ -284,6 +290,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(r.format, ExportFormat::Mp3);
+        assert!(!r.solo);
         let l: LoopState =
             serde_json::from_str(r#"{"a_sec":null,"b_sec":2.0,"enabled":true}"#).unwrap();
         assert_eq!(l.range(), None);

@@ -1,4 +1,4 @@
-//! Tauri shell for Stem Extractor. Commands (`commands.rs`) are thin
+//! Tauri shell for ShredLab. Commands (`commands.rs`) are thin
 //! wrappers over `backend.rs`, which holds the state and background jobs
 //! and is Tauri-free.
 //!
@@ -52,7 +52,7 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     };
     log::init(&data_dir);
     log!(
-        "Stem Extractor {} starting ({} build, audio engine: {})",
+        "ShredLab {} starting ({} build, audio engine: {})",
         env!("CARGO_PKG_VERSION"),
         if cfg!(debug_assertions) {
             "debug"
@@ -133,6 +133,7 @@ pub fn run() {
             commands::save_song_settings,
             commands::get_app_settings,
             commands::set_app_settings,
+            commands::set_theme,
         ])
         .run(tauri::generate_context!());
     if let Err(e) = result {

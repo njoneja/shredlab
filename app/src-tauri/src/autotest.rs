@@ -413,14 +413,16 @@ fn run(b: &Arc<Backend>, song: &Path, out: &Path, rx: &Receiver<Event>) -> Resul
             path: file.display().to_string(),
             format: ExportFormat::Wav,
             stems: mix_all_but("guitar", None),
+            solo: false,
             speed_percent: 100.0,
             semitones: 0.0,
             cents: 0.0,
         },
     )?;
     let got = read_wav(&file)?;
+    let others: Vec<&str> = STEMS.iter().copied().filter(|s| *s != "guitar").collect();
     let [p1, sum] = b
-        .debug_backing_reference("guitar")
+        .debug_mix_references(&others)
         .ok_or("no reference (stems or original missing)")?;
     let (snr_p1, k) = snr_db(&got, &p1);
     let (snr_sum, _) = snr_db(&got, &sum);
@@ -429,6 +431,44 @@ fn run(b: &Arc<Backend>, song: &Path, out: &Path, rx: &Receiver<Event>) -> Resul
     );
     if snr_p1 < 60.0 || snr_sum > snr_p1 - 10.0 {
         return Err("all-but-guitar export is not original - guitar".into());
+    }
+
+    // Solo export of vocals, bass and drums: what is heard is the plain sum
+    // of the soloed stems, even though 3 of 6 on would be P1 mode without
+    // solo.
+    let soloed = ["vocals", "bass", "drums"];
+    let file = out.join("autotest-solo.wav");
+    let _ = std::fs::remove_file(&file);
+    let secs = export_wait(
+        b,
+        rx,
+        ExportRequest {
+            path: file.display().to_string(),
+            format: ExportFormat::Wav,
+            stems: soloed
+                .iter()
+                .map(|s| ExportStem {
+                    stem: s.to_string(),
+                    volume: 1.0,
+                })
+                .collect(),
+            solo: true,
+            speed_percent: 100.0,
+            semitones: 0.0,
+            cents: 0.0,
+        },
+    )?;
+    let got = read_wav(&file)?;
+    let [p1, sum] = b
+        .debug_mix_references(&soloed)
+        .ok_or("no reference (stems or original missing)")?;
+    let (snr_sum, k) = snr_db(&got, &sum);
+    let (snr_p1, _) = snr_db(&got, &p1);
+    log!(
+        "autotest: solo export {secs:.1}s: vs sum of soloed stems {snr_sum:.1} dB (gain {k:.3}), vs P1 backing track {snr_p1:.1} dB"
+    );
+    if snr_sum < 60.0 || snr_p1 > snr_sum - 10.0 {
+        return Err("solo export is not the plain sum of the soloed stems".into());
     }
 
     // +6 dB boost on bass (P1 mode): must not clip.
@@ -441,6 +481,7 @@ fn run(b: &Arc<Backend>, song: &Path, out: &Path, rx: &Receiver<Event>) -> Resul
             path: file.display().to_string(),
             format: ExportFormat::Wav,
             stems: mix_all_but("", Some(("bass", 1.995))),
+            solo: false,
             speed_percent: 100.0,
             semitones: 0.0,
             cents: 0.0,
@@ -478,6 +519,7 @@ fn run(b: &Arc<Backend>, song: &Path, out: &Path, rx: &Receiver<Event>) -> Resul
                         volume: 0.8,
                     })
                     .collect(),
+                solo: false,
                 speed_percent: 80.0,
                 semitones: -2.0,
                 cents: 0.0,

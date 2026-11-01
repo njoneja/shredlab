@@ -1,6 +1,6 @@
 //! App-wide settings persisted as `<data dir>/settings.json`: the chosen
-//! separation model and separation quality. `None` means "use the
-//! default" (default model; High on GPU, Standard on CPU). Env overrides
+//! separation model, separation quality and UI theme. `None` means "use
+//! the default" (default model; High on GPU, Standard on CPU; Stage). Env overrides
 //! (`STEMX_MODEL`, `STEMX_DEVICE`) still win at runtime for development.
 
 use std::path::{Path, PathBuf};
@@ -8,6 +8,9 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 pub const FILE: &str = "settings.json";
+
+/// UI themes (from the brand guide); the first is the default.
+pub const THEMES: [&str; 4] = ["stage", "rosewood", "valve", "manuscript"];
 
 /// Separation quality: number of time-shifted passes averaged.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -53,9 +56,22 @@ pub struct AppSettings {
     /// Chosen quality (`None` = default for the device).
     #[serde(default)]
     pub quality: Option<Quality>,
+    /// Chosen UI theme (`None` = Stage). The UI owns the names; see
+    /// [`THEMES`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme: Option<String>,
 }
 
 impl AppSettings {
+    /// The theme to use: the saved one if known, else the default.
+    pub fn theme(&self) -> &'static str {
+        self.theme
+            .as_deref()
+            .and_then(|t| THEMES.iter().find(|x| **x == t))
+            .copied()
+            .unwrap_or(THEMES[0])
+    }
+
     pub fn path(data_dir: &Path) -> PathBuf {
         data_dir.join(FILE)
     }
@@ -108,6 +124,7 @@ mod tests {
         let s = AppSettings {
             model_id: Some("bs-roformer-sw".into()),
             quality: Some(Quality::Standard),
+            theme: Some("manuscript".into()),
         };
         s.save(&d).unwrap();
         assert_eq!(AppSettings::load(&d).0, s);
@@ -129,6 +146,20 @@ mod tests {
         // Unknown fields and partial files are fine.
         std::fs::write(AppSettings::path(&d), r#"{"quality":"high","x":1}"#).unwrap();
         assert_eq!(AppSettings::load(&d).0.quality, Some(Quality::High));
+    }
+
+    #[test]
+    fn theme_defaults_to_stage() {
+        let mut s = AppSettings::default();
+        assert_eq!(s.theme(), "stage");
+        s.theme = Some("valve".into());
+        assert_eq!(s.theme(), "valve");
+        s.theme = Some("neon".into());
+        assert_eq!(s.theme(), "stage");
+        // Old files without a theme still load.
+        let old: AppSettings =
+            serde_json::from_str(r#"{"model_id":null,"quality":"high"}"#).unwrap();
+        assert_eq!(old.theme, None);
     }
 
     #[test]

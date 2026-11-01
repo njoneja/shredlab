@@ -1,4 +1,4 @@
-# Stem Extractor: UI ↔ backend contract
+# ShredLab (Stem Extractor): UI ↔ backend contract
 
 This file is the contract between the Svelte UI (`app/src`) and the Tauri
 backend (`app/src-tauri`). The backend implements **exactly** this. TypeScript
@@ -85,8 +85,11 @@ AppSettingsInfo {
   quality: Quality,            // quality the next separation uses
   quality_choice: Quality | null, // saved choice; null = default for the device
   default_quality: Quality,    // "high" when model_id runs on the GPU, else "standard"
-  device_label: string         // predicted device of model_id: "GPU" | "CPU"
+  device_label: string,        // predicted device of model_id: "GPU" | "CPU"
+  theme: Theme                 // UI theme; "stage" when none is saved
 }
+
+Theme = "stage" | "rosewood" | "valve" | "manuscript"
 
 AppSettingsUpdate { model_id: string | null, quality: Quality | null }
   // null = use the default. Persisted in <data dir>/settings.json.
@@ -131,8 +134,11 @@ ExportFormat = "wav" | "flac" | "mp3"
 ExportRequest {
   path: string,              // absolute output path, extension already included
   format: ExportFormat,
-  stems: { stem: StemName, volume: number }[],   // exactly the stems that are on, with linear
-                             // gains (include on stems at volume 0: they count as "on" for P1)
+  stems: { stem: StemName, volume: number }[],   // exactly the audible stems, with linear gains:
+                             // the soloed stems if any stem is soloed, else the stems that
+                             // are on (include on stems at volume 0: they count as "on" for P1)
+  solo: boolean,             // true = `stems` are the soloed stems: always the plain sum,
+                             // never the P1 backing track. Optional; missing = false.
   speed_percent: number,     // 50..150, apply time-stretch like playback
   semitones: number,         // -12..12
   cents: number              // -50..50
@@ -167,6 +173,7 @@ SongSettings   // OPAQUE to the backend: store the JSON value and return it verb
 | `cancel_export` | – | `()` | Cancel if running; emit `export-error` with `cancelled: true`. Delete the partial file. |
 | `save_song_settings` | `song_id: String, settings: serde_json::Value` | `()` | Persist next to the song's library entry. Returned verbatim in `SongInfo.settings` on the next `open_song` of that song. Called debounced (~600 ms) after changes. |
 | `get_app_settings` | – | `AppSettingsInfo` | Models and the separation settings. |
+| `set_theme` | `theme: String` | `AppSettingsInfo` | Saves the UI theme with the app settings (`<data dir>/settings.json`). `Err` for an unknown theme. The UI applies the theme itself and mirrors it in `localStorage` for the next start (no flash before `get_app_settings` returns). |
 | `set_app_settings` | `settings: AppSettingsUpdate` | `AppSettingsInfo` | Saves the choice (null = default) and returns the new effective settings. Does **not** re-separate: if a song is open and its `separated_with` (model_id, quality) differs from the new effective `model_id`/`quality`, the UI asks "Re-separate this song?" and calls `start_separation` on yes. `Err` for an unknown model id. |
 
 ## Events
@@ -206,9 +213,10 @@ Events for a `song_id` that is no longer current are ignored by the UI.
   stems on at 0 dB = the original, bit for bit). Otherwise (isolating, or
   any solo) it is the plain sum of the audible stems.
 - Mode changes crossfade over 30 ms; gain changes ramp (~12 ms).
-- Export applies the same rule to `req.stems` (on = listed stems). The UI
-  shows "Backing track built from the original" under the export summary
-  when `original_available && 2 * req.stems.length >= n`.
+- Export applies the same rule to `req.stems` (on = listed stems), except
+  that `req.solo` always gives the plain sum. The UI shows "Backing track
+  built from the original" under the export summary when
+  `original_available && !req.solo && 2 * req.stems.length >= n`.
 
 ### Volume
 - The mixer shows stem volume in dB, from −∞ (slider bottom = gain 0) to
@@ -228,8 +236,10 @@ Events for a `song_id` that is no longer current are ignored by the UI.
 - How the audible stems are combined: see Backing track (P1).
 
 ### Export
-- Mix exactly `req.stems` at their volumes (the UI has already applied the
-  switches and **ignores solo**), using the P1 rule above. Apply `speed_percent`, `semitones`, `cents`
+- "Export what you hear": mix exactly `req.stems` at their volumes. The UI
+  has already picked the audible stems: the soloed ones when any stem is
+  soloed (`req.solo: true`, plain sum), else the switched-on ones (P1 rule
+  above). Apply `speed_percent`, `semitones`, `cents`
   as in playback. Whole song, no click, no loop. Avoid clipping (a limiter or
   float WAV is fine; MP3 at ≥ 192 kbps).
 

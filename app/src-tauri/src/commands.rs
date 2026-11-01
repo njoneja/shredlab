@@ -203,3 +203,9 @@ pub async fn set_app_settings(b: B<'_>, settings: AppSettingsUpdate) -> R<AppSet
     let b = b.inner().clone();
     blocking(move || b.set_app_settings(settings)).await
 }
+
+#[tauri::command]
+pub async fn set_theme(b: B<'_>, theme: String) -> R<AppSettingsInfo> {
+    let b = b.inner().clone();
+    blocking(move || b.set_theme(&theme)).await
+}

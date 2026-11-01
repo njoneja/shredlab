@@ -24,7 +24,7 @@ use stemx_separation::{
 
 use crate::audio::{self, ClickConfig, Engine, MixMode, Track};
 use crate::log;
-use crate::settings::AppSettings;
+use crate::settings::{self, AppSettings};
 use crate::types::*;
 
 /// Event sink: `(event name, JSON payload)`.
@@ -35,7 +35,7 @@ pub const RATE: u32 = stemx_io::MODEL_SAMPLE_RATE;
 const ORIGINAL: &str = "original";
 const RECENT_MAX: usize = 20;
 const NO_DEVICE: &str =
-    "No audio output device found. Connect speakers or headphones and restart Stem Extractor (separation and export still work).";
+    "No audio output device found. Connect speakers or headphones and restart ShredLab (separation and export still work).";
 
 pub struct Config {
     pub data_dir: PathBuf,
@@ -523,7 +523,7 @@ impl Backend {
                 })
                 .collect(),
             model_id: entry.as_ref().map(|e| e.id().to_string()),
-            model_choice: saved.model_id,
+            model_choice: saved.model_id.clone(),
             model_from_env: std::env::var("STEMX_MODEL")
                 .ok()
                 .is_some_and(|id| self.registry.get(&id).is_some()),
@@ -534,6 +534,7 @@ impl Backend {
                 .as_ref()
                 .map_or("CPU", |e| self.predict_device(e))
                 .to_string(),
+            theme: saved.theme().to_string(),
         }
     }
 
@@ -548,10 +549,28 @@ impl Backend {
         let new = AppSettings {
             model_id: update.model_id,
             quality: update.quality,
+            theme: lock(&self.app_settings).theme.clone(),
         };
         new.save(&self.cfg.data_dir)
             .map_err(|e| format!("Cannot save settings: {e}"))?;
         log!("settings saved: {new:?}");
+        *lock(&self.app_settings) = new;
+        Ok(self.app_settings())
+    }
+
+    /// Saves the UI theme (one of [`settings::THEMES`]) with the other app
+    /// settings and returns the new settings.
+    pub fn set_theme(&self, theme: &str) -> Result<AppSettingsInfo, String> {
+        if !settings::THEMES.contains(&theme) {
+            return Err(format!("Unknown theme {theme}"));
+        }
+        let new = AppSettings {
+            theme: Some(theme.to_string()),
+            ..lock(&self.app_settings).clone()
+        };
+        new.save(&self.cfg.data_dir)
+            .map_err(|e| format!("Cannot save settings: {e}"))?;
+        log!("theme saved: {theme}");
         *lock(&self.app_settings) = new;
         Ok(self.app_settings())
     }
@@ -1566,8 +1585,9 @@ impl Backend {
                 if gains.is_empty() {
                     return Err("Nothing to export: no stems selected".into());
                 }
+                // Soloed stems are always the plain sum (like playback).
                 let mode = if song.backing_from_original() {
-                    audio::choose_mode(stems.len(), gains.len(), false)
+                    audio::choose_mode(stems.len(), gains.len(), req.solo)
                 } else {
                     MixMode::Stems
                 };
@@ -1707,26 +1727,27 @@ impl Backend {
         &self.cfg.data_dir
     }
 
-    /// Autotest helper: (original - stem) and the plain sum of the other
-    /// stems, unstretched, for checking a P1 export. `None` without stems
-    /// or original.
+    /// Autotest helper, unstretched, for checking an export of the stems
+    /// `on`: the P1 backing track (original minus the other stems) and the
+    /// plain sum of `on`. `None` without stems or original.
     #[cfg(debug_assertions)]
-    pub fn debug_backing_reference(&self, without: &str) -> Option<[[Vec<f32>; 2]; 2]> {
+    pub fn debug_mix_references(&self, on: &[&str]) -> Option<[[Vec<f32>; 2]; 2]> {
         let st = lock(&self.st);
         let song = st.song.as_ref()?;
         let o = song.original.as_ref()?;
         let stems = song.stems.as_ref()?;
-        let x = stems.iter().find(|t| t.name == without)?;
         let p1 = [0, 1].map(|c| {
-            o.channels[c]
-                .iter()
-                .zip(x.channels[c].iter())
-                .map(|(a, b)| a - b)
-                .collect::<Vec<f32>>()
+            let mut v: Vec<f32> = o.channels[c].to_vec();
+            for t in stems.iter().filter(|t| !on.contains(&t.name.as_str())) {
+                for (s, y) in v.iter_mut().zip(t.channels[c].iter()) {
+                    *s -= y;
+                }
+            }
+            v
         });
         let sum = [0, 1].map(|c| {
             let mut v = vec![0.0f32; o.channels[c].len()];
-            for t in stems.iter().filter(|t| t.name != without) {
+            for t in stems.iter().filter(|t| on.contains(&t.name.as_str())) {
                 for (s, y) in v.iter_mut().zip(t.channels[c].iter()) {
                     *s += y;
                 }
@@ -1902,6 +1923,7 @@ mod tests {
             path: out.display().to_string(),
             format: ExportFormat::Wav,
             stems: vec![],
+            solo: false,
             speed_percent: 100.0,
             semitones: 0.0,
             cents: 0.0,
