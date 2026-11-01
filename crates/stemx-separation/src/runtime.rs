@@ -157,6 +157,7 @@ pub fn coreml_cache_dir(cache_dir: &Path, model_id: &str, model_sha256: &str) ->
 
 /// Creates `dir` and removes its siblings (compiles of older model builds).
 /// False if `dir` cannot be created.
+#[cfg(target_os = "macos")]
 fn prepare_coreml_cache(dir: &Path) -> bool {
     if std::fs::create_dir_all(dir).is_err() {
         return false;
