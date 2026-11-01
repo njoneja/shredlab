@@ -9,6 +9,7 @@ use crate::limiter::Limiter;
 use crate::mix::{MixMode, Mixer};
 use crate::stretch::Stretcher;
 use crate::{ClickConfig, Position, Track};
+use stemx_dsp::refine::{RefineParams, FIELD_LEN};
 
 /// Crossfade length for seeks, loop wraps, pause and stretch on/off (~10 ms).
 pub const XFADE: usize = 441;
@@ -356,6 +357,26 @@ impl Pipeline {
 
     pub fn set_click(&mut self, cfg: ClickConfig) {
         self.click = cfg;
+    }
+
+    /// Refine parameters of one track (live, smoothed); see [`crate::mix`].
+    pub fn set_refine(&mut self, name: &str, p: RefineParams) {
+        self.mixer.set_refine(name, p);
+    }
+
+    /// Replaces all refine parameters (missing names are unrefined).
+    pub fn set_refine_all(&mut self, list: Vec<(String, RefineParams)>) {
+        self.mixer.set_refine_all(list);
+    }
+
+    /// Stereo-field analysis on one track (the open Refine panel), or off.
+    pub fn set_analysis(&mut self, name: Option<&str>) {
+        self.mixer.set_analysis(name);
+    }
+
+    /// Stereo field of the analysed track since the last call; hop count.
+    pub fn take_field(&mut self, out: &mut [f32; FIELD_LEN]) -> u32 {
+        self.mixer.take_field(out)
     }
 
     pub fn set_loop(&mut self, region: Option<(f64, f64)>) {

@@ -164,6 +164,7 @@ fn main() {
             click: ClickConfig::default(),
             start: 0.0,
             end: None,
+            refine: vec![],
         };
         let t = Instant::now();
         let mut last = -1;

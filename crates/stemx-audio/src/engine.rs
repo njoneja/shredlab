@@ -16,6 +16,7 @@ use rubato::{
 use crate::mix::MixMode;
 use crate::pipeline::{Meta, Pipeline, F_END, F_WRAP};
 use crate::{AudioError, ClickConfig, Position, Track};
+use stemx_dsp::refine::{RefineParams, FIELD_LEN};
 
 /// Frames rendered per pipeline call (song rate).
 const BLOCK: usize = 256;
@@ -25,6 +26,16 @@ const RING: usize = 16_384;
 const MIN_AHEAD_SECS: f64 = 0.025;
 /// How long control calls wait for the producer thread to confirm.
 const REPLY_TIMEOUT: Duration = Duration::from_millis(500);
+/// How often the producer publishes the stereo field (about 30 Hz).
+const FIELD_EVERY: Duration = Duration::from_millis(33);
+
+/// Latest stereo field of the analysed track (single slot; the producer
+/// overwrites it, readers take it).
+#[derive(Default)]
+struct FieldSlot {
+    fresh: bool,
+    bins: Vec<f32>,
+}
 
 /// One output frame plus the metadata the callback publishes.
 #[derive(Debug, Clone, Copy, Default)]
@@ -53,6 +64,7 @@ struct Shared {
     buffered: AtomicUsize,
     render_nanos: AtomicU64,
     rendered_frames: AtomicU64,
+    field: Mutex<FieldSlot>,
 }
 
 /// Diagnostics (interface addition).
@@ -84,6 +96,9 @@ enum Cmd {
     Pitch(f64),
     Loop(Option<(f64, f64)>),
     Click(ClickConfig),
+    Refine(String, RefineParams),
+    RefineAll(Vec<(String, RefineParams)>),
+    Analysis(Option<String>),
     Quit,
 }
 
@@ -225,6 +240,38 @@ impl Engine {
 
     pub fn set_click(&self, cfg: ClickConfig) {
         self.send(Cmd::Click(cfg));
+    }
+
+    /// Refine parameters of one track (live and smoothed; also used for
+    /// track sets loaded later). See [`crate::mix`].
+    pub fn set_refine(&self, name: &str, p: RefineParams) {
+        self.send(Cmd::Refine(name.to_string(), p));
+    }
+
+    /// Replaces all refine parameters (tracks not listed are unrefined).
+    pub fn set_refine_all(&self, list: Vec<(String, RefineParams)>) {
+        self.send(Cmd::RefineAll(list));
+    }
+
+    /// Stereo-field analysis on one track only (the open Refine panel), or
+    /// off. Results come from [`Engine::take_field`].
+    pub fn set_analysis(&self, name: Option<&str>) {
+        self.send(Cmd::Analysis(name.map(str::to_string)));
+    }
+
+    /// Copies the newest stereo field of the analysed track into `out`
+    /// ([`FIELD_LEN`] floats, band-major: 3 bands × 41 pan bins) if one
+    /// arrived since the last call. About 30 per second while playing.
+    pub fn take_field(&self, out: &mut [f32; FIELD_LEN]) -> bool {
+        let Ok(mut f) = self.shared.field.lock() else {
+            return false;
+        };
+        if !f.fresh || f.bins.len() != FIELD_LEN {
+            return false;
+        }
+        out.copy_from_slice(&f.bins);
+        f.fresh = false;
+        true
     }
 
     /// Position as heard at the output (cheap; fine to call at 30 Hz). Right
@@ -594,6 +641,8 @@ fn producer_thread(
         .ok();
     let (mut ends, mut wraps) = (0u64, 0u64);
     let mut last_reopen = Instant::now();
+    let mut field = [0.0f32; FIELD_LEN];
+    let mut last_field = Instant::now();
     'main: loop {
         while let Ok(cmd) = rx.try_recv() {
             match cmd {
@@ -617,6 +666,9 @@ fn producer_thread(
                 Cmd::Pitch(p) => pipe.set_pitch(p),
                 Cmd::Loop(l) => pipe.set_loop(l),
                 Cmd::Click(c) => pipe.set_click(c),
+                Cmd::Refine(n, p) => pipe.set_refine(&n, p),
+                Cmd::RefineAll(l) => pipe.set_refine_all(l),
+                Cmd::Analysis(n) => pipe.set_analysis(n.as_deref()),
             }
         }
         // User callbacks run on their own thread, so they may call back into the Engine.
@@ -640,6 +692,17 @@ fn producer_thread(
         }
         if let Some(o) = &mut out {
             o.feeder.fill(&mut pipe, &shared, &mut bufs);
+        }
+        if last_field.elapsed() >= FIELD_EVERY {
+            last_field = Instant::now();
+            if pipe.take_field(&mut field) > 0 {
+                // Never blocks the producer: skip this frame if a reader holds it.
+                if let Ok(mut f) = shared.field.try_lock() {
+                    f.bins.clear();
+                    f.bins.extend_from_slice(&field);
+                    f.fresh = true;
+                }
+            }
         }
         std::thread::sleep(Duration::from_millis(1));
     }

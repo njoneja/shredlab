@@ -20,6 +20,32 @@
 //! linear crossfade between the two formulas (no discontinuity). Gain ramps
 //! run at the same time. [`choose_mode`] is the rule shared by playback and
 //! export.
+//!
+//! # Refined stems (Refine panel, P5)
+//!
+//! Every stem runs through a [`RefineChain`] (stereo selection, then EQ),
+//! refined or not. With the selection `p_i` and the refined part `r_i`
+//! (the selection after the EQ):
+//!
+//! ```text
+//! out = w * original + Σ_i (gain_i * r_i - w * p_i)
+//! ```
+//!
+//! An unrefined chain passes the stem through bit-exact (`p_i = r_i = s_i`),
+//! so this is exactly the formula above. With a flat EQ (`r_i = p_i`) the
+//! mixer adds `(gain_i - w) * p_i` as before. In Original mode the selection
+//! leaves the backing and the refined part takes its place, so "All but this"
+//! on a refined stem removes only the selection (`original - p_i`).
+//!
+//! The chain has a constant latency of [`PAN_LATENCY`] samples. Instead of
+//! delaying everything else, the mixer feeds each chain the stem `L`
+//! samples ahead of the output position, so all paths stay aligned and
+//! seeks respond as before. Whenever a mix call does not continue where the
+//! previous one ended (seek, loop wrap, play start, stretcher pre-roll, a new
+//! track set), the chains are reset and primed with the next `L` samples;
+//! the chain is block-size independent, so playback and export match.
+
+use stemx_dsp::refine::{RefineChain, RefineParams, FIELD_LEN, PAN_LATENCY};
 
 use crate::Track;
 
@@ -29,6 +55,15 @@ pub const GAIN_RAMP: usize = 512;
 pub const LOAD_XFADE: usize = 2048;
 /// Samples over which a [`MixMode`] change crossfades (30 ms at 44.1 kHz).
 pub const MODE_XFADE: usize = 1323;
+/// Refine processing sub-block (scratch size; no allocation while mixing).
+const CHUNK: usize = 1024;
+/// Look-ahead of the refine chains, in samples.
+const LA: i64 = PAN_LATENCY as i64;
+/// Audio run through the chains before a (re)start point, so filters and
+/// the mask are settled there (~186 ms of audio, a fraction of a ms of CPU
+/// per refined stem). A multiple of the mask hop, so a start at 0 matches
+/// `refine_offline` exactly.
+const WARM: i64 = 8192;
 
 /// How the stems are combined when the original mix is available.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -123,12 +158,27 @@ impl Gain {
     }
 }
 
+/// Refine parameters for `name` (identity when not listed).
+fn refine_for(list: &[(String, RefineParams)], name: &str) -> RefineParams {
+    list.iter()
+        .rev()
+        .find(|(n, _)| n == name)
+        .map_or_else(RefineParams::default, |(_, p)| *p)
+}
+
 struct TrackSet {
     tracks: Vec<Track>,
     gains: Vec<Gain>,
     original: Option<Track>,
     /// Weight of the original (see the module docs); stays 0 without one.
     w: Gain,
+    /// One refine chain per track.
+    chains: Vec<RefineChain>,
+    /// Output position the chains are aligned with (`None`: prime first).
+    chain_pos: Option<i64>,
+    /// Selection (`p`) and refined part (`r`) of one sub-block.
+    sel: [Vec<f32>; 2],
+    eq: [Vec<f32>; 2],
 }
 
 impl TrackSet {
@@ -137,17 +187,74 @@ impl TrackSet {
         original: Option<Track>,
         names: &[(String, f32)],
         mode: MixMode,
+        refine: &[(String, RefineParams)],
+        analysis: Option<&str>,
     ) -> Self {
         let gains = gains_for(&tracks, names)
             .into_iter()
             .map(Gain::fixed)
             .collect();
         let w = Gain::fixed(Self::weight(original.is_some(), mode));
+        let chains = tracks
+            .iter()
+            .map(|t| {
+                let mut c = RefineChain::new(t.sample_rate);
+                c.set_params_now(&refine_for(refine, &t.name));
+                c.set_analysis(analysis == Some(t.name.as_str()));
+                c
+            })
+            .collect();
         Self {
             tracks,
             gains,
             original,
             w,
+            chains,
+            chain_pos: None,
+            sel: [vec![0.0; CHUNK], vec![0.0; CHUNK]],
+            eq: [vec![0.0; CHUNK], vec![0.0; CHUNK]],
+        }
+    }
+
+    /// Resets every chain and runs it over the [`WARM`] samples before `pos`
+    /// (output discarded), so the next processed sample (stem at `pos + L`)
+    /// outputs position `pos` with the EQ filters and the mask's overlap-add
+    /// already settled: no start-up transient after a seek. Playback and
+    /// export prime the same way, so they still match exactly.
+    fn prime(&mut self, pos: i64) {
+        let [sl, sr] = &mut self.sel;
+        let from = pos - WARM;
+        for (t, c) in self.tracks.iter().zip(self.chains.iter_mut()) {
+            c.reset();
+            let mut off = 0;
+            while off < LA {
+                let m = (CHUNK as i64).min(LA - off) as usize;
+                read_track(t, from + off, &mut sl[..m], &mut sr[..m]);
+                c.prime(&sl[..m], &sr[..m]);
+                off += m as i64;
+            }
+            let mut off = 0;
+            while off < WARM {
+                let m = (CHUNK as i64).min(WARM - off) as usize;
+                read_track(t, from + LA + off, &mut sl[..m], &mut sr[..m]);
+                c.process_inplace(&mut sl[..m], &mut sr[..m]);
+                off += m as i64;
+            }
+        }
+        self.chain_pos = Some(pos);
+    }
+
+    fn set_refine(&mut self, name: &str, p: &RefineParams) {
+        for (t, c) in self.tracks.iter().zip(self.chains.iter_mut()) {
+            if t.name == name {
+                c.set_params(p);
+            }
+        }
+    }
+
+    fn set_analysis(&mut self, name: Option<&str>) {
+        for (t, c) in self.tracks.iter().zip(self.chains.iter_mut()) {
+            c.set_analysis(name == Some(t.name.as_str()));
         }
     }
 
@@ -166,7 +273,8 @@ impl TrackSet {
         }
     }
 
-    /// Adds `fade(i) * mix` of `[pos, pos+n)` into the outputs.
+    /// Adds `fade(i) * mix` of `[pos, pos+n)` into the outputs. The refine
+    /// chains always advance (they follow the read position, not the ramps).
     fn add(
         &mut self,
         pos: i64,
@@ -176,6 +284,9 @@ impl TrackSet {
         fade: impl Fn(usize) -> f32,
     ) {
         let n = l.len();
+        if self.chain_pos != Some(pos) {
+            self.prime(pos);
+        }
         let has_orig = self.original.is_some();
         if let Some(o) = &self.original {
             let mut w = self.w;
@@ -183,27 +294,79 @@ impl TrackSet {
                 add_track(o, pos, l, r, |i| w.next() * fade(i));
             }
         }
-        for (t, g) in self.tracks.iter().zip(self.gains.iter_mut()) {
+        let [sl, sr] = &mut self.sel;
+        let [el, er] = &mut self.eq;
+        for ((t, g), c) in self
+            .tracks
+            .iter()
+            .zip(self.gains.iter_mut())
+            .zip(self.chains.iter_mut())
+        {
             let mut gain = *g;
             let mut w = self.w;
-            let w_cur = if has_orig { w.cur } else { 0.0 };
-            // Fast path: a steady zero coefficient contributes nothing
-            // (this also keeps "all stems at unity" bit-exact).
-            if gain.steady() && (!has_orig || w.steady()) && gain.cur - w_cur == 0.0 {
-                continue;
+            let mut off = 0;
+            while off < n {
+                let m = CHUNK.min(n - off);
+                let (pl, pr) = (&mut sl[..m], &mut sr[..m]);
+                read_track(t, pos + off as i64 + LA, pl, pr);
+                // Flat EQ: r == p bit-exact, so mix the selection alone.
+                let flat = c.eq_bypassed();
+                if flat {
+                    c.process_inplace(pl, pr);
+                } else {
+                    c.process_parts(pl, pr, &mut el[..m], &mut er[..m]);
+                }
+                let w_cur = if has_orig { w.cur } else { 0.0 };
+                // Fast path: a steady zero contribution (this also keeps
+                // "all stems at unity" bit-exact).
+                let steady = gain.steady() && (!has_orig || w.steady());
+                let zero = if flat {
+                    gain.cur - w_cur == 0.0
+                } else {
+                    gain.cur == 0.0 && w_cur == 0.0
+                };
+                if !(steady && zero) {
+                    let (lo, ro) = (&mut l[off..off + m], &mut r[off..off + m]);
+                    for i in 0..m {
+                        let gi = gain.next();
+                        let wi = if has_orig { w.next() } else { 0.0 };
+                        let f = fade(off + i);
+                        if flat {
+                            let k = (gi - wi) * f;
+                            lo[i] += pl[i] * k;
+                            ro[i] += pr[i] * k;
+                        } else {
+                            let (a, b) = (gi * f, wi * f);
+                            lo[i] += el[i] * a - pl[i] * b;
+                            ro[i] += er[i] * a - pr[i] * b;
+                        }
+                    }
+                }
+                off += m;
             }
-            add_track(t, pos, l, r, |i| {
-                let gi = gain.next();
-                let wi = if has_orig { w.next() } else { 0.0 };
-                (gi - wi) * fade(i)
-            });
             if advance {
                 *g = gain;
             }
         }
+        self.chain_pos = Some(pos + n as i64);
         if advance {
             self.w.skip(n);
         }
+    }
+}
+
+/// Copies `[start, start + l.len())` of `t` into `l`/`r`; zeros outside the track.
+fn read_track(t: &Track, start: i64, l: &mut [f32], r: &mut [f32]) {
+    let len = t.channels[0].len().min(t.channels[1].len()) as i64;
+    let n = l.len() as i64;
+    let a = start.clamp(0, len);
+    let b = (start + n).clamp(0, len);
+    l.fill(0.0);
+    r.fill(0.0);
+    if b > a {
+        let (da, db) = ((a - start) as usize, (b - start) as usize);
+        l[da..db].copy_from_slice(&t.channels[0][a as usize..b as usize]);
+        r[da..db].copy_from_slice(&t.channels[1][a as usize..b as usize]);
     }
 }
 
@@ -237,6 +400,10 @@ pub struct Mixer {
     prev: Option<(TrackSet, usize)>,
     names: Vec<(String, f32)>,
     mode: MixMode,
+    /// Refine parameters by track name (missing = unrefined).
+    refine: Vec<(String, RefineParams)>,
+    /// Track whose stereo field is analysed (the open Refine panel).
+    analysis: Option<String>,
     len: usize,
     sample_rate: u32,
 }
@@ -245,10 +412,12 @@ impl Mixer {
     pub fn new(tracks: Vec<Track>, gains: &[(String, f32)]) -> Self {
         let (len, sample_rate) = dims(&tracks, None);
         Self {
-            cur: TrackSet::new(tracks, None, gains, MixMode::Stems),
+            cur: TrackSet::new(tracks, None, gains, MixMode::Stems, &[], None),
             prev: None,
             names: gains.to_vec(),
             mode: MixMode::Stems,
+            refine: Vec::new(),
+            analysis: None,
             len,
             sample_rate,
         }
@@ -283,7 +452,14 @@ impl Mixer {
         crossfade: bool,
     ) {
         let (len, sr) = dims(&tracks, original.as_ref());
-        let new = TrackSet::new(tracks, original, &self.names, self.mode);
+        let new = TrackSet::new(
+            tracks,
+            original,
+            &self.names,
+            self.mode,
+            &self.refine,
+            self.analysis.as_deref(),
+        );
         let old = std::mem::replace(&mut self.cur, new);
         let old_audible = !old.tracks.is_empty() || old.original.is_some();
         self.prev = (crossfade && old_audible).then_some((old, 0));
@@ -320,6 +496,56 @@ impl Mixer {
 
     pub fn mode(&self) -> MixMode {
         self.mode
+    }
+
+    /// Sets the refine parameters of track `name` (smoothed while playing;
+    /// kept for track sets loaded later). Allocates only the first time a
+    /// name is seen.
+    pub fn set_refine(&mut self, name: &str, p: RefineParams) {
+        match self.refine.iter_mut().find(|(n, _)| n == name) {
+            Some(e) => e.1 = p,
+            None => self.refine.push((name.to_string(), p)),
+        }
+        self.cur.set_refine(name, &p);
+        if let Some((s, _)) = &mut self.prev {
+            s.set_refine(name, &p);
+        }
+    }
+
+    /// Replaces all refine parameters (missing names become unrefined).
+    pub fn set_refine_all(&mut self, list: Vec<(String, RefineParams)>) {
+        self.refine = list;
+        let Self {
+            cur, prev, refine, ..
+        } = self;
+        for set in std::iter::once(cur).chain(prev.as_mut().map(|(s, _)| s)) {
+            for (t, c) in set.tracks.iter().zip(set.chains.iter_mut()) {
+                c.set_params(&refine_for(refine, &t.name));
+            }
+        }
+    }
+
+    /// The refine parameters in effect, by track name.
+    pub fn refine(&self) -> &[(String, RefineParams)] {
+        &self.refine
+    }
+
+    /// Stereo-field analysis on track `name` only (`None` = off).
+    pub fn set_analysis(&mut self, name: Option<&str>) {
+        self.analysis = name.map(str::to_string);
+        self.cur.set_analysis(name);
+    }
+
+    /// The analysed track's stereo field since the last call (see
+    /// [`RefineChain::take_field`]); returns the hop count (0 = no data).
+    pub fn take_field(&mut self, out: &mut [f32; FIELD_LEN]) -> u32 {
+        let Some(name) = self.analysis.as_deref() else {
+            return 0;
+        };
+        match self.cur.tracks.iter().position(|t| t.name == name) {
+            Some(i) => self.cur.chains[i].take_field(out),
+            None => 0,
+        }
     }
 
     /// True when the current track set carries the original mix.

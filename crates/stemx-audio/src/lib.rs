@@ -22,8 +22,13 @@
 //! limiter ([`limiter`], transparent below -1 dBFS) before the click is
 //! added; export uses its own whole-file limiter instead (on the music
 //! before the click is added, then on the final sum). The mixer can
-//! build the backing track from the original mix ([`mix`], P1). The gained tracks are mixed first and the stereo mix is stretched
-//! once. Seeks, loop wraps, pause and stretch on/off are crossfaded (~10 ms).
+//! build the backing track from the original mix ([`mix`], P1). Each stem
+//! first runs through its Refine chain (stereo selection + EQ, at the song
+//! rate, fed ahead by the chain's latency so nothing else is delayed); then
+//! the gained tracks are mixed and the stereo mix is stretched once. So
+//! refine sits before the stretcher, inside the mixer, next to the P1
+//! original path. Seeks, loop wraps, pause and stretch on/off are
+//! crossfaded (~10 ms).
 
 pub mod click;
 mod encode;
@@ -40,6 +45,8 @@ pub use encode::{encode, limiter_gain, peak, ExportFormat};
 pub use engine::{Engine, EngineStats};
 pub use mix::{choose_mode, MixMode};
 pub use render::{render, render_range, RenderRequest, EDGE_FADE_SECS};
+/// Refine DSP types used in this crate's API (parameters, field size).
+pub use stemx_dsp::refine::{RefineParams, FIELD_LEN};
 
 /// Version of this crate, from `Cargo.toml`.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

@@ -3627,6 +3627,7 @@ dependencies = [
  "mp3lame-encoder",
  "rtrb",
  "rubato",
+ "stemx-dsp",
  "stemx-io",
  "thiserror 2.0.21",
 ]

@@ -8,6 +8,7 @@ use crate::encode::{limiter_gain, CEILING};
 use crate::mix::MixMode;
 use crate::pipeline::{Meta, Pipeline};
 use crate::{AudioError, ClickConfig, Track};
+use stemx_dsp::refine::RefineParams;
 
 /// What to render.
 #[derive(Debug, Clone)]
@@ -34,6 +35,9 @@ pub struct RenderRequest {
     pub start: f64,
     /// Range end, song seconds (`None` = the song end).
     pub end: Option<f64>,
+    /// Refine parameters per track name (missing = unrefined), as in
+    /// playback ([`crate::mix`]).
+    pub refine: Vec<(String, RefineParams)>,
 }
 
 const BLOCK: usize = 16_384;
@@ -85,6 +89,7 @@ pub fn render(
     let with_click = req.click.enabled || req.click.count_in_beats > 0;
     let mut p = Pipeline::new(Vec::new(), &req.gains, false);
     p.set_mix(req.gains.clone(), req.mode);
+    p.set_refine_all(req.refine.clone());
     p.load_with_original(req.tracks.clone(), req.original.clone());
     p.set_speed(req.speed);
     p.set_pitch(req.semitones);
@@ -242,6 +247,7 @@ mod tests {
             click: ClickConfig::default(),
             start: 0.0,
             end: None,
+            refine: vec![],
         };
         let mut calls = 0;
         let out = render(&req, &mut |_| calls += 1, &AtomicBool::new(false)).unwrap();
@@ -264,6 +270,7 @@ mod tests {
                 click: ClickConfig::default(),
                 start: 0.0,
                 end: None,
+                refine: vec![],
             };
             let out = render(&req, &mut |_| {}, &AtomicBool::new(false)).unwrap();
             let want = (88_200.0 / speed).round() as usize;
@@ -303,6 +310,7 @@ mod tests {
             click: ClickConfig::default(),
             start: 0.0,
             end: None,
+            refine: vec![],
         };
         let out = render(&req, &mut |_| {}, &AtomicBool::new(false)).unwrap();
         for i in 0..n {
@@ -322,6 +330,7 @@ mod tests {
             click: ClickConfig::default(),
             start: 0.0,
             end: None,
+            refine: vec![],
         };
         let r = render(&req, &mut |_| {}, &AtomicBool::new(true));
         assert!(matches!(r, Err(AudioError::Cancelled)));
@@ -377,6 +386,7 @@ mod tests {
             click: ClickConfig::default(),
             start: 0.0,
             end: None,
+            refine: vec![],
         };
         let mut off = click_cfg(vec![0.0, 0.5], vec![0.0]);
         off.enabled = false;
@@ -404,6 +414,7 @@ mod tests {
             click: click_cfg(beats.clone(), vec![0.5, 2.5]),
             start: 0.0,
             end: None,
+            refine: vec![],
         };
         let out = render(&req, &mut |_| {}, &AtomicBool::new(false)).unwrap();
         assert!(out[0].len().abs_diff((4.0 * 44_100.0 / 0.8) as usize) <= 2);
@@ -436,6 +447,7 @@ mod tests {
             click: ClickConfig::default(),
             start: 0.0,
             end: None,
+            refine: vec![],
         };
         let mut c = click_cfg(beats, vec![0.0, 2.0]);
         c.enabled = false;
@@ -499,6 +511,7 @@ mod tests {
             click: ClickConfig::default(),
             start,
             end,
+            refine: vec![],
         }
     }
 
@@ -637,6 +650,7 @@ mod tests {
             click: ClickConfig::default(),
             start: 0.0,
             end: None,
+            refine: vec![],
         };
         let req = RenderRequest {
             click: c,
