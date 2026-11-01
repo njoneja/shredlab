@@ -111,6 +111,8 @@ class AppState {
   // help dialog (ShortcutsHelp.svelte): open, and the section to scroll to
   helpOpen = $state(false);
   helpSection = $state<HelpSection | null>(null);
+  // About dialog (AboutDialog.svelte)
+  aboutOpen = $state(false);
 
   // export
   exportOpen = $state(false);
@@ -823,6 +825,15 @@ class AppState {
   closeHelp() {
     this.helpOpen = false;
     this.helpSection = null;
+  }
+
+  // ---- about ----
+  openAbout() {
+    this.aboutOpen = true;
+  }
+
+  closeAbout() {
+    this.aboutOpen = false;
   }
 
   // ---- export ----

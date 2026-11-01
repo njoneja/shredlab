@@ -107,6 +107,13 @@
 
     <p class="muted note">Applies to the next separation. Results are kept per model and quality, so switching back is instant.</p>
   {/if}
+  <button
+    class="btn ghost small about"
+    onclick={() => {
+      onclose();
+      app.openAbout();
+    }}>About ShredLab</button
+  >
 </div>
 
 <style>
@@ -207,5 +214,10 @@
   option {
     background: var(--surface);
     color: var(--fg);
+  }
+  .about {
+    align-self: flex-start;
+    margin-top: 2px;
+    padding-left: 0;
   }
 </style>
