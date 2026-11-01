@@ -1,0 +1,7 @@
+# Prototype environment (Windows + AMD GPU via DirectML).
+# The [dml] extra pins torch 2.4.x because torch-directml requires it.
+audio-separator[dml]==0.48.0
+audioread  # imported by audio-separator but no longer pulled in by librosa 1.0
+soundfile
+numpy
+scipy

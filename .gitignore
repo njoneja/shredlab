@@ -1,0 +1,11 @@
+.venv/
+.uv/
+models/
+out/
+input/
+__pycache__/
+tools/personal_models.local.json
+target/
+node_modules/
+dist/
+spikes/third_party/
