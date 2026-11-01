@@ -23,6 +23,7 @@
 //! by the caller; this crate has no Tauri dependency.
 
 pub mod adapters;
+pub mod beat_model;
 pub mod manifest;
 pub mod registry;
 pub mod runtime;
@@ -31,6 +32,7 @@ pub mod separator;
 
 use std::path::Path;
 
+pub use beat_model::BeatModel;
 pub use manifest::{AdapterKind, Manifest, SelfTestSpec};
 pub use registry::{ModelEntry, ModelRegistry, ModelSource};
 pub use runtime::{DevicePref, Ep, SessionOverrides};
