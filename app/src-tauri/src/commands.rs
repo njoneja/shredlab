@@ -112,6 +112,12 @@ pub async fn list_library(b: B<'_>) -> R<LibraryListing> {
 }
 
 #[tauri::command]
+pub async fn song_size(b: B<'_>, song_id: String) -> R<u64> {
+    let b = b.inner().clone();
+    blocking(move || b.song_size(&song_id)).await
+}
+
+#[tauri::command]
 pub async fn delete_song(b: B<'_>, song_id: String) -> R<u64> {
     let b = b.inner().clone();
     blocking(move || b.delete_song(&song_id)).await

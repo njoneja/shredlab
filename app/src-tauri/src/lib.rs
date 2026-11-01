@@ -122,6 +122,7 @@ pub fn run() {
             commands::get_library,
             commands::hide_recent,
             commands::list_library,
+            commands::song_size,
             commands::delete_song,
             commands::start_separation,
             commands::cancel_separation,

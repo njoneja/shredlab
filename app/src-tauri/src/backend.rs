@@ -1187,6 +1187,12 @@ impl Backend {
         }
     }
 
+    /// Bytes stored for one song (what `delete_song` would free). Walks only
+    /// that song's folder (a handful of files); called off the UI thread.
+    pub fn song_size(&self, song_id: &str) -> Result<u64, String> {
+        self.library.song_size(song_id).map_err(|e| e.to_string())
+    }
+
     /// Deletes everything stored for a song and returns the bytes freed.
     /// The open song is refused (close it first): its stems are in use.
     pub fn delete_song(&self, song_id: &str) -> Result<u64, String> {

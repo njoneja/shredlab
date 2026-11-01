@@ -567,6 +567,12 @@ impl Library {
         Ok(dir)
     }
 
+    /// Size of everything stored for one song (what [`delete_song`](Self::delete_song)
+    /// would free). Walks only that song's folder; `0` if it does not exist.
+    pub fn song_size(&self, song_id: &str) -> Result<u64> {
+        Ok(dir_size(&self.safe_song_dir(song_id)?))
+    }
+
     /// Deletes everything stored for a song (stems, original copy,
     /// manifest with its settings) and returns the bytes freed. Only ever
     /// removes the song's own folder inside the library ([`safe_song_dir`](Self::safe_song_dir)).
@@ -1130,6 +1136,7 @@ mod tests {
             "C:outside",
         ] {
             assert!(lib.delete_song(id).is_err(), "{id:?} must be refused");
+            assert!(lib.song_size(id).is_err(), "{id:?} must be refused");
             assert!(lib.remove(id).is_err(), "{id:?} must be refused");
             assert!(lib.set_hidden(id, true).is_err(), "{id:?} must be refused");
         }
@@ -1145,12 +1152,14 @@ mod tests {
             .unwrap();
         let size = dir_size(&lib.song_dir("s1"));
         assert!(size > 0);
+        assert_eq!(lib.song_size("s1").unwrap(), size);
         assert_eq!(lib.delete_song("s1").unwrap(), size);
         assert!(!lib.song_dir("s1").exists());
         assert!(lib.load("s1").unwrap().is_none());
         assert!(lib.entries().is_empty());
         // Already gone: nothing freed, no error.
         assert_eq!(lib.delete_song("s1").unwrap(), 0);
+        assert_eq!(lib.song_size("s1").unwrap(), 0);
     }
 
     #[test]
