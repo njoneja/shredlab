@@ -110,7 +110,7 @@ Full-song check of `roformer_separate.separate` against audio-separator's
 PyTorch `demix` with the same chunk size and overlap:
 
 ```
-python tools/validate_roformer_chunking.py "song.mp3"
+python tools/validate_roformer_chunking.py song.mp3
 ```
 
 The PyTorch result is cached in `out/validation/`.
@@ -119,7 +119,7 @@ The PyTorch result is cached in `out/validation/`.
 
 ```
 python tools/make_fixtures.py    # small committed fixtures -> tests/fixtures/
-python tools/make_goldens.py     # big local goldens -> tests/fixtures/local/ (gitignored)
+python tools/make_goldens.py --audio song.mp3  # big local goldens -> tests/fixtures/local/ (gitignored)
 ```
 
 See `tests/fixtures/README.md` for every file's shape and meaning.

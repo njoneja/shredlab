@@ -6,8 +6,8 @@ validating the Rust port. Two sets:
 - **Committed (this folder, ~1.9 MiB):** model-free DSP and chunking vectors.
   Regenerate with `.venv\Scripts\python.exe tools/make_fixtures.py`.
 - **Local (`local/`, gitignored, ~400 MB):** full-model outputs on a real
-  song excerpt. Regenerate with `.venv\Scripts\python.exe tools/make_goldens.py`
-  (needs ffmpeg and the model folders; see `tools/README.md`).
+  song excerpt. Regenerate with `.venv\Scripts\python.exe tools/make_goldens.py
+  --audio FILE` (needs ffmpeg and the model folders; see `tools/README.md`).
 
 ## Binary format
 
@@ -103,7 +103,7 @@ channel's STFT with its mask.
 
 ## Local files (`local/`, gitignored)
 
-Source: `song.mp3`, decoded
+Source: a full rock song of your choice (`--audio`), decoded
 with `ffmpeg -f f32le -ac 2 -ar 44100`. All inference on the ONNX CPU EP.
 `local/index.json` lists shapes and also stores
 `demucs_song_normalization`, `demucs_chunks` and `roformer_chunk_starts`.

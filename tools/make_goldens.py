@@ -1,7 +1,7 @@
 """Generate large end-to-end goldens into tests/fixtures/local/ (gitignored).
 
 Usage:
-    .venv\\Scripts\\python.exe tools/make_goldens.py [--audio FILE] [--skip-roformer]
+    .venv\\Scripts\\python.exe tools/make_goldens.py --audio FILE [--skip-roformer]
     .venv\\Scripts\\python.exe tools/make_goldens.py --shifts-only   # only demucs_shifts2_stems
 
 Needs ffmpeg on PATH, models/registry/htdemucs_6s (tools/registry.py
@@ -23,7 +23,6 @@ import numpy as np
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-DEFAULT_AUDIO = r"song.mp3"
 OUT = ROOT / "tests" / "fixtures" / "local"
 SR = 44100
 
@@ -55,7 +54,7 @@ def main():
 
     sys.stdout.reconfigure(line_buffering=True)
     ap = argparse.ArgumentParser()
-    ap.add_argument("--audio", default=DEFAULT_AUDIO)
+    ap.add_argument("--audio", help="a full song (any format ffmpeg decodes); needed unless --shifts-only")
     ap.add_argument("--demucs-dir", default=str(ROOT / "models" / "registry" / "htdemucs_6s"))
     ap.add_argument("--roformer-dir", default=str(ROOT / "models" / "personal" / "bs-roformer-sw"))
     ap.add_argument("--skip-roformer", action="store_true")
@@ -71,6 +70,8 @@ def main():
         w.close()
         return
 
+    if not a.audio:
+        ap.error("--audio is required (unless --shifts-only)")
     song = decode(a.audio)
     w = FixtureWriter(OUT, "index.json", {"sample_rate": SR, "source_audio": Path(a.audio).name,
                                           "decode": "ffmpeg -f f32le -ac 2 -ar 44100 (interleaved -> planar)"})
