@@ -3,6 +3,8 @@
 // Audio: a soft WebAudio click when the click track / count-in is on;
 // otherwise silence.
 import type {
+  AppSettingsInfo,
+  AppSettingsUpdate,
   Backend,
   BeatGrid,
   ClickState,
@@ -10,6 +12,9 @@ import type {
   EventName,
   LibraryEntry,
   LoopState,
+  ModelInfo,
+  Quality,
+  SeparatedWith,
   SeparationStage,
   SongInfo,
   SongSettings,
@@ -24,7 +29,9 @@ function emit<E extends EventName>(event: E, payload: EventMap[E]) {
 
 const LS_LIB = "stemx.mock.library";
 const LS_SETTINGS = "stemx.mock.settings.";
-const LS_CACHED = "stemx.mock.cached";
+// Cached stem sets, most recent last: "<song_id>|<model_id>|<quality>".
+const LS_CACHED = "stemx.mock.cached_sets";
+const LS_APP = "stemx.mock.app_settings";
 
 function lsGet<T>(key: string, fallback: T): T {
   try {
@@ -64,7 +71,53 @@ function describe(path: string) {
   return { path, title, artist: null, duration_sec: 180 + (title.length % 7) * 20, bpm: 100 + (title.length % 5) * 8 };
 }
 
-const MODEL = { model_name: "Demucs 6-stem", device_label: "GPU" };
+const SIX = ["vocals", "guitar", "bass", "drums", "piano", "other"];
+const MODELS: ModelInfo[] = [
+  { id: "htdemucs_6s", name: "Demucs 6-stem", personal: false, license: "MIT", stems: SIX },
+  { id: "bs-roformer-sw", name: "BS-RoFormer SW (6 stems, personal)", personal: true, license: "unknown", stems: SIX },
+];
+const DEFAULT_MODEL = MODELS[0].id;
+const MOCK_DEVICE = "GPU"; // mock pretends to have a GPU, so High is the default
+const DEFAULT_QUALITY: Quality = "high";
+
+let appChoice: AppSettingsUpdate = lsGet<AppSettingsUpdate>(LS_APP, { model_id: null, quality: null });
+
+function appSettings(): AppSettingsInfo {
+  const model_id = appChoice.model_id && MODELS.some((m) => m.id === appChoice.model_id) ? appChoice.model_id : DEFAULT_MODEL;
+  return {
+    models: MODELS,
+    model_id,
+    model_choice: appChoice.model_id,
+    model_from_env: false,
+    quality: appChoice.quality ?? DEFAULT_QUALITY,
+    quality_choice: appChoice.quality,
+    default_quality: DEFAULT_QUALITY,
+    device_label: MOCK_DEVICE,
+  };
+}
+
+function setFor(model_id: string, quality: Quality): SeparatedWith {
+  const name = MODELS.find((m) => m.id === model_id)?.name ?? model_id;
+  return { model_name: name, device_label: MOCK_DEVICE, model_id, quality };
+}
+
+const setKey = (song_id: string, sw: { model_id: string; quality: Quality }) => `${song_id}|${sw.model_id}|${sw.quality}`;
+
+/** The set open_song loads: the current settings' set if cached, else the most recent cached one. */
+function cachedSetFor(song_id: string): SeparatedWith | null {
+  const cur = appSettings();
+  const sets = lsGet<string[]>(LS_CACHED, []).filter((k) => k.startsWith(song_id + "|"));
+  if (!sets.length) return null;
+  const want = setKey(song_id, { model_id: cur.model_id!, quality: cur.quality });
+  const key = sets.includes(want) ? want : sets[sets.length - 1];
+  const [, model_id, quality] = key.split("|");
+  return setFor(model_id, quality as Quality);
+}
+
+function rememberSet(song_id: string, sw: SeparatedWith) {
+  const k = setKey(song_id, sw);
+  lsSet(LS_CACHED, [...lsGet<string[]>(LS_CACHED, []).filter((x) => x !== k), k]);
+}
 
 // ---- state ----
 let song: (SongInfo & { bpmVal: number }) | null = null;
@@ -239,7 +292,8 @@ export const mockBackend: Backend = {
     if (beatsTimer != null) clearTimeout(beatsTimer);
     const d = describe(path);
     const song_id = songIdFor(path);
-    const cached = lsGet<string[]>(LS_CACHED, []).includes(song_id);
+    const loaded = cachedSetFor(song_id);
+    const cached = loaded != null;
     position = 0;
     playing = false;
     countInLeft = 0;
@@ -255,10 +309,11 @@ export const mockBackend: Backend = {
       sample_rate: 44100,
       channels: 2,
       stems_cached: cached,
-      separated_with: cached ? MODEL : null,
+      separated_with: loaded,
       beats_ready: cached,
       bpm: cached ? d.bpm : null,
       settings: lsGet<SongSettings | null>(LS_SETTINGS + song_id, null),
+      original_available: cached,
       bpmVal: d.bpm,
     };
     if (!cached) {
@@ -300,7 +355,11 @@ export const mockBackend: Backend = {
     if (!song) throw new Error("No song open");
     if (sepTimer != null) throw new Error("Separation already running");
     const id = song.song_id;
-    const total = 9000; // ms
+    const cur = appSettings();
+    const sw = setFor(cur.model_id!, cur.quality);
+    const isCached = lsGet<string[]>(LS_CACHED, []).includes(setKey(id, sw));
+    // A cached (model, quality) set loads almost instantly; High takes longer.
+    const total = isCached ? 300 : cur.quality === "high" ? 12000 : 7000; // ms
     const t0 = performance.now();
     const stages: [number, SeparationStage][] = [
       [0.04, "loading_model"],
@@ -312,20 +371,20 @@ export const mockBackend: Backend = {
     sepTimer = window.setInterval(() => {
       const f = Math.min(1, (performance.now() - t0) / total);
       const stage = stages.find(([lim]) => f < lim)?.[1] ?? "beats";
-      emit("separation-progress", { song_id: id, stage, fraction: f, ...MODEL });
+      emit("separation-progress", { song_id: id, stage, fraction: f, model_name: sw.model_name, device_label: sw.device_label });
       if (f >= 1) {
         stopSeparation();
-        const cached = lsGet<string[]>(LS_CACHED, []);
-        if (!cached.includes(id)) lsSet(LS_CACHED, [...cached, id]);
+        rememberSet(id, sw);
         if (song?.song_id === id) {
           song.stems_cached = true;
-          song.separated_with = MODEL;
+          song.separated_with = sw;
+          song.original_available = true;
           addToLibrary(song);
         }
-        emit("separation-done", { song_id: id, separated_with: MODEL });
+        emit("separation-done", { song_id: id, separated_with: sw });
       }
     }, 100);
-    return MODEL;
+    return sw;
   },
   async cancelSeparation() {
     if (sepTimer == null || !song) return;
@@ -417,6 +476,15 @@ export const mockBackend: Backend = {
   },
   async saveSongSettings(songId, settings) {
     lsSet(LS_SETTINGS + songId, settings);
+  },
+  async getAppSettings() {
+    return appSettings();
+  },
+  async setAppSettings(update) {
+    if (update.model_id != null && !MODELS.some((m) => m.id === update.model_id)) throw new Error(`Unknown model: ${update.model_id}`);
+    appChoice = { model_id: update.model_id, quality: update.quality };
+    lsSet(LS_APP, appChoice);
+    return appSettings();
   },
   async onFileDrop(cb) {
     const over = (e: DragEvent) => e.preventDefault();

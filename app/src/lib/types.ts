@@ -4,9 +4,14 @@
 export const STEMS = ["vocals", "guitar", "bass", "drums", "piano", "other"] as const;
 export type StemName = (typeof STEMS)[number];
 
+/** "standard" = 1 pass, "high" = 2 passes (Demucs shifts=2). */
+export type Quality = "standard" | "high";
+
 export interface SeparatedWith {
   model_name: string; // e.g. "Demucs 6-stem"
   device_label: string; // e.g. "GPU" or "CPU"
+  model_id: string; // e.g. "htdemucs_6s"
+  quality: Quality;
 }
 
 export interface SongInfo {
@@ -22,6 +27,33 @@ export interface SongInfo {
   beats_ready: boolean;
   bpm: number | null;
   settings: SongSettings | null;
+  /** Stems and the sample-aligned original are loaded (backing track from the original, P1). */
+  original_available: boolean;
+}
+
+export interface ModelInfo {
+  id: string; // registry id, e.g. "htdemucs_6s"
+  name: string;
+  personal: boolean;
+  license: string; // SPDX id, e.g. "MIT", or "unknown"
+  stems: string[];
+}
+
+export interface AppSettingsInfo {
+  models: ModelInfo[];
+  model_id: string | null; // model the next separation uses (null: none installed)
+  model_choice: string | null; // saved choice; null = default model
+  model_from_env: boolean; // STEMX_MODEL overrides the choice
+  quality: Quality; // quality the next separation uses
+  quality_choice: Quality | null; // saved choice; null = default for the device
+  default_quality: Quality;
+  device_label: string; // predicted device of model_id
+}
+
+/** null = use the default. */
+export interface AppSettingsUpdate {
+  model_id: string | null;
+  quality: Quality | null;
 }
 
 export interface LibraryEntry {
@@ -36,10 +68,7 @@ export interface LibraryEntry {
 
 export type SeparationStage = "loading_model" | "decoding" | "separating" | "writing" | "beats";
 
-export interface SeparationStarted {
-  model_name: string;
-  device_label: string;
-}
+export type SeparationStarted = SeparatedWith;
 
 export interface SeparationProgress {
   song_id: string;
@@ -69,7 +98,7 @@ export interface PlaybackPosition {
 export interface StemMixState {
   stem: StemName;
   on: boolean;
-  volume: number; // linear gain 0..1
+  volume: number; // linear gain 0..2 (the UI caps at +6 dB = 1.995)
   solo: boolean;
 }
 
@@ -179,6 +208,8 @@ export interface Backend {
   exportMix(req: ExportRequest): Promise<void>;
   cancelExport(): Promise<void>;
   saveSongSettings(songId: string, settings: SongSettings): Promise<void>;
+  getAppSettings(): Promise<AppSettingsInfo>;
+  setAppSettings(settings: AppSettingsUpdate): Promise<AppSettingsInfo>;
   /** Paths dropped onto the window (Tauri drag-drop; HTML5 drop in the mock). */
   onFileDrop(cb: (paths: string[]) => void): Promise<Unlisten>;
   listen<E extends EventName>(event: E, cb: (payload: EventMap[E]) => void): Promise<Unlisten>;
