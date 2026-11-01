@@ -9,8 +9,8 @@ ONNX Runtime (DirectML / CoreML / CPU), and targets Windows and macOS.
 
 Status: works end to end on Windows (separate, beats, mixer, speed/pitch,
 loops, click, export); macOS has not been built or run yet. See
-[docs/](docs/) for the [spec](docs/SPEC.md), [milestones](docs/MILESTONES.md)
-and [current status](docs/STATUS.md).
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for how it fits together and
+[docs/DEVELOPING.md](docs/DEVELOPING.md) for practical development notes.
 
 ## Repository layout
 
@@ -25,8 +25,8 @@ and [current status](docs/STATUS.md).
 | `crates/stemx-library` | Song folders, JSON manifest, stem cache |
 | `crates/stemx-cli` | `stemx`, headless CLI |
 | `tools/` | Python tooling: model setup/export, model folders, fixtures ([tools/README.md](tools/README.md)) |
-| `spikes/`, `scripts/` | Python reference implementations (Rust ports are validated against them) |
-| `docs/` | Spec, milestones, status |
+| `spikes/`, `scripts/` | Python reference implementations (Rust ports are validated against them; [spikes/README.md](spikes/README.md)) |
+| `docs/` | Architecture, development notes, model manifest format |
 
 ## Building from scratch
 
@@ -113,7 +113,7 @@ creates it). They also need the models from step 3.
 Headless end-to-end check (separates a song, detects beats and plays a few
 seconds of audio): `STEMX_AUTOTEST=<song> STEMX_AUTOTEST_EXIT=1 pnpm --dir app
 tauri dev` prints `AUTOTEST PASS`. Other environment overrides are listed in
-[docs/STATUS.md](docs/STATUS.md).
+[docs/DEVELOPING.md](docs/DEVELOPING.md).
 
 ### macOS notes
 
@@ -167,4 +167,4 @@ executable), e.g. to test against Microsoft's official builds.
 ## License
 
 [MIT](LICENSE). Bundled model weights carry their own licenses (see
-[docs/SPEC.md](docs/SPEC.md)).
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)).

@@ -11,7 +11,8 @@ a `model.json` manifest, and a self-test file:
 ```
 
 Bundled models live in the app's resource dir; personal models in the user
-models folder (see SPEC §3). Both use this format.
+models folder (see [ARCHITECTURE.md](ARCHITECTURE.md#models)). Both use this
+format.
 
 ## `model.json`
 

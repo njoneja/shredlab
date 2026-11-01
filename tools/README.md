@@ -2,8 +2,8 @@
 
 Python tooling for the dev machine (uses the repo venv; never shipped in the
 app). Run everything from the repo root with `.venv\Scripts\python.exe`.
-Scripts that decode audio need ffmpeg on PATH (in shells started by some apps,
-refresh PATH first; see docs/STATUS.md).
+Scripts that decode audio need ffmpeg on PATH. Python environments are
+described in [docs/DEVELOPING.md](../docs/DEVELOPING.md).
 
 ## `setup_models.py` — build the bundled models from scratch
 

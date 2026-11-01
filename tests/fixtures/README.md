@@ -123,6 +123,6 @@ with `ffmpeg -f f32le -ac 2 -ar 44100`. All inference on the ONNX CPU EP.
 | `roformer_c0_mask.bin` | (6, 2050, 1151, 2) | Chunk 0 graph output. |
 | `roformer_c0_out.bin` | (6, 2, 588800) | Chunk 0 stems before windowing/overlap-add. |
 
-Suggested pass criterion for the Rust goldens: SNR ≥ 60 dB per stem on CPU
-(MILESTONES M1). Python vs Python across ORT thread counts already differs at
+Suggested pass criterion for the Rust goldens: SNR ≥ 60 dB per stem on CPU.
+Python vs Python across ORT thread counts already differs at
 ~1e-7 absolute.

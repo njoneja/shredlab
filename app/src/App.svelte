@@ -24,7 +24,7 @@
     return t instanceof HTMLInputElement && !["range", "checkbox", "radio", "button"].includes(t.type);
   }
 
-  // Keyboard shortcuts per docs/UI.md. Uses e.code for digits so Shift+1
+  // Keyboard shortcuts (listed in lib/ShortcutsHelp.svelte). Uses e.code for digits so Shift+1
   // works regardless of keyboard layout ("!" etc.).
   function onKeydown(e: KeyboardEvent) {
     if (!app.song || app.exportOpen || helpOpen || isTyping(e.target)) return;
