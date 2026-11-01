@@ -26,7 +26,7 @@ app/src-tauri                       commands → backend (state, background jobs
 
 | Path | Owns |
 |---|---|
-| `crates/stemx-dsp` | `torch.stft`-compatible STFT/iSTFT, the Demucs hybrid spectrogram glue, chunking schedules, overlap-add, song normalization |
+| `crates/stemx-dsp` | `torch.stft`-compatible STFT/iSTFT, the Demucs hybrid spectrogram glue, chunking schedules, overlap-add, song normalization; Refine DSP (stereo-position mask, EQ with cut/shelf ends, presets, stereo-field analysis) and separation strength |
 | `crates/stemx-io` | Decoding (symphonia: MP3, FLAC, WAV, OGG Vorbis, M4A AAC/ALAC), resampling (rubato), WAV writing (hound). Returns planar f32 stereo |
 | `crates/stemx-separation` | ONNX Runtime (`ort`) environment and execution providers, `model.json` parsing, model registry, the two adapters, device self-test, the `Separator` entry point, and the ORT session for the beat model |
 | `crates/stemx-beats` | Beat This! log-mel preprocessing, chunking and peak picking; tempo and meter helpers |
@@ -113,7 +113,7 @@ onward; the overrides are saved with the song.
 `stemx-audio` plays a set of tracks (stems, plus the original mix) on the
 default output device via cpal.
 
-- A producer thread runs the pipeline: mix → Signalsmith Stretch →
+- A producer thread runs the pipeline: refine → mix → Signalsmith Stretch →
   crossfades → safety limiter → click → resample to the device rate. It
   stays about 30 ms ahead of the device in a lock-free ring buffer (`rtrb`).
 - The cpal callback only pops frames and publishes the position through
@@ -127,6 +127,17 @@ default output device via cpal.
   so everything the model missed (reverb, transients) stays in the backing
   track. Otherwise it is the plain sum of the enabled stems. `choose_mode`
   is shared by playback and export.
+- **Refine.** Every stem runs through its own Refine chain (an STFT mask
+  that keeps or removes a stereo position, then an EQ) before the mix, at
+  the song rate, so before the stretcher. With the selection `p` and the
+  refined part `r`, the mix is `w·original + Σ (gain_i·r_i − w·p_i)`
+  (`w` = 1 in the backing-track mode, 0 for the plain sum); an unrefined
+  chain is an exact delay, so that is the formula above. The chain's
+  latency (4096 samples) is hidden by feeding it ahead of the play
+  position; chains re-prime whenever playback jumps (seek, loop, pre-roll).
+- **Separation strength** re-derives the stems from the original with a
+  sharper ratio mask (`stemx-dsp` `strength`) on a background thread in
+  the app; the derived set replaces the cached one in memory.
 - Click and count-in are generated from the beat grid, with accented
   downbeats. The count-in tempo comes from the beats after the start (the
   slowest pulse most of the next 8 intervals agree with). An optional
@@ -158,7 +169,8 @@ Stems are cached per model and quality, so switching back is instant. They
 are 16-bit WAV with a per-stem scale factor in `song.json`, so loud stems
 never clip and disk use is half that of float WAV. The original is cached
 too, so the backing track works after the source file moves. `song.json`
-also holds the beat grid and per-song UI settings.
+also holds the beat grid, the Refine settings and separation strength, and
+per-song UI settings.
 
 ## App
 
@@ -171,8 +183,10 @@ also holds the beat grid and per-song UI settings.
   `Sink` closure. Decoding runs on a blocking worker; separation, beat
   tracking and export each run on their own background thread with
   cancellation through an `AtomicBool`; a 30 Hz thread emits the playback
-  position. Events include `separation-progress`, `separation-done`,
-  `beats-ready`, `export-progress` and `playback-position`.
+  position (and the open Refine panel's stereo field). Events include
+  `separation-progress`, `separation-done`, `beats-ready`,
+  `export-progress`, `playback-position`, `refine-field` and
+  `strength-progress`/`-done`.
 - `models.rs`: finds models (bundled resources, then the user models folder,
   then `STEMX_MODELS_DIR`, then repo folders in debug builds).
 - `settings.rs`: `settings.json` with the chosen model, quality, theme and

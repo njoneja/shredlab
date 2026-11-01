@@ -66,6 +66,10 @@ SongInfo {
                               // so the backing track can come from the original (P1).
                               // False before separation, or for an old cache entry
                               // without the original whose source file is gone.
+  refine: { [stem in StemName]?: RefineParams },  // saved Refine settings, refined stems only
+  strength: StrengthSetting,  // saved separation strength of the song
+  strength_job: number        // id of a strength job open_song started (re-applying a saved
+                              // strength), 0 = none; its strength-done/-error has this id
 }
 
 ModelInfo {
@@ -156,6 +160,34 @@ ExportRequest {
 }
 
 SongSettings   // OPAQUE to the backend: store the JSON value and return it verbatim.
+
+// ---- Refine panel (P5) ----
+RefineParams { pan: PanParams, eq: EqParams }   // identity = pan off and a flat EQ
+PanParams {
+  enabled: boolean,          // false = no stereo selection
+  center: number,            // −1 (hard left) … +1 (hard right)
+  width: number,             // full width between the −6 dB points, 0 … 2
+  softness: number,          // raised-cosine edge width in pan units (UI keeps 0.2)
+  mode: "keep" | "remove"
+}
+  // Quick presets: Left {center −1, width 1.34}, Centre {0, 0.66}, Right {1, 1.34}.
+EqParams { low_cut: EndParams, high_cut: EndParams, bands: [BandParams, BandParams, BandParams] }
+EndParams {
+  enabled: boolean,
+  freq: number,              // Hz; cut: −3 dB point; shelf: half-gain point
+  mode: "cut" | "shelf",     // cut = 24 dB/oct high-/low-pass; shelf = RBJ shelf (S = 1)
+  gain_db: number            // shelf gain, ±12 dB (ignored for a cut)
+}
+  // mode and gain_db are optional on input (older saved params): missing = "cut", 0.
+BandParams { enabled: boolean, freq: number, gain_db: number, q: number }  // peaking; ±15 dB in the UI
+RefinePreset { id: string, name: string, eq: EqParams }
+
+// ---- Separation strength (P4) ----
+StrengthSetting { level: number, smooth: boolean }
+  // level 0 = Natural (the cached stems), 1..4 = Light, Medium, Strong, Tight
+  // (mask exponents 1.5, 2, 3, 4, re-derived from the original so the stems
+  // add up exactly to it). smooth: blend from the model's stems instead
+  // (gentler first steps; the stems no longer add up exactly).
 ```
 
 ## Commands
@@ -186,6 +218,10 @@ SongSettings   // OPAQUE to the backend: store the JSON value and return it verb
 | `get_app_settings` | – | `AppSettingsInfo` | Models and the separation settings. |
 | `set_count_in_to_music_start` | `on: bool` | `AppSettingsInfo` | Saves "Count in to where the music starts" with the app settings (`settings.json`) and applies it to playback at once. |
 | `set_theme` | `theme: String` | `AppSettingsInfo` | Saves the UI theme with the app settings (`<data dir>/settings.json`). `Err` for an unknown theme. The UI applies the theme itself and mirrors it in `localStorage` for the next start (no flash before `get_app_settings` returns). |
+| `get_refine_presets` | – | `RefinePreset[]` | The Refine panel's EQ presets (stemx-dsp `presets.rs`). A preset sets the EQ and keeps the stereo selection. |
+| `set_refine` | `update: { stem: StemName, params: RefineParams }` | `()` | Live: heard at once (smoothed, no clicks), also during playback; saved in the song's `song.json` about 600 ms after the last change (and on song switch). Identity params = unrefined. `Err` for an unknown stem or no song. |
+| `set_refine_analysis` | `stem: Option<String>` | `()` | Turns the stereo-field analysis on for this stem only (the open Refine panel) or off (`null`). Data comes as `refine-field` events while playing. |
+| `set_strength` | `strength: StrengthSetting` | `{ job: number }` | Saves the song's strength at once and re-derives the stems on a background thread (re-reads the cached set, about 1–2 s for a 5-min song; a newer call cancels the older job), then swaps the stems in with the usual crossfade. `job` 0 = nothing to compute (same as loaded, or not separated yet: applied after separation). |
 | `set_app_settings` | `settings: AppSettingsUpdate` | `AppSettingsInfo` | Saves the choice (null = default) and returns the new effective settings. Does **not** re-separate: if a song is open and its `separated_with` (model_id, quality) differs from the new effective `model_id`/`quality`, the UI asks "Re-separate this song?" and calls `start_separation` on yes. `Err` for an unknown model id. |
 
 ## Events
@@ -200,6 +236,10 @@ SongSettings   // OPAQUE to the backend: store the JSON value and return it verb
 | `export-progress` | `{ fraction: number }` | ≤ 10 Hz, 0..1. |
 | `export-done` | `{ path: string }` | File complete. |
 | `export-error` | `{ message: string, cancelled: boolean }` | Failure or cancel. |
+| `refine-field` | `{ stem: StemName, bins: number[] }` | ~30 Hz while playing, for the stem set with `set_refine_analysis`. `bins`: 123 linear powers, band-major: 3 bands (< 250 Hz, 250 Hz–2.5 kHz, ≥ 2.5 kHz) × 41 pan bins from hard left (bin 0) to hard right (bin 40), centre = bin 20. Measured on the stem before refine (about 0.1 s ahead of what is heard). Nothing while paused. |
+| `strength-progress` | `{ song_id, job: number, fraction: number }` | ≤ 10 Hz while re-deriving. |
+| `strength-done` | `{ song_id, job: number, strength: StrengthSetting }` | The derived stems are playing. |
+| `strength-error` | `{ song_id, job: number, message: string, cancelled: boolean }` | Failure, or `cancelled: true` when a newer job or a song switch replaced it. |
 
 Events for a `song_id` that is no longer current are ignored by the UI.
 
@@ -229,6 +269,25 @@ Events for a `song_id` that is no longer current are ignored by the UI.
   that `req.solo` always gives the plain sum. The UI shows "Backing track
   built from the original" under the export summary when
   `original_available && !req.solo && 2 * req.stems.length >= n`.
+
+### Refine (P5) and strength (P4)
+- Every stem runs through its Refine chain (stereo selection `p`, then EQ
+  `r`). Playback and export: `w·original + Σ (gain_i·r_i − w·p_i)` with
+  `w` = 1 in the backing-track mode and 0 for the plain sum. Unrefined, this
+  is exactly the P1 formula above. So the selection leaves the backing and
+  the row adds the refined part back: guitar "keep left" + All but this =
+  the original minus the left guitar (the right guitar stays); soloed, only
+  the left guitar (EQ'd) plays; EQ on a stem is audible in the full mix.
+- Refine sits before speed/pitch; there is no added latency (the engine
+  feeds each chain ahead), and seeks, loops and exports stay aligned.
+- Export includes refine and strength ("what you hear"). The UI's summary
+  adds " · guitar refined" for refined stems.
+- Strength: Natural plays the cached stems. Other levels replace them in
+  memory with stems derived from the original (no disk cache), so "original
+  minus stem" equals "sum of the others". Smooth: the derived stems no
+  longer add up exactly, so All but this may leave a faint trace or gap.
+  Needs the original (`original_available`); re-applied by `open_song` and
+  after a separation.
 
 ### Volume
 - The mixer shows stem volume in dB, from −∞ (slider bottom = gain 0) to
