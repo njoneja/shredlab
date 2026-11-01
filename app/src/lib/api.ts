@@ -1,17 +1,12 @@
-// Typed wrappers around Tauri commands defined in src-tauri/src/lib.rs.
-import { invoke } from "@tauri-apps/api/core";
+// The single seam between UI and backend. Inside Tauri this talks to the Rust
+// side (see API.md); in a plain browser it uses an in-memory mock so the UI
+// is fully clickable with `pnpm dev`.
+import { mockBackend } from "./api.mock";
+import { tauriBackend } from "./api.tauri";
+import type { Backend } from "./types";
 
-export interface CrateInfo {
-  name: string;
-  version: string;
-}
+export * from "./types";
 
-export interface Hello {
-  message: string;
-  app_version: string;
-  crates: CrateInfo[];
-}
+export const inTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
-export function hello(): Promise<Hello> {
-  return invoke<Hello>("hello");
-}
+export const api: Backend = inTauri ? tauriBackend : mockBackend;
