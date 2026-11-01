@@ -8,7 +8,8 @@
 //! - `STEMX_BEAT_MODEL`: path of `beat_this_final0.onnx`.
 //! - `STEMX_DEVICE`: `auto` (default), `cpu` or `gpu` for separation.
 //! - `STEMX_BEATS_DEVICE`: `cpu` (default), `auto` or `gpu` for beats.
-//! - `STEMX_MODEL`: separation model id (default `htdemucs_6s`).
+//! - `STEMX_MODEL`: separation model id; overrides the model chosen in
+//!   Settings (`<data dir>/settings.json`).
 //! - `STEMX_NO_PRELOAD`: don't load the model at startup.
 //! - debug builds: `STEMX_AUTOTEST=<song>` runs the headless flow in
 //!   `autotest.rs`.
@@ -20,6 +21,7 @@ pub mod backend;
 mod commands;
 pub mod log;
 pub mod models;
+pub mod settings;
 pub mod types;
 
 use std::path::PathBuf;
@@ -129,6 +131,8 @@ pub fn run() {
             commands::export_mix,
             commands::cancel_export,
             commands::save_song_settings,
+            commands::get_app_settings,
+            commands::set_app_settings,
         ])
         .run(tauri::generate_context!());
     if let Err(e) = result {

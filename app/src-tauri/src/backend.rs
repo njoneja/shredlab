@@ -22,8 +22,9 @@ use stemx_separation::{
     BeatModel, DevicePref, Ep, LoadOptions, ModelEntry, ModelRegistry, ModelSource, Separator,
 };
 
-use crate::audio::{self, ClickConfig, Engine, Track};
+use crate::audio::{self, ClickConfig, Engine, MixMode, Track};
 use crate::log;
+use crate::settings::AppSettings;
 use crate::types::*;
 
 /// Event sink: `(event name, JSON payload)`.
@@ -54,10 +55,18 @@ impl Config {
 struct Song {
     meta: SongMeta,
     /// Original mix at [`RATE`] (or the sum of the cached stems when the
-    /// song was opened from cache), for the waveform and beat tracking.
+    /// original is unavailable), for the waveform and beat tracking.
     mix: Arc<[Vec<f32>; 2]>,
+    /// True when `mix` is the original (decoded or cached), i.e. the song
+    /// can be (re-)separated.
+    mix_is_original: bool,
+    /// The original as a track: played before separation, and the source
+    /// of the backing track (P1) once stems are loaded. `None` when it is
+    /// unavailable or not sample-aligned with the stems.
     original: Option<Track>,
     stems: Option<Vec<Track>>,
+    /// The cached stem set in `stems`.
+    stems_info: Option<StemsInfo>,
     beats: Option<BeatData>,
 }
 
@@ -70,12 +79,38 @@ impl Song {
         }
     }
 
+    /// Loads the song into the engine: stems plus the original (for P1),
+    /// or the original alone before separation.
+    fn load_into(&self, e: &Engine) {
+        match &self.stems {
+            Some(s) => e.load_with_original(s.clone(), self.original.clone()),
+            None => e.load(self.tracks()),
+        }
+    }
+
+    fn backing_from_original(&self) -> bool {
+        self.stems.is_some() && self.original.is_some()
+    }
+
+    /// Drops the original track if it is not sample-aligned with the stems.
+    fn check_alignment(&mut self) {
+        let (Some(o), Some(s)) = (&self.original, &self.stems) else {
+            return;
+        };
+        let olen = o.channels[0].len();
+        if let Some(t) = s.iter().find(|t| t.channels[0].len() != olen) {
+            log!(
+                "original ({olen} frames) and stem {} ({} frames) differ in length; backing track from stems only",
+                t.name,
+                t.channels[0].len()
+            );
+            self.original = None;
+        }
+    }
+
     fn separated_with(&self) -> Option<SeparatedWith> {
         self.stems.as_ref()?;
-        self.meta.stems.as_ref().map(|s| SeparatedWith {
-            model_name: s.model_name.clone(),
-            device_label: s.device_label.clone(),
-        })
+        self.stems_info.as_ref().map(separated_with)
     }
 
     fn info(&self) -> SongInfo {
@@ -93,7 +128,25 @@ impl Song {
             beats_ready: self.beats.is_some(),
             bpm: self.beats.as_ref().and_then(|b| b.bpm),
             settings: m.settings.clone(),
+            original_available: self.backing_from_original(),
         }
+    }
+}
+
+fn separated_with(info: &StemsInfo) -> SeparatedWith {
+    SeparatedWith {
+        model_name: info.model_name.clone(),
+        device_label: info.device_label.clone(),
+        model_id: info.model_id.clone(),
+        quality: Quality::from_shifts(info.shifts),
+    }
+}
+
+fn original_track(ch: &[Vec<f32>; 2]) -> Track {
+    Track {
+        name: ORIGINAL.into(),
+        channels: [Arc::new(ch[0].clone()), Arc::new(ch[1].clone())],
+        sample_rate: RATE,
     }
 }
 
@@ -126,6 +179,7 @@ pub struct Backend {
     engine: Option<Arc<Engine>>,
     sink: Sink,
     registry: ModelRegistry,
+    app_settings: Mutex<AppSettings>,
     separator: Mutex<Option<Separator>>,
     beat_model: Mutex<Option<BeatModel>>,
     st: Mutex<State>,
@@ -177,6 +231,22 @@ pub fn gains_for(mix: &[StemMixState], names: &[String]) -> Vec<(String, f32)> {
             (n.clone(), g)
         })
         .collect()
+}
+
+/// The P1 mix mode for playback: the original-based backing track when the
+/// original is loaded with the stems and at least half of the stems are on
+/// (ignoring solo and volume), plain sum otherwise or when any stem is
+/// soloed. A stem missing from `mix` counts as on (like [`gains_for`]).
+pub fn mix_mode(mix: &[StemMixState], names: &[String], has_original: bool) -> MixMode {
+    if !has_original {
+        return MixMode::Stems;
+    }
+    let any_solo = mix.iter().any(|m| m.solo);
+    let n_on = names
+        .iter()
+        .filter(|n| mix.iter().find(|m| &m.stem == *n).is_none_or(|m| m.on))
+        .count();
+    audio::choose_mode(names.len(), n_on, any_solo)
 }
 
 /// Snaps UI downbeats to grid beats within 1 ms so they compare equal.
@@ -292,6 +362,21 @@ impl Backend {
                 crate::models::BEAT_MODEL_FILE
             ),
         }
+        let (app_settings, err) = AppSettings::load(&cfg.data_dir);
+        if let Some(e) = err {
+            log!("settings: {e}");
+        }
+        log!(
+            "settings: model {}, quality {}",
+            app_settings.model_id.as_deref().unwrap_or("default"),
+            app_settings
+                .quality
+                .map_or("default", |q| if q == Quality::High {
+                    "high"
+                } else {
+                    "standard"
+                })
+        );
         let engine = engine.map(Arc::new);
         let b = Arc::new(Self {
             cfg,
@@ -299,6 +384,7 @@ impl Backend {
             engine,
             sink,
             registry,
+            app_settings: Mutex::new(app_settings),
             separator: Mutex::new(None),
             beat_model: Mutex::new(None),
             st: Mutex::new(State {
@@ -379,7 +465,7 @@ impl Backend {
         if std::env::var_os("STEMX_NO_PRELOAD").is_none() {
             let b = self.clone();
             spawn("stemx-preload", move || {
-                let Some(entry) = crate::models::pick_model(&b.registry).cloned() else {
+                let Some(entry) = b.current_model() else {
                     return;
                 };
                 let mut sep = lock(&b.separator);
@@ -391,6 +477,83 @@ impl Backend {
                 }
             });
         }
+    }
+
+    // ------------------------------------------------------------ settings
+
+    /// The model for the next separation: `STEMX_MODEL` (dev override) if
+    /// present, else the saved choice if installed, else the default.
+    fn current_model(&self) -> Option<ModelEntry> {
+        if let Some(e) = std::env::var("STEMX_MODEL")
+            .ok()
+            .and_then(|id| self.registry.get(&id))
+        {
+            return Some(e.clone());
+        }
+        let choice = lock(&self.app_settings).model_id.clone();
+        if let Some(e) = choice.and_then(|id| self.registry.get(&id)) {
+            return Some(e.clone());
+        }
+        crate::models::pick_model(&self.registry).cloned()
+    }
+
+    /// (quality for the next separation, default quality) for `entry`.
+    fn current_quality(&self, entry: Option<&ModelEntry>) -> (Quality, Quality) {
+        let device = entry.map_or("CPU", |e| self.predict_device(e));
+        let default = Quality::default_for(device);
+        let choice = lock(&self.app_settings).quality;
+        (choice.unwrap_or(default), default)
+    }
+
+    pub fn app_settings(&self) -> AppSettingsInfo {
+        let entry = self.current_model();
+        let (quality, default_quality) = self.current_quality(entry.as_ref());
+        let saved = lock(&self.app_settings).clone();
+        AppSettingsInfo {
+            models: self
+                .registry
+                .models
+                .iter()
+                .map(|m| ModelInfo {
+                    id: m.id().to_string(),
+                    name: m.manifest.name.clone(),
+                    personal: m.is_personal(),
+                    license: m.manifest.license.spdx.clone(),
+                    stems: m.manifest.stems.clone(),
+                })
+                .collect(),
+            model_id: entry.as_ref().map(|e| e.id().to_string()),
+            model_choice: saved.model_id,
+            model_from_env: std::env::var("STEMX_MODEL")
+                .ok()
+                .is_some_and(|id| self.registry.get(&id).is_some()),
+            quality,
+            quality_choice: saved.quality,
+            default_quality,
+            device_label: entry
+                .as_ref()
+                .map_or("CPU", |e| self.predict_device(e))
+                .to_string(),
+        }
+    }
+
+    /// Saves the settings (null = default) and returns the new effective
+    /// settings. Does not re-separate anything by itself.
+    pub fn set_app_settings(&self, update: AppSettingsUpdate) -> Result<AppSettingsInfo, String> {
+        if let Some(id) = &update.model_id {
+            if self.registry.get(id).is_none() {
+                return Err(format!("Unknown model {id}"));
+            }
+        }
+        let new = AppSettings {
+            model_id: update.model_id,
+            quality: update.quality,
+        };
+        new.save(&self.cfg.data_dir)
+            .map_err(|e| format!("Cannot save settings: {e}"))?;
+        log!("settings saved: {new:?}");
+        *lock(&self.app_settings) = new;
+        Ok(self.app_settings())
     }
 
     fn load_separator(&self, entry: &ModelEntry) -> Result<Separator, String> {
@@ -472,7 +635,8 @@ impl Backend {
             return;
         };
         let names: Vec<String> = song.tracks().iter().map(|t| t.name.clone()).collect();
-        e.set_gains(gains_for(&st.mix, &names));
+        let mode = mix_mode(&st.mix, &names, song.backing_from_original());
+        e.set_mix(gains_for(&st.mix, &names), mode);
     }
 
     fn click_config(st: &State) -> ClickConfig {
@@ -539,9 +703,19 @@ impl Backend {
         let _serial = lock(&self.open_lock);
         let t0 = Instant::now();
         let path_buf = PathBuf::from(path);
-        if !path_buf.is_file() {
-            return Err(format!("File not found: {path}"));
-        }
+        let source_exists = path_buf.is_file();
+        // Song id from the content; if the file is gone, from a library
+        // entry with cached stems (the cache has everything needed).
+        let song_id = if source_exists {
+            stemx_library::song_id_for(&path_buf).map_err(|e| e.to_string())?
+        } else {
+            self.library
+                .recent(usize::MAX)
+                .into_iter()
+                .find(|e| e.path == path && e.stems_cached)
+                .map(|e| e.song_id)
+                .ok_or_else(|| format!("File not found: {path}"))?
+        };
         // Stop what was going on.
         {
             let mut st = lock(&self.st);
@@ -551,7 +725,6 @@ impl Backend {
                 e.pause();
             }
         }
-        let song_id = stemx_library::song_id_for(&path_buf).map_err(|e| e.to_string())?;
         let mut meta = match self.library.load(&song_id) {
             Ok(m) => m,
             Err(e) => {
@@ -560,46 +733,90 @@ impl Backend {
             }
         };
 
-        // Cached stems?
+        // Cached stems: the set for the current model and quality, else the
+        // most recent readable one.
+        let want = self.current_model();
+        let want_shifts = self.current_quality(want.as_ref()).0.shifts();
         let mut stems: Option<Vec<Track>> = None;
-        let mut mix: Option<[Vec<f32>; 2]> = None;
-        if let Some(info) = meta.as_ref().and_then(|m| m.stems.clone()) {
-            match self.read_cached_stems(&song_id, &info) {
-                Ok((tracks, sum)) => {
-                    stems = Some(tracks);
-                    mix = Some(sum);
+        let mut stems_info: Option<StemsInfo> = None;
+        let mut stems_sum: Option<[Vec<f32>; 2]> = None;
+        if let Some(m) = &meta {
+            let mut candidates: Vec<StemsInfo> = Vec::new();
+            if let Some(s) = want.as_ref().and_then(|e| m.stem_set(e.id(), want_shifts)) {
+                candidates.push(s.clone());
+            }
+            for s in m.stem_sets.iter().rev() {
+                if !candidates.contains(s) {
+                    candidates.push(s.clone());
                 }
-                Err(e) => log!("stem cache for {song_id} unusable ({e}); will re-separate"),
+            }
+            for info in candidates {
+                match self.read_cached_stems(&song_id, &info) {
+                    Ok((tracks, sum)) => {
+                        stems = Some(tracks);
+                        stems_sum = Some(sum);
+                        stems_info = Some(info);
+                        break;
+                    }
+                    Err(e) => log!("stem cache {} for {song_id} unusable ({e})", info.dir),
+                }
             }
         }
-        let mut original = None;
-        let (native_rate, native_channels) = match (&mix, &meta) {
-            (Some(_), Some(m)) => (m.sample_rate, m.channels),
-            _ => {
-                let td = Instant::now();
-                let audio = stemx_io::decode_file(&path_buf).map_err(|e| e.to_string())?;
-                if audio.is_empty() {
-                    return Err(format!("No audio in {path}"));
+
+        // The original: the cached copy, else decode the source.
+        let mut original: Option<[Vec<f32>; 2]> = None;
+        if let Some(oi) = meta.as_ref().and_then(|m| m.original.clone()) {
+            let tr = Instant::now();
+            match self.library.read_original(&song_id, &oi) {
+                Ok(Some(ch)) => {
+                    log!("read cached original in {:.2}s", tr.elapsed().as_secs_f64());
+                    original = Some(ch);
                 }
-                let (rate, nch) = (audio.sample_rate, audio.channels.len() as u32);
-                let audio = stemx_io::resample(&audio, RATE).map_err(|e| e.to_string())?;
-                let mut ch = audio.channels.into_iter();
-                let l = ch.next().unwrap_or_default();
-                let r = ch.next().unwrap_or_else(|| l.clone());
-                log!(
-                    "decoded {} ({rate} Hz, {nch} ch, {:.1}s) in {:.2}s",
-                    path_buf.display(),
-                    l.len() as f64 / RATE as f64,
-                    td.elapsed().as_secs_f64()
-                );
-                mix = Some([l, r]);
-                (rate, nch)
+                Ok(None) => log!("cached original of {song_id} is missing"),
+                Err(e) => log!("cached original of {song_id} unusable ({e})"),
             }
-        };
-        let mix = Arc::new(mix.unwrap_or_default());
-        if stems.is_none() {
-            original = Some(mix_track(&mix));
         }
+        let mut native: Option<(u32, u32)> = None;
+        let mut new_original_info = None;
+        if original.is_none() && source_exists {
+            let td = Instant::now();
+            let audio = stemx_io::decode_file(&path_buf).map_err(|e| e.to_string())?;
+            if audio.is_empty() {
+                return Err(format!("No audio in {path}"));
+            }
+            let (rate, nch) = (audio.sample_rate, audio.channels.len() as u32);
+            let audio = stemx_io::resample(&audio, RATE).map_err(|e| e.to_string())?;
+            let mut ch = audio.channels.into_iter();
+            let l = ch.next().unwrap_or_default();
+            let r = ch.next().unwrap_or_else(|| l.clone());
+            log!(
+                "decoded {} ({rate} Hz, {nch} ch, {:.1}s) in {:.2}s",
+                path_buf.display(),
+                l.len() as f64 / RATE as f64,
+                td.elapsed().as_secs_f64()
+            );
+            if stems.is_some() {
+                // Old cache entry without the original: keep a copy now.
+                log!("no cached original for {song_id}; decoded the source and caching a copy");
+                match self.library.write_original(&song_id, RATE, [&l, &r]) {
+                    Ok(oi) => new_original_info = Some(oi),
+                    Err(e) => log!("cannot cache the original: {e}"),
+                }
+            }
+            original = Some([l, r]);
+            native = Some((rate, nch));
+        }
+        if original.is_none() {
+            if stems.is_none() {
+                return Err(format!("File not found: {path}"));
+            }
+            log!(
+                "original of {song_id} unavailable (old cache entry and the source file is gone): backing track from the stems only"
+            );
+        }
+        let mix_is_original = original.is_some();
+        let original_tr = original.as_ref().map(original_track);
+        let mix = Arc::new(original.or(stems_sum).unwrap_or_default());
         let duration = mix[0].len() as f64 / RATE as f64;
 
         let mut m = match meta.take() {
@@ -611,32 +828,42 @@ impl Backend {
                 duration,
             ),
         };
-        m.source_path = path.to_string();
+        if source_exists {
+            m.source_path = path.to_string();
+        }
         m.duration_sec = duration;
-        m.sample_rate = native_rate;
-        m.channels = native_channels;
+        if let Some((rate, nch)) = native {
+            m.sample_rate = rate;
+            m.channels = nch;
+        }
         m.last_opened_ms = stemx_library::now_ms();
         if stems.is_none() {
-            m.stems = None;
+            m.stem_sets.clear();
+        }
+        if let Some(oi) = new_original_info {
+            m.original = Some(oi);
         }
         if let Err(e) = self.library.save(&mut m) {
             log!("cannot save library entry: {e}");
         }
         let beats = m.beats.clone();
         let need_beats = beats.is_none();
-        let song = Song {
+        let mut song = Song {
             meta: m,
             mix: mix.clone(),
-            original,
+            mix_is_original,
+            original: original_tr,
             stems,
+            stems_info,
             beats,
         };
+        song.check_alignment();
         let info = song.info();
         let generation = {
             let mut st = lock(&self.st);
             if let Some(e) = &self.engine {
                 e.pause();
-                e.load(song.tracks());
+                song.load_into(e);
                 e.seek(0.0);
             }
             st.song = Some(song);
@@ -648,13 +875,17 @@ impl Backend {
         };
         self.emit_position();
         log!(
-            "opened \"{}\" ({song_id}) in {:.2}s: stems {}, beats {}",
+            "opened \"{}\" ({song_id}) in {:.2}s: stems {}, backing track {}, beats {}",
             info.title,
             t0.elapsed().as_secs_f64(),
-            if info.stems_cached {
-                "cached"
+            match &info.separated_with {
+                Some(w) => format!("cached ({}, {:?})", w.model_id, w.quality),
+                None => "not separated".into(),
+            },
+            if info.original_available {
+                "from the original"
             } else {
-                "not separated"
+                "from the stems"
             },
             if info.beats_ready {
                 "cached"
@@ -701,8 +932,9 @@ impl Backend {
             });
         }
         log!(
-            "read {} cached stems in {:.2}s",
+            "read {} cached stems ({}) in {:.2}s",
             tracks.len(),
+            info.dir,
             t0.elapsed().as_secs_f64()
         );
         Ok((tracks, sum))
@@ -758,12 +990,15 @@ impl Backend {
 
     // ------------------------------------------------------------ separation
 
+    /// Separates the current song with the current model and quality. If
+    /// that (model, quality) is already cached for the song, the stems are
+    /// loaded from the cache instead (fast), with the same events.
     pub fn start_separation(self: &Arc<Self>) -> Result<SeparatedWith, String> {
-        let entry = crate::models::pick_model(&self.registry)
-            .cloned()
-            .ok_or_else(|| {
-                "No separation model found. Put a model folder in the models directory.".to_string()
-            })?;
+        let entry = self.current_model().ok_or_else(|| {
+            "No separation model found. Put a model folder in the models directory.".to_string()
+        })?;
+        let quality = self.current_quality(Some(&entry)).0;
+        let shifts = quality.shifts();
         let device = self.predict_device(&entry);
         let mut st = lock(&self.st);
         let song = st.song.as_ref().ok_or("No song open")?;
@@ -771,6 +1006,16 @@ impl Backend {
             return Err("Separation is already running".into());
         }
         let song_id = song.meta.song_id.clone();
+        let cached = song
+            .meta
+            .stem_set(entry.id(), shifts)
+            .filter(|i| self.library.stems_present(&song_id, i))
+            .cloned();
+        if cached.is_none() && !song.mix_is_original {
+            return Err(
+                "The original file is missing, so this song can't be separated again.".into(),
+            );
+        }
         let mix = song.mix.clone();
         let generation = st.generation;
         let cancel = Arc::new(AtomicBool::new(false));
@@ -780,17 +1025,28 @@ impl Backend {
         });
         st.last_separation_error = None;
         drop(st);
-        let started = SeparatedWith {
-            model_name: entry.manifest.name.clone(),
-            device_label: device.into(),
+        let started = match &cached {
+            Some(info) => separated_with(info),
+            None => SeparatedWith {
+                model_name: entry.manifest.name.clone(),
+                device_label: device.into(),
+                model_id: entry.id().to_string(),
+                quality,
+            },
         };
         log!(
-            "separation of {song_id} started: {} on {device} (predicted)",
-            entry.id()
+            "separation of {song_id} started: {} {quality:?} ({shifts} pass{}) on {device}{}",
+            entry.id(),
+            if shifts == 1 { "" } else { "es" },
+            if cached.is_some() {
+                " (cached)"
+            } else {
+                " (predicted)"
+            }
         );
         let b = self.clone();
         spawn("stemx-separation", move || {
-            b.run_separation(entry, song_id, mix, generation, cancel);
+            b.run_separation(entry, shifts, cached, song_id, mix, generation, cancel);
         });
         Ok(started)
     }
@@ -800,16 +1056,22 @@ impl Backend {
         self.cancel_separation_locked(&mut st);
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn run_separation(
         self: &Arc<Self>,
         entry: ModelEntry,
+        shifts: u32,
+        cached: Option<StemsInfo>,
         song_id: String,
         mix: Arc<[Vec<f32>; 2]>,
         generation: u64,
         cancel: Arc<AtomicBool>,
     ) {
         let t0 = Instant::now();
-        let result = self.separate_and_cache(&entry, &song_id, &mix, &cancel);
+        let result = match cached {
+            Some(info) => self.load_cached_set(&song_id, info),
+            None => self.separate_and_cache(&entry, shifts, &song_id, &mix, &cancel),
+        };
         let cancelled = cancel.load(Ordering::Relaxed);
         let mut st = lock(&self.st);
         // Clear our job record (only if it is still ours).
@@ -821,25 +1083,34 @@ impl Backend {
             st.separation = None;
         }
         match result {
-            Ok((tracks, with)) => {
+            Ok((tracks, info)) => {
                 log!(
-                    "separation of {song_id} done in {:.1}s on {}",
+                    "separation of {song_id} done in {:.1}s ({}, {} pass{}, {})",
                     t0.elapsed().as_secs_f64(),
-                    with.device_label
+                    info.model_id,
+                    info.shifts,
+                    if info.shifts == 1 { "" } else { "es" },
+                    info.device_label
                 );
                 let current = st.generation == generation
                     && st.song.as_ref().is_some_and(|s| s.meta.song_id == song_id);
                 if !current || cancelled {
                     return;
                 }
+                let with = separated_with(&info);
                 if let Some(song) = st.song.as_mut() {
                     if let Ok(Some(m)) = self.library.load(&song_id) {
-                        song.meta.stems = m.stems;
+                        song.meta.stem_sets = m.stem_sets;
+                        song.meta.original = m.original;
                     }
                     song.stems = Some(tracks);
-                    song.original = None;
+                    song.stems_info = Some(info);
+                    if song.original.is_none() && song.mix_is_original {
+                        song.original = Some(original_track(&song.mix));
+                    }
+                    song.check_alignment();
                     if let Some(e) = &self.engine {
-                        e.load(song.tracks());
+                        song.load_into(e);
                     }
                 }
                 self.apply_gains(&st);
@@ -871,13 +1142,39 @@ impl Backend {
         }
     }
 
+    /// Loads a cached stem set (switching back to a model/quality that was
+    /// separated before).
+    fn load_cached_set(
+        &self,
+        song_id: &str,
+        info: StemsInfo,
+    ) -> Result<(Vec<Track>, StemsInfo), String> {
+        self.emit(
+            "separation-progress",
+            &SeparationProgress {
+                song_id: song_id.to_string(),
+                stage: SeparationStage::Writing,
+                fraction: 0.5,
+                model_name: info.model_name.clone(),
+                device_label: info.device_label.clone(),
+            },
+        );
+        let (tracks, _) = self.read_cached_stems(song_id, &info)?;
+        // Mark it as the most recent set.
+        let _ = self
+            .library
+            .update(song_id, |m| m.put_stem_set(info.clone()));
+        Ok((tracks, info))
+    }
+
     fn separate_and_cache(
         &self,
         entry: &ModelEntry,
+        shifts: u32,
         song_id: &str,
         mix: &[Vec<f32>; 2],
         cancel: &AtomicBool,
-    ) -> Result<(Vec<Track>, SeparatedWith), String> {
+    ) -> Result<(Vec<Track>, StemsInfo), String> {
         let model_name = entry.manifest.name.clone();
         let mut device = self.predict_device(entry).to_string();
         let mut th = Throttle::new();
@@ -910,9 +1207,12 @@ impl Backend {
         progress(&mut th, SeparationStage::Decoding, 0.05, &device, true);
         let ts = Instant::now();
         progress(&mut th, SeparationStage::Separating, 0.06, &device, true);
+        // Overall progress across all passes (separate_shifts maps pass k
+        // to [k/shifts, (k+1)/shifts]).
         let stems = sep
-            .separate(
+            .separate_shifts(
                 &[&mix[0], &mix[1]],
+                shifts as usize,
                 &mut |f| {
                     progress(
                         &mut th,
@@ -929,10 +1229,11 @@ impl Backend {
         device = device_label(sep.ep()).to_string();
         drop(guard);
         log!(
-            "separated {song_id}: {} stems, {:.1}s audio in {:.1}s on {device}",
+            "separated {song_id}: {} stems, {:.1}s audio in {:.1}s on {device} ({shifts} pass{})",
             stems.names.len(),
             stems.len as f64 / RATE as f64,
-            ts.elapsed().as_secs_f64()
+            ts.elapsed().as_secs_f64(),
+            if shifts == 1 { "" } else { "es" }
         );
         if cancel.load(Ordering::Relaxed) {
             return Err("cancelled".into());
@@ -955,10 +1256,34 @@ impl Backend {
                 (n.as_str(), [ch[0], ch[1]])
             })
             .collect();
+        let dir = stemx_library::stem_set_dir(entry.id(), shifts);
         let files = self
             .library
-            .write_stems(song_id, RATE, &views)
+            .write_stems(song_id, &dir, RATE, &views)
             .map_err(|e| format!("Cannot write stems: {e}"))?;
+        // Keep a copy of the original next to the stems (P1 backing track
+        // even if the source file moves later).
+        let have_original = self
+            .library
+            .load(song_id)
+            .ok()
+            .flatten()
+            .and_then(|m| m.original)
+            .is_some();
+        let original_info = if have_original {
+            None
+        } else {
+            match self
+                .library
+                .write_original(song_id, RATE, [&mix[0], &mix[1]])
+            {
+                Ok(oi) => Some(oi),
+                Err(e) => {
+                    log!("cannot cache the original: {e}");
+                    None
+                }
+            }
+        };
         let info = StemsInfo {
             model_id: entry.id().to_string(),
             model_name: model_name.clone(),
@@ -966,9 +1291,16 @@ impl Backend {
             sample_rate: RATE,
             len: stems.len,
             stems: files,
+            shifts,
+            dir,
         };
         self.library
-            .update(song_id, |m| m.stems = Some(info))
+            .update(song_id, |m| {
+                m.put_stem_set(info.clone());
+                if original_info.is_some() {
+                    m.original = original_info;
+                }
+            })
             .map_err(|e| format!("Cannot update library: {e}"))?;
         log!("wrote stems in {:.2}s", tw.elapsed().as_secs_f64());
         let tracks = (0..stems.names.len())
@@ -982,13 +1314,7 @@ impl Backend {
             })
             .collect();
         progress(&mut th, SeparationStage::Writing, 1.0, &device, true);
-        Ok((
-            tracks,
-            SeparatedWith {
-                model_name,
-                device_label: device,
-            },
-        ))
+        Ok((tracks, info))
     }
 
     pub fn separation_running(&self) -> bool {
@@ -1214,16 +1540,19 @@ impl Backend {
         if st.export.is_some() {
             return Err("An export is already running".into());
         }
-        let (tracks, gains): (Vec<Track>, Vec<(String, f32)>) = match &song.stems {
+        // Same rule and mixer as playback: all stems are passed (stems not
+        // in the request have gain 0, so in original mode they are
+        // subtracted from the original).
+        let (tracks, original, mode, gains) = match &song.stems {
             Some(stems) => {
-                let mut tracks = Vec::new();
-                let mut gains = Vec::new();
+                let mut gains: Vec<(String, f32)> = Vec::new();
                 for s in &req.stems {
-                    let t = stems
-                        .iter()
-                        .find(|t| t.name == s.stem)
-                        .ok_or_else(|| format!("Unknown stem {}", s.stem))?;
-                    tracks.push(t.clone());
+                    if !stems.iter().any(|t| t.name == s.stem) {
+                        return Err(format!("Unknown stem {}", s.stem));
+                    }
+                    if gains.iter().any(|(n, _)| *n == s.stem) {
+                        continue;
+                    }
                     let v = if s.volume.is_finite() {
                         s.volume.clamp(0.0, 2.0)
                     } else {
@@ -1231,14 +1560,24 @@ impl Backend {
                     };
                     gains.push((s.stem.clone(), v));
                 }
-                (tracks, gains)
+                if gains.is_empty() {
+                    return Err("Nothing to export: no stems selected".into());
+                }
+                let mode = if song.backing_from_original() {
+                    audio::choose_mode(stems.len(), gains.len(), false)
+                } else {
+                    MixMode::Stems
+                };
+                (stems.clone(), song.original.clone(), mode, gains)
             }
             // Not separated yet: export the original.
-            None => (song.tracks(), vec![(ORIGINAL.to_string(), 1.0)]),
+            None => (
+                song.tracks(),
+                None,
+                MixMode::Stems,
+                vec![(ORIGINAL.to_string(), 1.0)],
+            ),
         };
-        if tracks.is_empty() {
-            return Err("Nothing to export: no stems selected".into());
-        }
         let cancel = Arc::new(AtomicBool::new(false));
         st.export = Some(cancel.clone());
         drop(st);
@@ -1249,15 +1588,19 @@ impl Backend {
         };
         let render_req = audio::RenderRequest {
             tracks,
+            original,
+            mode,
             gains,
             speed: (req.speed_percent / 100.0).clamp(0.25, 4.0),
             semitones: req.semitones.clamp(-24.0, 24.0) + req.cents.clamp(-100.0, 100.0) / 100.0,
         };
         log!(
-            "export started: {} ({:?}, {} stems, speed {}, shift {:.2} st)",
+            "export started: {} ({:?}, {} of {} stems, {:?} mode, speed {}, shift {:.2} st)",
             path.display(),
             format,
+            render_req.gains.len(),
             render_req.tracks.len(),
+            render_req.mode,
             render_req.speed,
             render_req.semitones
         );
@@ -1417,6 +1760,33 @@ mod tests {
         assert_eq!(g.iter().map(|x| x.1).collect::<Vec<_>>(), [0.0, 0.7, 0.0]);
         // Original track is always unity.
         assert_eq!(gains_for(&mix, &["original".into()])[0].1, 1.0);
+    }
+
+    #[test]
+    fn p1_mix_mode_rule() {
+        let names: Vec<String> = STEMS.iter().map(|s| s.to_string()).collect();
+        let all_on: Vec<StemMixState> = STEMS.iter().map(|s| ms(s, true, 1.0, false)).collect();
+        assert_eq!(mix_mode(&all_on, &names, true), MixMode::Original);
+        // No original loaded: always the plain sum.
+        assert_eq!(mix_mode(&all_on, &names, false), MixMode::Stems);
+        // "All but guitar": 5 of 6 on.
+        let mut m = all_on.clone();
+        m[1].on = false;
+        assert_eq!(mix_mode(&m, &names, true), MixMode::Original);
+        // An on stem at volume 0 still counts as on.
+        m[0].volume = 0.0;
+        assert_eq!(mix_mode(&m, &names, true), MixMode::Original);
+        // 3 of 6 on: still original; 2 of 6: sum.
+        for x in m.iter_mut().take(3) {
+            x.on = false;
+        }
+        assert_eq!(mix_mode(&m, &names, true), MixMode::Original);
+        m[3].on = false;
+        assert_eq!(mix_mode(&m, &names, true), MixMode::Stems);
+        // Solo always gives the sum, even with everything on.
+        let mut m = all_on.clone();
+        m[2].solo = true;
+        assert_eq!(mix_mode(&m, &names, true), MixMode::Stems);
     }
 
     #[test]

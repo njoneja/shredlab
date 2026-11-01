@@ -191,3 +191,15 @@ pub async fn save_song_settings(b: B<'_>, song_id: String, settings: serde_json:
     let b = b.inner().clone();
     blocking(move || b.save_song_settings(&song_id, settings)).await
 }
+
+#[tauri::command]
+pub async fn get_app_settings(b: B<'_>) -> R<AppSettingsInfo> {
+    let b = b.inner().clone();
+    blocking(move || Ok(b.app_settings())).await
+}
+
+#[tauri::command]
+pub async fn set_app_settings(b: B<'_>, settings: AppSettingsUpdate) -> R<AppSettingsInfo> {
+    let b = b.inner().clone();
+    blocking(move || b.set_app_settings(settings)).await
+}

@@ -3,12 +3,18 @@
 
 use serde::{Deserialize, Serialize};
 
+pub use crate::settings::Quality;
+
 pub const STEMS: [&str; 6] = ["vocals", "guitar", "bass", "drums", "piano", "other"];
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SeparatedWith {
     pub model_name: String,
     pub device_label: String,
+    /// Registry id of the model.
+    pub model_id: String,
+    /// "standard" (1 pass) or "high" (2 passes).
+    pub quality: Quality,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -25,6 +31,51 @@ pub struct SongInfo {
     pub beats_ready: bool,
     pub bpm: Option<f64>,
     pub settings: Option<serde_json::Value>,
+    /// The original mix is loaded next to the stems, so the backing track
+    /// can be built from it (P1). False before separation or when an old
+    /// cache entry has no original and the source file is gone.
+    pub original_available: bool,
+}
+
+/// One separation model from the registry.
+#[derive(Debug, Clone, Serialize)]
+pub struct ModelInfo {
+    pub id: String,
+    pub name: String,
+    /// Personal model (manifest `personal` flag or found in the personal
+    /// models folder): shown as "personal, license unknown" when the
+    /// license is unknown.
+    pub personal: bool,
+    /// SPDX id from the manifest, e.g. "MIT", or "unknown".
+    pub license: String,
+    pub stems: Vec<String>,
+}
+
+/// App settings as the UI shows them.
+#[derive(Debug, Clone, Serialize)]
+pub struct AppSettingsInfo {
+    pub models: Vec<ModelInfo>,
+    /// Model used for the next separation (null if no model is installed).
+    pub model_id: Option<String>,
+    /// The user's saved choice (null = default model).
+    pub model_choice: Option<String>,
+    /// True when `STEMX_MODEL` overrides the choice (dev).
+    pub model_from_env: bool,
+    /// Quality used for the next separation.
+    pub quality: Quality,
+    /// The user's saved choice (null = default for the device).
+    pub quality_choice: Option<Quality>,
+    /// Default for the device of `model_id`: high on GPU, standard on CPU.
+    pub default_quality: Quality,
+    /// Predicted device of `model_id`: "GPU" or "CPU".
+    pub device_label: String,
+}
+
+/// `set_app_settings` payload. Null = use the default.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AppSettingsUpdate {
+    pub model_id: Option<String>,
+    pub quality: Option<Quality>,
 }
 
 #[derive(Debug, Clone, Serialize)]
