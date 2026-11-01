@@ -226,7 +226,7 @@ def setup_venv(venv, force):
 def download(url, dest, size_hint):
     dest.parent.mkdir(parents=True, exist_ok=True)
     part = dest.with_name(dest.name + ".part")
-    req = urllib.request.Request(url, headers={"User-Agent": "stem-extractor-setup/1"})
+    req = urllib.request.Request(url, headers={"User-Agent": "shredlab-setup/1"})
     t0 = time.time()
     with urllib.request.urlopen(req, timeout=60) as r, open(part, "wb") as f:
         total = int(r.headers.get("Content-Length") or size_hint or 0)

@@ -216,7 +216,7 @@ mod tests {
     }
 
     /// Real songs: `STEMX_MUSIC_START_SONGS="a.mp3;b.mp3" cargo test -p
-    /// stem-extractor --lib music_start::tests::real_songs -- --ignored --nocapture`
+    /// shredlab --lib music_start::tests::real_songs -- --ignored --nocapture`
     /// (beats from `models/onnx/beat_this_final0.onnx` on the CPU).
     #[test]
     #[ignore]

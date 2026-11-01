@@ -22,10 +22,10 @@ jobs:
         include:
           - os: windows-latest
             tauri_args: --debug --no-bundle
-            artifact_path: target/debug/stem-extractor.exe
+            artifact_path: target/debug/shredlab.exe
           - os: macos-latest
             tauri_args: --debug --bundles app
-            artifact_path: target/debug/bundle/macos/stem-extractor-app.tar.gz
+            artifact_path: target/debug/bundle/macos/shredlab-app.tar.gz
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -96,10 +96,10 @@ jobs:
         if: runner.os == 'macOS'
         working-directory: target/debug/bundle/macos
         # tar keeps the executable bit, which upload-artifact's zip drops.
-        run: tar -czf stem-extractor-app.tar.gz "ShredLab.app"
+        run: tar -czf shredlab-app.tar.gz "ShredLab.app"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: stem-extractor-${{ runner.os }}-debug
+          name: shredlab-${{ runner.os }}-debug
           path: ${{ matrix.artifact_path }}
           if-no-files-found: error

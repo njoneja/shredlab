@@ -3501,6 +3501,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
+name = "shredlab"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "stemx-audio",
+ "stemx-beats",
+ "stemx-io",
+ "stemx-library",
+ "stemx-separation",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-dialog",
+]
+
+[[package]]
 name = "simd-adler32"
 version = "0.3.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3599,22 +3615,6 @@ name = "static_vcruntime"
 version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ff7589a1859b09232522bb9edf076ca7fcf14ded96685d3fa629db73023ffbb7"
-
-[[package]]
-name = "stem-extractor"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "stemx-audio",
- "stemx-beats",
- "stemx-io",
- "stemx-library",
- "stemx-separation",
- "tauri",
- "tauri-build",
- "tauri-plugin-dialog",
-]
 
 [[package]]
 name = "stemx-audio"

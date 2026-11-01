@@ -20,5 +20,5 @@ function run(cmd, args) {
 
 const extra = process.platform === "win32" ? ["--config", "src-tauri/tauri.bundle.windows.conf.json"] : [];
 run("pnpm", ["exec", "vite", "build"]);
-run("cargo", ["build", "--release", "-p", "stem-extractor"]);
+run("cargo", ["build", "--release", "-p", "shredlab"]);
 run("pnpm", ["exec", "tauri", "build", ...extra, ...process.argv.slice(2)]);

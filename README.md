@@ -88,7 +88,7 @@ already there; `--force` rebuilds (old files are kept as `*.bak-*`),
 
 ```sh
 pnpm --dir app tauri dev                   # run the app (debug, hot reload)
-pnpm --dir app tauri build --no-bundle     # release exe: target/release/stem-extractor(.exe)
+pnpm --dir app tauri build --no-bundle     # release exe: target/release/shredlab(.exe)
 pnpm --dir app bundle                      # installers: target/release/bundle/ (NSIS + MSI / .app + .dmg)
 ```
 
