@@ -216,8 +216,9 @@ Events for a `song_id` that is no longer current are ignored by the UI.
   to linear gain `10^(dB/20)` (+6 dB = 1.995) and sends linear gains.
 - Playback has a safety limiter on the music (soft knee, look-ahead,
   transparent below −1 dBFS, output ≤ −0.1 dBFS); click and count-in are
-  added after it. Export does not use it; it keeps its own limiter /
-  normalization, so boosted exports don't clip either.
+  added after it. Export doesn't use the playback limiter. It has its own
+  look-ahead peak limiter (no whole-song normalization), so boosted exports
+  don't clip and match the playback level.
 
 ### Audibility (playback)
 - If **any** stem has `solo: true`, only stems with `solo: true` play.

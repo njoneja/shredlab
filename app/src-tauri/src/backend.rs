@@ -1667,27 +1667,16 @@ impl Backend {
             }
         };
         progress(0.0, true);
-        let mut out = audio::render(req, &mut |f| progress(0.9 * f, false), cancel)
+        let out = audio::render(req, &mut |f| progress(0.9 * f, false), cancel)
             .map_err(|e| format!("Render failed: {e}"))?;
         if cancel.load(Ordering::Relaxed) {
             return Err("cancelled".into());
         }
-        // Avoid clipping: scale the whole mix down if it peaks above 0 dBFS.
-        let peak = out.iter().flat_map(|c| c.iter()).fold(0.0f32, |m, v| {
-            if v.is_finite() {
-                m.max(v.abs())
-            } else {
-                m
-            }
-        });
+        // No whole-song normalization: `encode` applies a look-ahead peak
+        // limiter, so the export matches the level heard in playback.
+        let peak = audio::peak(&out);
         if peak > 0.999 {
-            let k = 0.999 / peak;
-            for c in out.iter_mut() {
-                for v in c.iter_mut() {
-                    *v *= k;
-                }
-            }
-            log!("export: peak {peak:.3}, scaled by {k:.3}");
+            log!("export: peak {peak:.3}, limited by the encoder");
         }
         progress(0.9, true);
         let rate = req.tracks.first().map_or(RATE, |t| t.sample_rate);
