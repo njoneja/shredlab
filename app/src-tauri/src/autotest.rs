@@ -9,6 +9,7 @@
 //! re-open (cache, High) -> cancel a Standard separation -> switch to
 //! Standard (re-separates) -> back to High (instant, from the cache) ->
 //! "All but guitar" export in P1 mode (checked against original - guitar)
+//! -> the same with click + count-in (unstretched and at 80 %)
 //! -> +6 dB boost export (no clipping) -> WAV/FLAC/MP3 exports. Each step
 //! is logged with its timing; the last line is `AUTOTEST PASS` or
 //! `AUTOTEST FAIL: ...`. The saved settings are restored at the end. Use a
@@ -213,6 +214,152 @@ fn snr_db(x: &[Vec<f32>; 2], reference: &[Vec<f32>; 2]) -> (f64, f64) {
         }
     }
     (10.0 * (sig / err.max(1e-30)).log10(), k)
+}
+
+/// Rising edges (|x| > `thr`) after at least `gap` quiet samples.
+fn onsets(x: &[f32], thr: f32, gap: usize) -> Vec<usize> {
+    let mut out = vec![];
+    let mut quiet = gap + 1;
+    for (i, &v) in x.iter().enumerate() {
+        if v.abs() > thr {
+            if quiet > gap {
+                out.push(i);
+            }
+            quiet = 0;
+        } else {
+            quiet += 1;
+        }
+    }
+    out
+}
+
+fn window_peak(x: &[f32], from: usize, len: usize) -> f32 {
+    x[from.min(x.len())..(from + len).min(x.len())]
+        .iter()
+        .fold(0.0f32, |m, v| m.max(v.abs()))
+}
+
+fn median(mut v: Vec<f32>) -> f32 {
+    v.sort_by(f32::total_cmp);
+    v.get(v.len() / 2).copied().unwrap_or(0.0)
+}
+
+/// Click + count-in export of the "All but guitar" mix (`plain` is its
+/// unstretched export without them): the count-in (4 clicks, 4 per bar)
+/// comes first over silence, then the same music with a click on each
+/// beat; at 80 % speed the count-in is respaced. No clipping.
+fn check_click_export(
+    b: &Arc<Backend>,
+    rx: &Receiver<Event>,
+    out: &Path,
+    plain: &[Vec<f32>; 2],
+) -> Result<(), String> {
+    let grid = b.get_beats()?.ok_or("no beat grid")?;
+    b.set_meter_overrides(MeterOverridesPayload {
+        overrides: vec![],
+        downbeats: grid.downbeats.clone(),
+    });
+    b.set_click(ClickState {
+        enabled: true,
+        count_in_enabled: true,
+        count_in_beats: 4,
+        subdivision: 1,
+        beats_per_bar: 4,
+        volume: 0.5,
+    });
+    let req = |file: &Path, speed: f64, click: bool| ExportRequest {
+        path: file.display().to_string(),
+        format: ExportFormat::Wav,
+        stems: mix_all_but("guitar", None),
+        solo: false,
+        speed_percent: speed,
+        semitones: 0.0,
+        cents: 0.0,
+        click,
+        count_in: click,
+    };
+    let res = (|| {
+        for speed in [100.0, 80.0] {
+            let plain = if speed == 100.0 {
+                plain.clone()
+            } else {
+                let file = out.join("autotest-no-click-80.wav");
+                let _ = std::fs::remove_file(&file);
+                export_wait(b, rx, req(&file, speed, false))?;
+                read_wav(&file)?
+            };
+            let file = out.join(format!("autotest-click-{speed}.wav"));
+            let _ = std::fs::remove_file(&file);
+            let secs = export_wait(b, rx, req(&file, speed, true))?;
+            let got = read_wav(&file)?;
+            let sr = crate::backend::RATE as f64;
+            let interval =
+                crate::audio::click::local_beat_interval(&grid.beats, 0.0) / (speed / 100.0) * sr;
+            let ci = got[0].len().saturating_sub(plain[0].len());
+            let ci_want = (4.0 * interval).round() as usize;
+            let peak = got
+                .iter()
+                .flat_map(|c| c.iter())
+                .fold(0.0f32, |m, v| m.max(v.abs()));
+            let on = onsets(&got[0][..ci.min(got[0].len())], 1e-3, 2000);
+            log!(
+                "autotest: click+count-in export at {speed}% {secs:.1}s: count-in {ci} samples (want {ci_want}), onsets {on:?}, peak {peak:.4}"
+            );
+            if ci.abs_diff(ci_want) > 1 {
+                return Err(format!("count-in is {ci} samples, want {ci_want}"));
+            }
+            if on.len() != 4
+                || on
+                    .iter()
+                    .enumerate()
+                    .any(|(j, &o)| o.abs_diff((j as f64 * interval).round() as usize) > 2)
+            {
+                return Err(format!("count-in clicks at {on:?}, interval {interval:.1}"));
+            }
+            if window_peak(&got[0], on[0], 1000) < 1.3 * window_peak(&got[0], on[1], 1000) {
+                return Err("first count-in click (a bar before the start) is not accented".into());
+            }
+            if peak > 1.0 {
+                return Err(format!("click export clips (peak {peak})"));
+            }
+            if speed != 100.0 {
+                continue;
+            }
+            // Unstretched: what the click adds is the click alone, on the beats.
+            let diff: Vec<f32> = got[0][ci..]
+                .iter()
+                .zip(&plain[0])
+                .map(|(a, b)| a - b)
+                .collect();
+            let mut at_beat = vec![];
+            let mut between = vec![];
+            let mut late = 0;
+            for w in grid.beats.windows(2) {
+                let f = (w[0] * sr).round() as usize;
+                let mid = ((w[0] + w[1]) / 2.0 * sr).round() as usize;
+                if mid + 300 >= diff.len() {
+                    break;
+                }
+                at_beat.push(window_peak(&diff, f, 300));
+                between.push(window_peak(&diff, mid, 300));
+                let first = (f.saturating_sub(50)..f + 300).find(|&i| diff[i].abs() > 0.02);
+                if first.is_none_or(|i| i.abs_diff(f) > 30) {
+                    late += 1;
+                }
+            }
+            let (mb, mm) = (median(at_beat.clone()), median(between));
+            log!(
+                "autotest: click on beats: median peak {mb:.3} at beats vs {mm:.4} between, {late} of {} off the beat",
+                at_beat.len()
+            );
+            if mb < 0.15 || mm > 0.02 || late * 10 > at_beat.len() {
+                return Err("exported click is not on the beats".into());
+            }
+        }
+        Ok(())
+    })();
+    b.set_click(ClickState::default());
+    res
 }
 
 fn run(b: &Arc<Backend>, song: &Path, out: &Path, rx: &Receiver<Event>) -> Result<(), String> {
@@ -421,6 +568,8 @@ fn run(b: &Arc<Backend>, song: &Path, out: &Path, rx: &Receiver<Event>) -> Resul
             speed_percent: 100.0,
             semitones: 0.0,
             cents: 0.0,
+            click: false,
+            count_in: false,
         },
     )?;
     let got = read_wav(&file)?;
@@ -439,6 +588,7 @@ fn run(b: &Arc<Backend>, song: &Path, out: &Path, rx: &Receiver<Event>) -> Resul
     if snr_p1 < MIX_SNR_MIN || snr_sum > snr_p1 - 10.0 {
         return Err("all-but-guitar export is not original - guitar".into());
     }
+    check_click_export(b, rx, out, &got)?;
 
     // Solo export of vocals, bass and drums: what is heard is the plain sum
     // of the soloed stems, even though 3 of 6 on would be P1 mode without
@@ -463,6 +613,8 @@ fn run(b: &Arc<Backend>, song: &Path, out: &Path, rx: &Receiver<Event>) -> Resul
             speed_percent: 100.0,
             semitones: 0.0,
             cents: 0.0,
+            click: false,
+            count_in: false,
         },
     )?;
     let got = read_wav(&file)?;
@@ -492,6 +644,8 @@ fn run(b: &Arc<Backend>, song: &Path, out: &Path, rx: &Receiver<Event>) -> Resul
             speed_percent: 100.0,
             semitones: 0.0,
             cents: 0.0,
+            click: false,
+            count_in: false,
         },
     )?;
     let got = read_wav(&file)?;
@@ -530,6 +684,8 @@ fn run(b: &Arc<Backend>, song: &Path, out: &Path, rx: &Receiver<Event>) -> Resul
                 speed_percent: 80.0,
                 semitones: -2.0,
                 cents: 0.0,
+                click: false,
+                count_in: false,
             },
         )?;
         let size = std::fs::metadata(&file).map(|m| m.len()).unwrap_or(0);
