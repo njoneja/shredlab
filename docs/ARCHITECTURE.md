@@ -220,6 +220,11 @@ The ONNX files are not in git. `tools/setup_models.py` downloads the
 official checkpoints, exports them with the code in `spikes/` and
 `tools/export/`, builds the registry folder and verifies the results.
 
+Third-party notices for everything shipped (crates, ONNX Runtime, DirectML,
+LAME, Signalsmith, fonts, models, JS) are generated into
+`app/public/THIRD_PARTY_LICENSES.html` by `tools/third_party_licenses/generate.mjs`
+and shown in the app under Settings → About ShredLab.
+
 ## Reference implementations and tests
 
 The Python code in `spikes/` and `tools/reference/` is the reference for the
