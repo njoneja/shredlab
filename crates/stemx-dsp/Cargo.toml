@@ -9,3 +9,7 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
+realfft.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
