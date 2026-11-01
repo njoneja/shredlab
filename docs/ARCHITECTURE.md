@@ -128,14 +128,18 @@ default output device via cpal.
   track. Otherwise it is the plain sum of the enabled stems. `choose_mode`
   is shared by playback and export.
 - Click and count-in are generated from the beat grid, with accented
-  downbeats.
+  downbeats. The count-in tempo comes from the beats after the start (the
+  slowest pulse most of the next 8 intervals agree with). An optional
+  "music start" in the click settings lets a count-in from the song start
+  skip a quiet intro; the crate only applies it, the app detects it.
 
 **Export** (`render` + `encode`) runs the same mix and stretch path offline
-(whole song, no loop), so the file matches what you hear, including speed
+(the whole song or a range, played once, with short fades at cut points
+inside the song), so the file matches what you hear, including speed
 and pitch. If the click track or count-in is on, the same pipeline renders
 the clicks into a separate buffer; the music goes through the export
 limiter first and the clicks are added after it, as in playback, with the
-count-in before the song start. Formats: WAV 16-bit (dithered) and 24-bit
+count-in before the range start. Formats: WAV 16-bit (dithered) and 24-bit
 (hound), FLAC 24-bit (flacenc), MP3 CBR (LAME). A look-ahead limiter on the
 final sum keeps peaks below −0.1 dBFS.
 
@@ -171,7 +175,11 @@ also holds the beat grid and per-song UI settings.
   `beats-ready`, `export-progress` and `playback-position`.
 - `models.rs`: finds models (bundled resources, then the user models folder,
   then `STEMX_MODELS_DIR`, then repo folders in debug builds).
-- `settings.rs`: `settings.json` with the chosen model and quality.
+- `settings.rs`: `settings.json` with the chosen model, quality, theme and
+  "count in to where the music starts".
+- `music_start.rs`: finds where the music starts after a quiet intro
+  (per-beat loudness of the original vs the song's median, abrupt onsets
+  only), so a count-in can lead straight into it.
 
 The UI talks to the backend through one seam, `app/src/lib/api.ts`. Inside
 Tauri it uses `api.tauri.ts`; in a plain browser it uses an in-memory mock,

@@ -86,7 +86,8 @@ AppSettingsInfo {
   quality_choice: Quality | null, // saved choice; null = default for the device
   default_quality: Quality,    // "high" when model_id runs on the GPU, else "standard"
   device_label: string,        // predicted device of model_id: "GPU" | "CPU"
-  theme: Theme                 // UI theme; "stage" when none is saved
+  theme: Theme,                // UI theme; "stage" when none is saved
+  count_in_to_music_start: boolean // "Count in to where the music starts"; true when none is saved
 }
 
 Theme = "stage" | "rosewood" | "valve" | "manuscript"
@@ -125,9 +126,13 @@ Waveform { duration_sec: number, peaks: number[] }
   // peaks.length == n_points requested; peaks[i] = max |sample| over the i-th
   // equal time slice of the original mix (all channels), in 0..1.
 
-BeatGrid { beats: number[], downbeats: number[], bpm: number | null }
+BeatGrid { beats: number[], downbeats: number[], bpm: number | null, music_start: number | null }
   // beats ascending, seconds. downbeats ⊂ beats (same f64 values).
   // bpm: overall tempo estimate (e.g. 60 / median beat interval).
+  // music_start: where the music starts after a quiet intro (studio talk,
+  // silence), or null if the song has none. Detected by the backend from
+  // the original mix and the beats; independent of the setting. See
+  // "Count in to where the music starts".
 
 ExportFormat = "wav" | "flac" | "mp3"
 
@@ -144,8 +149,10 @@ ExportRequest {
   cents: number,             // -50..50
   click: boolean,            // mix in the click track (the UI sends ClickState.enabled).
                              // Optional; missing = false.
-  count_in: boolean          // start with the count-in (the UI sends
+  count_in: boolean,         // start with the count-in (the UI sends
                              // ClickState.count_in_enabled). Optional; missing = false.
+  start_sec: number | null,  // range start (song seconds). Optional; missing/null = song start.
+  end_sec: number | null     // range end (song seconds). Optional; missing/null = song end.
 }
 
 SongSettings   // OPAQUE to the backend: store the JSON value and return it verbatim.
@@ -177,6 +184,7 @@ SongSettings   // OPAQUE to the backend: store the JSON value and return it verb
 | `cancel_export` | – | `()` | Cancel if running; emit `export-error` with `cancelled: true`. Delete the partial file. |
 | `save_song_settings` | `song_id: String, settings: serde_json::Value` | `()` | Persist next to the song's library entry. Returned verbatim in `SongInfo.settings` on the next `open_song` of that song. Called debounced (~600 ms) after changes. |
 | `get_app_settings` | – | `AppSettingsInfo` | Models and the separation settings. |
+| `set_count_in_to_music_start` | `on: bool` | `AppSettingsInfo` | Saves "Count in to where the music starts" with the app settings (`settings.json`) and applies it to playback at once. |
 | `set_theme` | `theme: String` | `AppSettingsInfo` | Saves the UI theme with the app settings (`<data dir>/settings.json`). `Err` for an unknown theme. The UI applies the theme itself and mirrors it in `localStorage` for the next start (no flash before `get_app_settings` returns). |
 | `set_app_settings` | `settings: AppSettingsUpdate` | `AppSettingsInfo` | Saves the choice (null = default) and returns the new effective settings. Does **not** re-separate: if a song is open and its `separated_with` (model_id, quality) differs from the new effective `model_id`/`quality`, the UI asks "Re-separate this song?" and calls `start_separation` on yes. `Err` for an unknown model id. |
 
@@ -245,8 +253,15 @@ Events for a `song_id` that is no longer current are ignored by the UI.
   has already picked the audible stems: the soloed ones when any stem is
   soloed (`req.solo: true`, plain sum), else the switched-on ones (P1 rule
   above). Apply `speed_percent`, `semitones`, `cents`
-  as in playback. Whole song, no loop. Avoid clipping (a limiter or
+  as in playback. Avoid clipping (a limiter or
   float WAV is fine; MP3 at ≥ 192 kbps).
+- **Range** (`start_sec`, `end_sec`): the export covers `[start, end)`
+  of the song, played once (a loop export does not repeat), the whole
+  song by default. Cut points inside the song (a start after 0, an end
+  before the song end) get an 8 ms fade so the file doesn't click. The
+  file is `(end - start) / speed` long, plus the count-in. An empty range
+  is refused (`Err`). The UI sends nothing for Whole song, `start_sec` =
+  playhead for From the playhead, and both for Loop A–B.
 - **Click** (`req.click`): the click track exactly as in playback, from the
   current `set_click` settings (subdivision, volume) and the effective
   downbeats (`set_meter_overrides`): same sounds and accents, on the beat
@@ -254,10 +269,14 @@ Events for a `song_id` that is no longer current are ignored by the UI.
   after the music's limiter: the music alone goes through the export peak
   limiter, then the click is added; the encoder limits that final sum
   again (−0.1 dBFS), so the file never clips.
-- **Count-in** (`req.count_in`): the count-in clicks before the song start,
-  with silence under them, exactly as `play` from 0 would play them
-  (`count_in_beats`, `beats_per_bar` accents, spacing = local beat interval
-  at the start / speed). The file is longer by the count-in.
+- **Count-in** (`req.count_in`): the count-in clicks before the range
+  start, with silence under them, exactly as `play` from there would play
+  them (`count_in_beats`, `beats_per_bar` accents, spacing as in playback).
+  The file is longer by the count-in. The click track covers only the
+  range. "Count in to where the music starts" applies as in playback: a
+  range starting at the song start begins at `music_start` (the skipped
+  intro is not in the file), unless `music_start` is at or past the range
+  end.
 - Both off (or missing): the export is unchanged (bit for bit). The UI
   appends " + click", " + count-in" or " + click, count-in" to the export
   summary when they are on.
@@ -269,9 +288,8 @@ Events for a `song_id` that is no longer current are ignored by the UI.
 - While the loop is enabled, reaching `b_sec` jumps to `a_sec` seamlessly
   (no count-in on wraps).
 - **Count-in:** if `count_in_enabled`, `play` first plays `count_in_beats`
-  clicks, then starts audio. Spacing = the local beat interval at the start
-  position (from the beat grid: the interval of the beat pair around the
-  start), divided by `speed_percent / 100`. The audio starts exactly one
+  clicks, then starts audio. Spacing: see "Count-in spacing" below
+  (from the beats after the start), divided by `speed_percent / 100`. The audio starts exactly one
   interval after the last click, i.e. the count-in ends exactly at the start
   point (the user sets A on the pickup note). Number the clicks by how many
   beats before the start they are (`count_in_beats` … 1); click `k` is
@@ -279,6 +297,19 @@ Events for a `song_id` that is no longer current are ignored by the UI.
   7 6 5 **4** 3 2 1, then audio (the first bar is a 3-beat pickup).
   During count-in, `playing: true` and `count_in_beats_left` counts down. The count-in leads into the first beat at or after the start: its last click is one beat before that beat, and any music before it (a pickup, or a long intro) plays under the last clicks, so `count_in_beats_left` can still be counting down while `position_sec` advances. Export follows the same rule.
   Without a beat grid, use 0.5 s spacing.
+  **Count-in spacing** comes from the beats being counted into: of the
+  next 8 beat intervals starting at the target beat (fewer near the end
+  of the grid), the longest interval that at least 3 of them agree with
+  within 10 %, taking the upper median of that group; then divided by
+  `speed_percent / 100`. Odd bars, half-beat tracking in a busy intro and
+  a missed beat don't change it; an intro before the target never does.
+- **Count in to where the music starts** (`count_in_to_music_start`,
+  default on): when the count-in is on and `play` starts at the song
+  start (0, or before the first beat), playback starts at `music_start`
+  instead (if the song has one and, with a loop, it lies before `b_sec`).
+  `playback-position` reports `music_start` right away, so the playhead
+  shows the jump. A start the user placed later is never moved. Setting
+  off, or no `music_start`: unchanged.
 - **Click track:** if `enabled`, play a click on every beat of the grid that
   playback passes, with an accent on the effective downbeats (see Meter).
   With `subdivision` 2 or 3, add 1 or 2 softer clicks evenly spaced between
