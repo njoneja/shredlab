@@ -10,7 +10,7 @@
     "preview": "vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "tauri": "tauri",
-    "bundle": "vite build && cargo build --release -p stem-extractor && tauri build --config src-tauri/tauri.bundle.conf.json"
+    "bundle": "node scripts/bundle.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.12.4"
