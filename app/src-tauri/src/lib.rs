@@ -23,6 +23,8 @@ pub mod log;
 pub mod models;
 pub mod settings;
 pub mod types;
+#[cfg(windows)]
+mod win_icon;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -65,6 +67,8 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             "stemx-audio"
         }
     );
+    #[cfg(windows)]
+    win_icon::apply(app);
     let resource_dir = app.path().resource_dir().ok();
     if let Some(r) = &resource_dir {
         log!("resource dir: {}", r.display());
