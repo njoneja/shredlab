@@ -1,18 +1,19 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
   import { app } from "./store.svelte";
-  import type { BandParams, EndMode, EndParams, PanMode, RefineParams, StemName } from "./types";
+  import type { BandParams, EndMode, EndParams, RefineParams, StemName } from "./types";
   import {
     BAND_MAX_DB,
     F_MAX,
     F_MIN,
     PAN_QUICK,
     SHELF_MAX_DB,
+    exceptionSide,
     formatHz,
     freqToX,
+    heardGain,
     isIdentity,
     logFreqs,
-    maskGain,
     presetOf,
     quickOf,
     responseDb,
@@ -28,6 +29,11 @@
   const quick = $derived(quickOf(pan));
   const preset = $derived(presetOf(eq, app.refinePresets));
   const id = $derived(`refine-${stem}`);
+  /** The row's on switch; the stereo window does the opposite of it. */
+  const sw = $derived(app.mix[stem].on);
+  const side = $derived(exceptionSide(pan));
+  /** How much of the stem at `v` (pan) is heard: what the field display lights. */
+  const heard = (v: number) => (!pan.enabled && app.mix[stem].solo ? 1 : heardGain(pan, sw, v));
 
   // ---- updates (coalesced to one backend call per frame while dragging) ----
   let pending: RefineParams | null = null;
@@ -60,12 +66,6 @@
       q.pan.enabled = true;
       q.pan.center = PAN_QUICK[k].center;
       q.pan.width = PAN_QUICK[k].width;
-    });
-  }
-  function setMode(m: PanMode) {
-    update((q) => {
-      q.pan.enabled = true;
-      q.pan.mode = m;
     });
   }
   function panText(c: number) {
@@ -138,16 +138,17 @@
       g.lineTo(Math.round(panToX(v)) + 0.5, h);
       g.stroke();
     }
-    // energy bars, stacked by band (low darkest)
+    // energy bars, stacked by band (low darkest); what isn't heard is dimmed
     const bw = w / 41;
     if (haveField) {
       for (let i = 0; i < 41; i++) {
         const t = clamp((disp[i] - (ref - 36)) / 36, 0, 1);
+        const lit = 0.2 + 0.8 * heard((i / 40) * 2 - 1);
         let y = h;
         const total = t * (h - 6);
         [0.45, 0.72, 1].forEach((a, b) => {
           const hh = total * shares[i][b];
-          g.globalAlpha = a * 0.85;
+          g.globalAlpha = a * 0.85 * lit;
           g.fillStyle = color;
           g.fillRect(i * bw + 1, y - hh, Math.max(1, bw - 2), hh);
           y -= hh;
@@ -155,20 +156,21 @@
       }
       g.globalAlpha = 1;
     }
-    // the selection: mask gain as a line, kept area shaded
+    // with an exception: what is heard (it flips with the switch) shaded
+    // under a line, the window's edges and centre as handles
     if (pan.enabled) {
       g.fillStyle = css("--accent-soft", c);
       g.strokeStyle = css("--accent", c);
       g.lineWidth = 1.5;
       g.beginPath();
       g.moveTo(0, h);
-      for (let x = 0; x <= w; x += 2) g.lineTo(x, h - maskGain(pan, xToPan(x)) * (h - 2));
+      for (let x = 0; x <= w; x += 2) g.lineTo(x, h - heard(xToPan(x)) * (h - 2));
       g.lineTo(w, h);
       g.closePath();
       g.fill();
       g.beginPath();
       for (let x = 0; x <= w; x += 2) {
-        const y = h - maskGain(pan, xToPan(x)) * (h - 2);
+        const y = h - heard(xToPan(x)) * (h - 2);
         if (x === 0) g.moveTo(x, y);
         else g.lineTo(x, y);
       }
@@ -358,7 +360,7 @@
 
   // redraw on data, size and theme changes
   $effect(() => {
-    void [pan.enabled, pan.center, pan.width, pan.mode, fieldW, app.theme];
+    void [pan.enabled, pan.center, pan.width, sw, app.mix[stem].solo, fieldW, app.theme];
     drawField();
   });
   $effect(() => {
@@ -401,18 +403,19 @@
   <div class="cols">
     <div class="col">
       <div class="line">
-        <label class="check" title="Keep or remove only the part of {label} at a stereo position">
-          <input type="checkbox" checked={pan.enabled} onchange={(e) => update((q) => (q.pan.enabled = e.currentTarget.checked))} />
-          Stereo position
+        <label class="check" title="A part of the stereo field that does the opposite of the {label} switch: with {label} on you hear it without that part, with {label} off you hear only that part">
+          <input
+            type="checkbox"
+            checked={pan.enabled}
+            aria-label="{label} stereo exception"
+            onchange={(e) => update((q) => (q.pan.enabled = e.currentTarget.checked))}
+          />
+          Stereo exception
         </label>
-        <div class="seg" role="radiogroup" aria-label="{label}: keep or remove the selection">
-          {#each [["keep", "Keep"], ["remove", "Remove"]] as [m, t] (m)}
-            <button role="radio" aria-checked={pan.enabled && pan.mode === m} onclick={() => setMode(m as PanMode)}>{t}</button>
-          {/each}
-        </div>
-        <div class="seg" role="group" aria-label="{label}: quick stereo positions">
+        <span class="except" id="{id}-except">Except:</span>
+        <div class="seg" role="group" aria-labelledby="{id}-except" aria-label="{label}: except the left, centre or right of the stereo field">
           {#each [["left", "Left"], ["center", "Centre"], ["right", "Right"]] as [k, t] (k)}
-            <button aria-pressed={quick === k} aria-label="{t} third of the stereo field" onclick={() => setQuick(k as PanQuick)}>{t}</button>
+            <button aria-pressed={quick === k} aria-label="Except the {t.toLowerCase()} third of the stereo field" onclick={() => setQuick(k as PanQuick)}>{t}</button>
           {/each}
         </div>
       </div>
@@ -428,9 +431,15 @@
           onpointercancel={fieldUp}
         ></canvas>
         {#if !haveField}
-          <div class="hint">Play to see where {label.toLowerCase()} sits, left to right. Drag to place the window.</div>
+          <div class="hint">Play to see where {label.toLowerCase()} sits, left to right. Drag to place the exception.</div>
         {/if}
       </div>
+      {#if pan.enabled}
+        <p class="heard" aria-live="polite">
+          {#if sw}{label} is on: you hear it without its {side} part.{:else}{label} is off: you hear only its {side} part.{/if}
+          <span class="faint">Flip the switch to swap.</span>
+        </p>
+      {/if}
       <div class="line sliders">
         <label for="{id}-center">Position</label>
         <input
@@ -661,6 +670,18 @@
     min-width: 46px;
     font-size: 11.5px;
     color: var(--muted);
+  }
+  .except {
+    font-weight: 600;
+    color: var(--muted);
+  }
+  .heard {
+    margin: 0;
+    font-size: 11.5px;
+    color: var(--muted);
+  }
+  .faint {
+    color: var(--faint);
   }
   .eq-grid {
     display: grid;

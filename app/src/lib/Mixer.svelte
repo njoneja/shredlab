@@ -2,7 +2,7 @@
   import { app } from "./store.svelte";
   import { STEMS, type StemName } from "./types";
   import { SLIDER_MAX, formatDb, gainToSlider, sliderToGain } from "./mix";
-  import { STRENGTH_NAMES } from "./refine";
+  import { STRENGTH_NAMES, exceptionSide, hasException, switchText } from "./refine";
   import RefinePanel from "./RefinePanel.svelte";
 
   /** Full names: tooltips and every accessible name (never the tape abbreviation). */
@@ -114,24 +114,30 @@
   {#each STEMS as stem, i (stem)}
     {@const m = app.mix[stem]}
     {@const audible = app.audible(stem)}
+    {@const ex = hasException(app.refine[stem]) ? exceptionSide(app.refine[stem].pan) : null}
+    {@const swText = switchText(LABEL[stem], m.on, app.refine[stem])}
     <div
       class="row"
       class:off={!audible}
+      class:partly={app.partlyOn(stem)}
       class:soloed={m.solo}
       style:--stem-color="var(--stem-{stem})"
       oncontextmenu={(e) => !disabled && openMenu(e, stem)}
       role="group"
       aria-label={LABEL[stem]}
     >
-      <label class="switch" title="Turn {LABEL[stem]} on/off ({i + 1})">
+      <!-- With a stereo exception the switch is half lit: the excepted part
+           (hatched, on its side of the track) does the opposite of the switch,
+           and the thumb is hollow. -->
+      <label class="switch" class:partial={ex} title={ex ? `${swText} (${i + 1})` : `Turn ${LABEL[stem]} on/off (${i + 1})`}>
         <input
           type="checkbox"
           checked={m.on}
           {disabled}
-          aria-label="{LABEL[stem]} on"
+          aria-label={ex ? swText : `${LABEL[stem]} on`}
           onchange={(e) => app.setStemOn(stem, e.currentTarget.checked)}
         />
-        <span class="track"><span class="thumb"></span></span>
+        <span class="track">{#if ex}<span class="part {ex}"></span>{/if}<span class="thumb"></span></span>
       </label>
       <button
         class="btn small solo"
@@ -160,7 +166,7 @@
         <span class="tape" style:--tilt="{TILT[stem]}deg" title={LABEL[stem]} aria-hidden="true">{SHORT[stem]}</span>
         <span class="sr-only">{LABEL[stem]}</span>
         {#if app.refined(stem)}
-          <span class="refined" title="{LABEL[stem]} is refined (stereo position or EQ)"><span class="sr-only">(refined)</span></span>
+          <span class="refined" title="{LABEL[stem]} is refined (stereo exception or EQ)"><span class="sr-only">(refined)</span></span>
         {/if}
         <kbd class="key" aria-hidden="true">{i + 1}</kbd>
       </span>
@@ -186,7 +192,7 @@
         aria-expanded={app.refineOpen === stem}
         aria-controls="refine-{stem}"
         aria-label="Refine {LABEL[stem]}"
-        title="Refine {LABEL[stem]}: pick a stereo position, shape the tone"
+        title="Refine {LABEL[stem]}: except part of the stereo field, shape the tone"
         {disabled}
         onclick={() => app.toggleRefine(stem)}
       >
@@ -347,6 +353,10 @@
   .row.off {
     opacity: 0.42;
   }
+  /* Off but playing its excepted part: in between. */
+  .row.partly {
+    opacity: 0.72;
+  }
   .row.soloed {
     box-shadow: inset 0 0 0 1px var(--solo);
   }
@@ -454,7 +464,46 @@
     background: var(--surface-3);
     border: 1px solid var(--border);
     position: relative;
+    overflow: hidden;
     transition: background 0.12s;
+  }
+  /* The excepted part: lit (hatched) on an off switch, unlit (hatched) on an on one. */
+  .part {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 44%;
+    background: repeating-linear-gradient(
+      135deg,
+      var(--stem-color) 0 2px,
+      color-mix(in srgb, var(--stem-color) 55%, transparent) 2px 4px
+    );
+  }
+  .part.left {
+    left: 0;
+  }
+  .part.centre {
+    left: 28%;
+  }
+  .part.right {
+    right: 0;
+  }
+  .switch input:checked + .track .part {
+    background: repeating-linear-gradient(
+      135deg,
+      var(--surface-3) 0 2px,
+      color-mix(in srgb, var(--surface-3) 55%, transparent) 2px 4px
+    );
+  }
+  /* Hollow thumb: the part under it stays visible. */
+  .switch.partial .thumb {
+    box-sizing: border-box;
+    background: transparent;
+    border: 2px solid var(--fg);
+  }
+  .switch.partial input:checked + .track .thumb {
+    background: transparent;
+    border-color: #fff;
   }
   .thumb {
     position: absolute;

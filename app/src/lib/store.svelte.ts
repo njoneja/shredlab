@@ -24,7 +24,7 @@ import type {
 import { STEMS } from "./types";
 import { backingFromOriginal, clampGain } from "./mix";
 import { applyTheme, currentTheme, isTheme } from "./theme";
-import { defaultRefine, isIdentity, mockPresets, normalise, STRENGTH_NAMES } from "./refine";
+import { defaultRefine, exceptionSide, hasException, isIdentity, mockPresets, normalise, STRENGTH_NAMES } from "./refine";
 import { barAt, commonBeatsPerBar, effectiveDownbeats, formatTime, nearestBeatIndex, normaliseOverrides } from "./meter";
 
 export interface StemUi {
@@ -180,9 +180,10 @@ class AppState {
   /**
    * Stems the export mixes: exactly what is audible. With a solo, the soloed
    * stems (always the plain sum); otherwise the switched-on ones (on at −∞
-   * still counts as on for P1).
+   * still counts as on for P1) plus off ones with a stereo exception (they
+   * play the excepted part).
    */
-  exportStems = $derived(STEMS.filter((s) => (this.anySolo ? this.mix[s].solo : this.mix[s].on)));
+  exportStems = $derived(STEMS.filter((s) => this.audible(s)));
   /** Click and count-in go into the export when they are on ("what you hear"). */
   exportExtras = $derived(
     [this.click.enabled && "click", this.click.count_in_enabled && "count-in"].filter(Boolean).join(", "),
@@ -196,21 +197,23 @@ class AppState {
   });
   /** Refined stems (a dot on their row; mentioned in the export summary). */
   refinedStems = $derived(STEMS.filter((s) => !isIdentity(this.refine[s])));
-  /** " · guitar refined" when refined stems take part in the export. */
+  /** " · guitar refined" when refined stems are heard in the export. */
   exportRefineNote = $derived.by(() => {
-    // In the backing-track mode an off stem's selection is still removed, so
-    // its refine matters too; with solo only the soloed stems count.
-    const r = this.refinedStems.filter((s) => (this.anySolo ? this.mix[s].solo : true));
+    // A stem that plays nothing is simply left out (its refine does nothing).
+    const r = this.refinedStems.filter((s) => this.exportStems.includes(s));
     return r.length ? ` · ${r.join(", ")} refined` : "";
   });
   exportSummary = $derived.by(() => {
     const on = this.exportStems;
     const extras = (this.exportExtras ? ` + ${this.exportExtras}` : "") + this.exportRangeNote + this.exportRefineNote;
-    if (this.anySolo) return `Exports: ${on.join(", ")} (soloed)${extras}`;
+    // An off row with an exception plays only that part: "guitar (left only)".
+    const name = (s: StemName) =>
+      !this.mix[s].on && hasException(this.refine[s]) ? `${s} (${exceptionSide(this.refine[s].pan)} only)` : s;
+    if (this.anySolo) return `Exports: ${on.map(name).join(", ")} (soloed)${extras}`;
     const off = STEMS.filter((s) => !on.includes(s));
     if (!on.length) return "Nothing to export: all stems are off";
-    if (!off.length) return `Exports: all stems${extras}`;
-    return `Exports: ${on.join(", ")} (${off.join(", ")} off)${extras}`;
+    if (!off.length && on.every((s) => this.mix[s].on)) return `Exports: all stems${extras}`;
+    return `Exports: ${on.map(name).join(", ")}${off.length ? ` (${off.join(", ")} off)` : ""}${extras}`;
   });
   /** Number of stems the loaded song has (from its model; the mixer rows otherwise). */
   songStemCount = $derived.by(() => {
@@ -219,7 +222,9 @@ class AppState {
     return m?.stems.length || STEMS.length;
   });
   exportFromOriginal = $derived(
-    !this.anySolo && backingFromOriginal(!!this.song?.original_available, this.exportStems.length, this.songStemCount),
+    // Like playback: only switched-on rows count (an off row with an exception doesn't).
+    !this.anySolo &&
+      backingFromOriginal(!!this.song?.original_available, STEMS.filter((s) => this.mix[s].on).length, this.songStemCount),
   );
   /** Every stem on and nothing soloed ("All on" would change nothing). */
   allOnAlready = $derived(STEMS.every((s) => this.mix[s].on && !this.mix[s].solo));
@@ -235,8 +240,18 @@ class AppState {
   private saveTimer: number | null = null;
   private started = false;
 
+  /**
+   * The row plays something: with a solo, the soloed rows; otherwise rows
+   * that are on, and off rows with a stereo exception (they play that part).
+   */
   audible(stem: StemName): boolean {
-    return this.anySolo ? this.mix[stem].solo : this.mix[stem].on;
+    const m = this.mix[stem];
+    return this.anySolo ? m.solo : m.on || hasException(this.refine[stem]);
+  }
+
+  /** Off, but playing the excepted part (drawn half dimmed, switch half lit). */
+  partlyOn(stem: StemName): boolean {
+    return this.audible(stem) && !this.mix[stem].on && !this.mix[stem].solo;
   }
 
   async init() {
@@ -837,7 +852,7 @@ class AppState {
       await api.exportMix({
         path,
         format: this.exportFormat,
-        stems: this.exportStems.map((s) => ({ stem: s, volume: this.mix[s].volume })),
+        stems: this.exportStems.map((s) => ({ stem: s, volume: this.mix[s].volume, on: this.mix[s].on })),
         solo: this.anySolo,
         speed_percent: this.speed,
         semitones: this.semitones,

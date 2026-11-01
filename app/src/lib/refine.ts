@@ -11,7 +11,7 @@ export const SHELF_MAX_DB = 12;
 export const BAND_MAX_DB = 15;
 export const STRENGTH_NAMES = ["Natural", "Light", "Medium", "Strong", "Tight"] as const;
 
-export const defaultPan = (): PanParams => ({ enabled: false, center: 0, width: 0.66, softness: 0.2, mode: "keep" });
+export const defaultPan = (): PanParams => ({ enabled: false, center: 0, width: 0.66, softness: 0.2 });
 const end = (freq: number): EndParams => ({ enabled: false, freq, mode: "cut", gain_db: 0 });
 const band = (freq: number): BandParams => ({ enabled: false, freq, gain_db: 0, q: 1 });
 export const flatEq = (): EqParams => ({ low_cut: end(80), high_cut: end(12000), bands: [band(200), band(1000), band(5000)] });
@@ -46,6 +46,26 @@ export function isIdentity(p: RefineParams | undefined): boolean {
   return !p || (!p.pan.enabled && eqIsFlat(p.eq));
 }
 
+/** Drops fields PanParams no longer has (the old Keep/Remove `mode`). */
+function panOnly(p: PanParams): PanParams {
+  return { enabled: !!p.enabled, center: p.center, width: p.width, softness: p.softness };
+}
+
+/** True when the stem has a stereo exception (the window flips with the switch). */
+export const hasException = (p: RefineParams | undefined) => !!p?.pan.enabled;
+
+/** Which part of the field the exception covers, by its centre. */
+export type Side = "left" | "centre" | "right";
+export function exceptionSide(p: PanParams): Side {
+  return p.center <= -0.2 ? "left" : p.center >= 0.2 ? "right" : "centre";
+}
+
+/** "Guitar on" / "Guitar off, except left" (switch tooltip and accessible name). */
+export function switchText(label: string, on: boolean, p: RefineParams | undefined): string {
+  const base = `${label} ${on ? "on" : "off"}`;
+  return p && hasException(p) ? `${base}, except ${exceptionSide(p.pan)}` : base;
+}
+
 /** Fills in fields missing from older saved params (shelf fields etc.). */
 export function normalise(p: Partial<RefineParams> | undefined): RefineParams {
   const d = defaultRefine();
@@ -54,7 +74,7 @@ export function normalise(p: Partial<RefineParams> | undefined): RefineParams {
   const b = (x: Partial<BandParams> | undefined, f: BandParams): BandParams => ({ ...f, ...x });
   const eq = p.eq ?? d.eq;
   return {
-    pan: { ...d.pan, ...p.pan },
+    pan: panOnly({ ...d.pan, ...p.pan }),
     eq: {
       low_cut: e(eq.low_cut, d.eq.low_cut),
       high_cut: e(eq.high_cut, d.eq.high_cut),
@@ -63,15 +83,21 @@ export function normalise(p: Partial<RefineParams> | undefined): RefineParams {
   };
 }
 
-/** Raised-cosine window gain (pan.rs `window_gain`), and the mask with keep/remove. */
+/** Raised-cosine window gain (pan.rs `window_gain`). */
 export function windowGain(pan: number, center: number, width: number, softness: number): number {
   const d = Math.abs(pan - center);
   const t = Math.max(0, Math.min(1, (d - (width * 0.5 - softness * 0.5)) / softness));
   return 0.5 + 0.5 * Math.cos(Math.PI * t);
 }
-export function maskGain(p: PanParams, pan: number): number {
+/**
+ * How much of the stem at `pan` is heard (0…1) for a row whose switch is
+ * `on`: no exception → all or nothing; with one, the window does the
+ * opposite of the switch.
+ */
+export function heardGain(p: PanParams, on: boolean, pan: number): number {
+  if (!p.enabled) return on ? 1 : 0;
   const g = windowGain(pan, p.center, p.width, Math.max(0.02, p.softness));
-  return p.mode === "keep" ? g : 1 - g;
+  return on ? 1 - g : g;
 }
 
 // ---- EQ response (RBJ cookbook, as eq.rs `response_db`) ----

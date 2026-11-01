@@ -596,6 +596,7 @@ export const mockBackend: Backend = {
     if (!song) throw new Error("No song open");
     const key = LS_REFINE + song.song_id;
     const all = lsGet<Partial<Record<StemName, RefineParams>>>(key, {});
+    if ("mode" in params.pan) throw new Error("PanParams has no mode any more");
     if (isIdentity(params)) delete all[stem];
     else all[stem] = params;
     lsSet(key, all);

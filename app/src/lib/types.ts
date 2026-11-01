@@ -43,15 +43,16 @@ export interface SongInfo {
 
 // ---- Refine panel (P5) ----
 
-export type PanMode = "keep" | "remove";
-
-/** Stereo selection: a raised-cosine window over pan −1 (left) … +1 (right). */
+/**
+ * Stereo exception: a raised-cosine window over pan −1 (left) … +1 (right).
+ * The window does the opposite of the row's on switch: on → the stem without
+ * the window, off → only the window (heard at the row's volume).
+ */
 export interface PanParams {
   enabled: boolean;
   center: number; // −1 … +1
   width: number; // full width between the −6 dB points, 0 … 2
   softness: number; // edge width in pan units (0.2 default)
-  mode: PanMode;
 }
 
 /** Low/high end of the EQ: a 24 dB/oct cut or a shelf (±12 dB). */
@@ -234,7 +235,11 @@ export type ExportFormat = "wav" | "flac" | "mp3";
 export interface ExportRequest {
   path: string;
   format: ExportFormat;
-  stems: { stem: StemName; volume: number }[];
+  /**
+   * The stems that play, each with its volume and on switch (`on` decides
+   * which part a stem with a stereo exception plays; missing = true).
+   */
+  stems: { stem: StemName; volume: number; on?: boolean }[];
   /** The stems are the soloed ones: mixed as the plain sum (never from the original). */
   solo: boolean;
   speed_percent: number;
