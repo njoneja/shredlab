@@ -115,7 +115,7 @@ class DemucsCore(torch.nn.Module):
 def _xformer_forward(self, x, xt):
     """CrossTransformerEncoder.forward with explicit permute/reshape instead of
     einops and positional embeddings computed eagerly (traced as constants)."""
-    from audio_separator.separator.uvr_lib_v5.demucs.transformer import create_2d_sin_embedding
+    create_2d_sin_embedding = onnx_demucs.demucs_modules()[1].create_2d_sin_embedding
 
     B, C, Fr, T1 = (int(s) for s in x.shape)
     with torch.no_grad():
@@ -172,7 +172,7 @@ def _my_groupnorm_forward(self, x):
 
 
 def patch(model, mha=True):
-    from audio_separator.separator.uvr_lib_v5.demucs import transformer as tr
+    tr = onnx_demucs.demucs_modules()[1]
 
     ct = model.crosstransformer
     ct.forward = _xformer_forward.__get__(ct)
@@ -291,16 +291,20 @@ def _window(audio_path):
     return (w - w.mean()) / w.std()
 
 
-def export():
-    model = patch(load_torch_model())
+def export(onnx_path=ONNX_PATH, ckpt_path=None):
+    """Export the network core. ckpt_path: htdemucs_6s checkpoint (default models/5c90dfd2-34c22ccb.th)."""
+    onnx_path = Path(onnx_path)
+    onnx_path.parent.mkdir(parents=True, exist_ok=True)
+    torch.manual_seed(0)
+    model = patch(load_torch_model(ckpt_path))
     core = DemucsCore(model).eval()
     mix = torch.randn(1, 2, SEGMENT)
     mag = torch.from_numpy(cac(spec(mix[0].numpy())))
     t0 = time.perf_counter()
     with torch.no_grad():
-        torch.onnx.export(core, (mix, mag), str(ONNX_PATH), input_names=["mix", "mag"],
+        torch.onnx.export(core, (mix, mag), str(onnx_path), input_names=["mix", "mag"],
                           output_names=["wave", "spec"], opset_version=17, do_constant_folding=True)
-    print(f"exported {ONNX_PATH} ({ONNX_PATH.stat().st_size / 1e6:.0f} MB) in {time.perf_counter() - t0:.0f}s")
+    print(f"exported {onnx_path} ({onnx_path.stat().st_size / 1e6:.0f} MB) in {time.perf_counter() - t0:.0f}s")
 
 
 def debug(audio_path=None):

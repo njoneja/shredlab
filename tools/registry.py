@@ -1,7 +1,7 @@
 """Build and verify model folders (model.json + onnx + selftest.json).
 
 Usage (from the repo root, venv python):
-    python tools/registry.py build-htdemucs [--dest models/registry]
+    python tools/registry.py build-htdemucs [--dest models/registry] [--onnx models/onnx/htdemucs_6s_own.onnx]
     python tools/registry.py verify <model dir> [--ep cpu|dml] [--dml-fusion]
 
 `build-htdemucs` packages models/onnx/htdemucs_6s_own.onnx (exported by
@@ -29,9 +29,10 @@ DEMUCS_SESSION = {
 }
 
 
-def build_htdemucs(dest):
+def build_htdemucs(dest, onnx=HTDEMUCS_ONNX):
+    onnx = Path(onnx)
     model_dir = Path(dest) / "htdemucs_6s"
-    how = mf.install_onnx(HTDEMUCS_ONNX, model_dir / HTDEMUCS_ONNX.name)
+    how = mf.install_onnx(onnx, model_dir / HTDEMUCS_ONNX.name)
     manifest = mf.build_manifest(
         id="htdemucs_6s",
         name="Demucs v4 (6 stems)",
@@ -72,13 +73,14 @@ def main():
     sub = ap.add_subparsers(dest="cmd", required=True)
     b = sub.add_parser("build-htdemucs")
     b.add_argument("--dest", default=str(ROOT / "models" / "registry"))
+    b.add_argument("--onnx", default=str(HTDEMUCS_ONNX), help="exported htdemucs_6s_own.onnx")
     v = sub.add_parser("verify")
     v.add_argument("model_dir")
     v.add_argument("--ep", default="cpu", choices=["cpu", "dml"])
     v.add_argument("--dml-fusion", action="store_true")
     a = ap.parse_args()
     if a.cmd == "build-htdemucs":
-        build_htdemucs(a.dest)
+        build_htdemucs(a.dest, a.onnx)
     else:
         sys.exit(0 if verify(a.model_dir, a.ep, a.dml_fusion) else 1)
 

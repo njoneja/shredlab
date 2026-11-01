@@ -11,7 +11,8 @@ to Rust 1:1:
     merge adjacent peaks, snap downbeats to nearest beat (no madmom/DBN).
 
 Upstream source is vendored (read-only) in spikes/third_party/beat_this/ and is
-only imported for the PyTorch reference / export.
+only imported for the PyTorch reference / export. Without it, the installed
+`beat-this` package (pip beat-this==1.1.0, same code) is used.
 
 Usage:
     python spikes/onnx_beat_this.py export [final0|small0]
@@ -177,11 +178,15 @@ def tempo(beats):
 # ----------------------------------------------------------- torch / export
 
 
-def load_torch_model(name=MODEL_NAME):
-    sys.path.insert(0, str(UPSTREAM))
+def load_torch_model(name=MODEL_NAME, ckpt_path=None):
+    # Model code: the vendored upstream source if present, else the installed
+    # `beat-this` package (pip beat-this==1.1.0, used by tools/setup_models.py).
+    if UPSTREAM.is_dir():
+        sys.path.insert(0, str(UPSTREAM))
     from beat_this.inference import load_model
 
-    return load_model(str(CKPT_DIR / f"beat_this-{name}.ckpt"), "cpu")  # torch.load(weights_only=True)
+    ckpt = ckpt_path or CKPT_DIR / f"beat_this-{name}.ckpt"
+    return load_model(str(ckpt), "cpu")  # torch.load(weights_only=True)
 
 
 def _rotate_half(x):
@@ -266,12 +271,15 @@ def make_core(model):
     return Core(model).eval()
 
 
-def export(name="final0"):
-    model = load_torch_model(name)
+def export(name="final0", ckpt_path=None, out_path=None):
+    global torch
+    import torch
+
+    model = load_torch_model(name, ckpt_path)
     assert hasattr(model.task_heads, "beat_downbeat_lin")
     core = make_core(model)
     dummy = torch.from_numpy(np.random.default_rng(0).standard_normal((1, CHUNK, N_MELS)).astype(np.float32))
-    path = onnx_path(name)
+    path = Path(out_path) if out_path else onnx_path(name)
     path.parent.mkdir(parents=True, exist_ok=True)
     t0 = time.perf_counter()
     torch.onnx.export(core, (dummy,), str(path), input_names=["spect"], output_names=["beat", "downbeat"],
@@ -279,7 +287,7 @@ def export(name="final0"):
     print(f"exported {path} ({path.stat().st_size / 1e6:.1f} MB) in {time.perf_counter() - t0:.0f}s")
     # sanity: wrapper vs upstream forward on the dummy chunk (fresh, unpatched model)
     with torch.no_grad():
-        ref = load_torch_model(name)(dummy)
+        ref = load_torch_model(name, ckpt_path)(dummy)
         b, d = core(dummy)
     print("wrapper vs upstream max abs diff: beat %.2e downbeat %.2e"
           % ((b - ref["beat"]).abs().max(), (d - ref["downbeat"]).abs().max()))
@@ -294,7 +302,8 @@ def _key(path):
 
 def ref(paths):
     """Upstream pipeline end-to-end in PyTorch (Audio2Beats, minimal postprocessing)."""
-    sys.path.insert(0, str(UPSTREAM))
+    if UPSTREAM.is_dir():
+        sys.path.insert(0, str(UPSTREAM))
     from beat_this.inference import Audio2Beats
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)

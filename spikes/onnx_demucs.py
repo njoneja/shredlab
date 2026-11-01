@@ -9,6 +9,7 @@ Usage:
     python spikes/onnx_demucs.py separate <audio>...    # full songs on DirectML
 """
 
+import functools
 import sys
 import time
 from pathlib import Path
@@ -73,10 +74,37 @@ def separate(sess, mix):
     return out * std + mean
 
 
-def load_torch_model():
-    import torch
+@functools.lru_cache(maxsize=None)
+def demucs_modules():
+    """Return (states, transformer) modules of the Demucs model code.
+
+    Prefers upstream `demucs` (pip `demucs==4.0.1 --no-deps`, used by
+    tools/setup_models.py) and falls back to the copy vendored in
+    audio-separator (the original .venv). Upstream `demucs.states` imports
+    `omegaconf` and `dora.log` at module level, but neither is used when
+    loading a model, so missing ones are replaced by inert stubs instead of
+    pulling in dora-search (and its training dependencies)."""
+    import importlib.util
+    import types
+
+    if importlib.util.find_spec("demucs") is not None and importlib.util.find_spec("demucs.htdemucs") is not None:
+        try:
+            import omegaconf  # noqa: F401
+        except ImportError:
+            sys.modules["omegaconf"] = types.SimpleNamespace(OmegaConf=None)
+        try:
+            import dora.log  # noqa: F401
+        except ImportError:
+            def fatal(*args):
+                raise RuntimeError(" ".join(map(str, args)))
+
+            sys.modules["dora"] = types.ModuleType("dora")
+            sys.modules["dora.log"] = types.SimpleNamespace(fatal=fatal)
+        from demucs import states, transformer
+
+        return states, transformer
+
     from audio_separator.separator.uvr_lib_v5 import demucs as vendored_demucs
-    from audio_separator.separator.uvr_lib_v5.demucs.states import load_model
 
     # The checkpoint pickles references to the `demucs` package; audio-separator
     # vendors it under another name.
@@ -86,8 +114,16 @@ def load_torch_model():
             sys.modules.setdefault(f"demucs.{sub}", __import__(f"audio_separator.separator.uvr_lib_v5.demucs.{sub}", fromlist=["_"]))
         except ImportError:
             pass
+    from audio_separator.separator.uvr_lib_v5.demucs import states, transformer
 
-    model = load_model(torch.load(TORCH_PATH, map_location="cpu", weights_only=False))
+    return states, transformer
+
+
+def load_torch_model(path=None):
+    import torch
+
+    states, _ = demucs_modules()
+    model = states.load_model(torch.load(path or TORCH_PATH, map_location="cpu", weights_only=False))
     model.eval()
     return model
 
