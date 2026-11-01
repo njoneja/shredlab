@@ -51,8 +51,9 @@
 <svelte:window onclick={() => (menu = null)} onkeydown={(e) => e.key === "Escape" && (menu = null)} />
 
 <section class="mixer" class:disabled aria-label="Stem mixer">
-  <!-- Same columns as the rows: All on sits above S and ⊘, the heading above the labels. -->
+  <!-- Same columns as the rows: the heading above the switches, All on above S and ⊘. -->
   <div class="head">
+    <h2>Stems</h2>
     <button
       class="btn small all-on"
       aria-pressed={app.allOnAlready}
@@ -64,7 +65,6 @@
     >
       All on
     </button>
-    <h2>Stems</h2>
   </div>
   {#if disabled}
     <div class="notice">
@@ -195,6 +195,7 @@
   }
   h2 {
     margin: 0;
+    white-space: nowrap;
     font-size: 12px;
     font-weight: 600;
     text-transform: uppercase;
