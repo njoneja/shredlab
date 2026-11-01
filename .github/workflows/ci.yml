@@ -47,6 +47,24 @@ jobs:
           cache: pnpm
           cache-dependency-path: app/pnpm-lock.yaml
 
+      # The ONNX models are not in git; the Tauri crate bundles them, so
+      # every build needs them. Built from the upstream checkpoints and cached.
+      - name: Cache models
+        id: models-cache
+        uses: actions/cache@v4
+        with:
+          path: models
+          key: models-${{ runner.os }}-${{ hashFiles('requirements-models.txt', 'tools/setup_models.py', 'tools/registry.py', 'tools/reference/**', 'spikes/onnx_demucs.py', 'spikes/onnx_demucs_own.py', 'spikes/onnx_beat_this.py') }}
+
+      - uses: actions/setup-python@v5
+        if: steps.models-cache.outputs.cache-hit != 'true'
+        with:
+          python-version: '3.12'
+
+      - name: Build models
+        if: steps.models-cache.outputs.cache-hit != 'true'
+        run: python tools/setup_models.py
+
       - name: Install frontend dependencies
         working-directory: app
         run: pnpm install --frozen-lockfile

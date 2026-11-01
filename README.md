@@ -7,9 +7,10 @@ removed or listen to one by itself, with speed change without pitch change,
 transposition, A–B loops and a click track with count-in. It is built with Tauri 2 and a Rust core, runs separation models with
 ONNX Runtime (DirectML / CoreML / CPU), and targets Windows and macOS.
 
-Status: early development (milestone M0, skeleton). See [docs/](docs/) for
-the [spec](docs/SPEC.md), [milestones](docs/MILESTONES.md) and
-[current status](docs/STATUS.md).
+Status: works end to end on Windows (separate, beats, mixer, speed/pitch,
+loops, click, export); macOS has not been built or run yet. See
+[docs/](docs/) for the [spec](docs/SPEC.md), [milestones](docs/MILESTONES.md)
+and [current status](docs/STATUS.md).
 
 ## Repository layout
 
@@ -19,45 +20,113 @@ the [spec](docs/SPEC.md), [milestones](docs/MILESTONES.md) and
 | `crates/stemx-dsp` | STFT/iSTFT, chunking, overlap-add |
 | `crates/stemx-io` | Decode, encode, resample |
 | `crates/stemx-separation` | ONNX Runtime sessions, model registry, adapters |
-| `crates/stemx-audio` | Real-time audio engine |
+| `crates/stemx-audio` | Real-time audio engine, offline render, WAV/FLAC/MP3 export |
+| `crates/stemx-beats` | Beat/downbeat detection (Beat This! ONNX) |
 | `crates/stemx-library` | Song folders, JSON manifest, stem cache |
 | `crates/stemx-cli` | `stemx`, headless CLI |
+| `tools/` | Python tooling: model setup/export, model folders, fixtures ([tools/README.md](tools/README.md)) |
 | `spikes/`, `scripts/` | Python reference implementations (Rust ports are validated against them) |
 | `docs/` | Spec, milestones, status |
 
-## Development setup
+## Building from scratch
 
-You need:
+Windows 11 x64 is the tested platform. macOS (Apple Silicon) should work but
+is **untested**: the CoreML code path compiles but has never run on a Mac
+(see [macOS notes](#macos-notes)).
 
-- **Rust** (stable, via [rustup](https://rustup.rs)), with `rustfmt` and `clippy`.
-- **Node.js** 24 and **pnpm** 12.
-- Platform prerequisites for Tauri 2
-  ([guide](https://v2.tauri.app/start/prerequisites/)): on Windows, the MSVC
-  build tools and WebView2; on macOS, the Xcode command line tools.
+### 1. Prerequisites
 
-Install the frontend dependencies once:
+- **Rust** stable via [rustup](https://rustup.rs), with `rustfmt` and `clippy`
+  (`rustup component add rustfmt clippy`).
+- **Node.js 24** ([nodejs.org](https://nodejs.org)) and **pnpm 12**
+  ([pnpm.io/installation](https://pnpm.io/installation)).
+- A C/C++ compiler (Tauri, the vendored Signalsmith Stretch and LAME are
+  compiled from source):
+  - Windows: [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)
+    with the **Desktop development with C++** workload, and WebView2 (preinstalled
+    on Windows 11).
+  - macOS: Xcode Command Line Tools (`xcode-select --install`).
+  - Details: [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/).
+- **uv** ([docs.astral.sh/uv](https://docs.astral.sh/uv/getting-started/installation/))
+  or **Python 3.12** ([python.org](https://www.python.org/downloads/)), only
+  for the one-time model setup.
+
+### 2. Frontend dependencies
 
 ```sh
 pnpm --dir app install
 ```
 
-## Commands
+### 3. Models
+
+The ONNX models are not in git (`models/` is ignored). They are built from
+the official MIT-licensed checkpoints (Demucs v4 `htdemucs_6s`, Beat This!
+`final0`). Every app build needs them, because the Tauri config bundles
+them. One command does it all: creates a CPU-only Python venv
+(`.venv-models`), downloads the checkpoints (~140 MB, sha256-checked),
+exports the ONNX files and verifies them against reference outputs.
+
+```powershell
+# Windows (PowerShell)
+.\scripts\setup-models.ps1
+```
 
 ```sh
-pnpm --dir app tauri dev                          # run the app with hot reload
-pnpm --dir app tauri build --debug --no-bundle    # build the app binary (target/debug)
-pnpm --dir app check                              # type-check the frontend
+# macOS
+./scripts/setup-models.sh
+```
 
-cargo test --workspace                            # Rust unit tests
-cargo run -p stemx-cli -- info                    # CLI: print crate versions
-cargo fmt --all --check                           # formatting
+Or run `python tools/setup_models.py` with any Python 3.9+ directly. It takes
+a few minutes (mostly downloading ~250 MB of PyTorch and ~140 MB of
+checkpoints; the exports themselves take seconds to a minute) and about
+1.7 GB of disk: ~1.4 GB for `.venv-models` (delete it afterwards if you
+like) and ~320 MB in `models/`. Running it again skips everything that is
+already there; `--force` rebuilds (old files are kept as `*.bak-*`),
+`--out DIR` writes somewhere else. See [tools/README.md](tools/README.md).
+
+### 4. Build and run
+
+```sh
+pnpm --dir app tauri dev                   # run the app (debug, hot reload)
+pnpm --dir app tauri build --no-bundle     # release exe: target/release/stem-extractor(.exe)
+pnpm --dir app bundle                      # installers: target/release/bundle/ (NSIS + MSI / .app + .dmg)
+```
+
+On Windows the release exe needs `DirectML.dll` next to it (the build puts
+it in `target/release`; `pnpm bundle` ships it in the installers).
+
+### 5. Tests and checks
+
+```sh
+pnpm --dir app build                       # once, see note below
+pnpm --dir app check                       # type-check the frontend
+cargo test --workspace                     # Rust unit tests
+cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
 Note: the Tauri crate embeds the built frontend, so `cargo build`/`clippy`/
 `test` on the whole workspace need `app/dist` to exist. Run
 `pnpm --dir app build` once first (any `tauri dev`/`tauri build` also
-creates it).
+creates it). They also need the models from step 3.
+
+Headless end-to-end check (separates a song, detects beats and plays a few
+seconds of audio): `STEMX_AUTOTEST=<song> STEMX_AUTOTEST_EXIT=1 pnpm --dir app
+tauri dev` prints `AUTOTEST PASS`. Other environment overrides are listed in
+[docs/STATUS.md](docs/STATUS.md).
+
+### macOS notes
+
+Not built or run yet; expect some fixing on the first try:
+
+- There is no `DirectML.dll`; GPU inference goes through CoreML (with a
+  self-test and CPU fallback). The Windows-only DLL is added to the bundle by
+  `app/src-tauri/tauri.bundle.windows.conf.json`, which `pnpm bundle` uses
+  only on Windows.
+- Model setup needs macOS 14+ on Apple Silicon (onnxruntime 1.24 wheels).
+- The app is unsigned and not notarized; Gatekeeper will complain.
+
+## Developer notes
 
 ### Separation CLI (`stemx`)
 
