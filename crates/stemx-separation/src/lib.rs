@@ -37,7 +37,9 @@ pub use manifest::{AdapterKind, Manifest, SelfTestSpec};
 pub use registry::{ModelEntry, ModelRegistry, ModelSource};
 pub use runtime::{DevicePref, Ep, SessionOverrides};
 pub use selftest::SelfTestReport;
-pub use separator::{run_selftest, LoadOptions, Rejected, SelfTestStatus, Separator, Stems};
+pub use separator::{
+    max_shift, run_selftest, shift_offsets, LoadOptions, Rejected, SelfTestStatus, Separator, Stems,
+};
 
 /// Version of this crate, from `Cargo.toml`.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

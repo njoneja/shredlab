@@ -28,13 +28,39 @@ pub trait Adapter: Send {
     /// adapter's song normalization (if any) computed over that segment.
     fn run_single_segment(&mut self, channels: &[&[f32]]) -> Result<Vec<f32>>;
 
-    /// Full-song separation. `before_chunk` is called before each model call
-    /// with (chunks done, total) and may abort by returning an error.
-    fn separate(
+    /// Song normalization `(mean, std)` the adapter applies around its
+    /// chunked run (`(x - mean) / std` before, `y * std + mean` after), or
+    /// `None` if it feeds the audio as is.
+    fn song_stats(&self, _channels: &[&[f32]]) -> Option<(f32, f32)> {
+        None
+    }
+
+    /// Chunked full-song run on input that is already normalized (see
+    /// [`Adapter::song_stats`]); output in the same normalized domain.
+    /// `before_chunk` is called before each model call with (chunks done,
+    /// total) and may abort by returning an error.
+    fn separate_normalized(
         &mut self,
         channels: &[&[f32]],
         before_chunk: &mut dyn FnMut(usize, usize) -> Result<()>,
     ) -> Result<Vec<f32>>;
+
+    /// Full-song separation: normalize (if the adapter does), chunked run,
+    /// denormalize. `before_chunk` as in [`Adapter::separate_normalized`].
+    fn separate(
+        &mut self,
+        channels: &[&[f32]],
+        before_chunk: &mut dyn FnMut(usize, usize) -> Result<()>,
+    ) -> Result<Vec<f32>> {
+        let Some((mean, std)) = self.song_stats(channels) else {
+            return self.separate_normalized(channels, before_chunk);
+        };
+        let norm = normalized(channels, mean, std);
+        let views: Vec<&[f32]> = norm.iter().map(Vec::as_slice).collect();
+        let mut y = self.separate_normalized(&views, before_chunk)?;
+        denormalize(&mut y, mean, std);
+        Ok(y)
+    }
 }
 
 /// Creates the adapter for a manifest around a session.
@@ -69,11 +95,18 @@ fn ort_err(e: ort::Error) -> Error {
 }
 
 /// Copies `(C, segment)` and normalizes in place.
-fn normalized(channels: &[&[f32]], mean: f32, std: f32) -> Vec<Vec<f32>> {
+pub(crate) fn normalized(channels: &[&[f32]], mean: f32, std: f32) -> Vec<Vec<f32>> {
     channels
         .iter()
         .map(|c| c.iter().map(|v| (v - mean) / std).collect())
         .collect()
+}
+
+/// Inverse of [`normalized`], in place: `v * std + mean`.
+pub(crate) fn denormalize(y: &mut [f32], mean: f32, std: f32) {
+    for v in y {
+        *v = *v * std + mean;
+    }
 }
 
 // --- demucs-hybrid -----------------------------------------------------------
@@ -195,25 +228,24 @@ impl Adapter for DemucsHybrid {
         let (mean, std) = chunk::song_stats(channels);
         let x: Vec<f32> = normalized(channels, mean, std).concat();
         let mut y = self.run_window(&x)?;
-        for v in &mut y {
-            *v = *v * std + mean;
-        }
+        denormalize(&mut y, mean, std);
         Ok(y)
     }
 
-    fn separate(
+    fn song_stats(&self, channels: &[&[f32]]) -> Option<(f32, f32)> {
+        Some(chunk::song_stats(channels))
+    }
+
+    fn separate_normalized(
         &mut self,
         channels: &[&[f32]],
         before_chunk: &mut dyn FnMut(usize, usize) -> Result<()>,
     ) -> Result<Vec<f32>> {
-        let (mean, std) = chunk::song_stats(channels);
-        let norm = normalized(channels, mean, std);
-        let views: Vec<&[f32]> = norm.iter().map(Vec::as_slice).collect();
-        let total = chunk::chunk_offsets(views[0].len(), self.segment, self.overlap).len();
+        let total = chunk::chunk_offsets(channels[0].len(), self.segment, self.overlap).len();
         let mut k = 0;
         let (segment, overlap, n) = (self.segment, self.overlap, self.n_stems);
-        let mut y = chunk::apply_demucs(
-            &views,
+        chunk::apply_demucs(
+            channels,
             segment,
             overlap,
             n,
@@ -223,11 +255,7 @@ impl Adapter for DemucsHybrid {
                 self.run_window(w)
             },
             &mut |_, _| {},
-        )?;
-        for v in &mut y {
-            *v = *v * std + mean;
-        }
-        Ok(y)
+        )
     }
 }
 
@@ -362,7 +390,7 @@ impl Adapter for RoformerMask {
         self.run_window(&channels.concat())
     }
 
-    fn separate(
+    fn separate_normalized(
         &mut self,
         channels: &[&[f32]],
         before_chunk: &mut dyn FnMut(usize, usize) -> Result<()>,
