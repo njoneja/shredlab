@@ -349,9 +349,9 @@ export const mockBackend: Backend = {
   },
   async getLibrary() {
     const lib = lsGet<LibraryEntry[]>(LS_LIB, []);
-    if (lib.length) return lib;
-    // Seed a couple of entries so the empty state shows recents.
-    return DEMO_SONGS.slice(1, 3).map((s, i) => ({
+    // Pad with the demo songs (older than anything opened) so the start screen and the
+    // header's Open menu always have a few recents to show.
+    const seeds = DEMO_SONGS.slice(1).map((s, i) => ({
       song_id: songIdFor(s.path),
       path: s.path,
       title: s.title,
@@ -360,6 +360,7 @@ export const mockBackend: Backend = {
       stems_cached: false,
       last_opened_ms: Date.now() - (i + 1) * 86400000,
     }));
+    return [...lib, ...seeds.filter((d) => !lib.some((e) => e.song_id === d.song_id))];
   },
   async startSeparation() {
     if (!song) throw new Error("No song open");
