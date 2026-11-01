@@ -161,6 +161,7 @@ fn main() {
             gains: gains.clone(),
             speed: args.speed,
             semitones: args.pitch,
+            click: ClickConfig::default(),
         };
         let t = Instant::now();
         let mut last = -1;

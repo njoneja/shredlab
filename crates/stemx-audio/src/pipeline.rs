@@ -208,8 +208,9 @@ pub struct Pipeline {
 }
 
 impl Pipeline {
-    /// `realtime == false` (offline render) disables the click track and the
-    /// start fade so a unity, unstretched render is bit-exact.
+    /// `realtime == false` (offline render) disables the click track (see
+    /// [`Self::set_click_track`]) and the start fade so a unity, unstretched
+    /// render is bit-exact.
     pub fn new(tracks: Vec<Track>, gains: &[(String, f32)], realtime: bool) -> Self {
         let mixer = Mixer::new(tracks, gains);
         let sr = mixer.sample_rate();
@@ -244,6 +245,13 @@ impl Pipeline {
     /// offline render, which has its own limiter at encode time.
     pub fn set_limiter(&mut self, on: bool) {
         self.limiter = on.then(|| Limiter::new(self.sr));
+    }
+
+    /// Turns the click track on or off independently of [`ClickConfig::enabled`]
+    /// (on for real-time pipelines; the offline render turns it on to export
+    /// the click). The count-in follows `count_in_beats` either way.
+    pub fn set_click_track(&mut self, on: bool) {
+        self.click_enabled = on;
     }
 
     pub fn sample_rate(&self) -> u32 {
@@ -537,7 +545,8 @@ impl Pipeline {
         self.clicks[slot] = Some(c);
     }
 
-    fn mix_clicks(&mut self, l: &mut [f32], r: &mut [f32]) {
+    /// Adds the active clicks (mono) to `l` and, if given, `r`.
+    fn mix_clicks(&mut self, l: &mut [f32], mut r: Option<&mut [f32]>) {
         let n = l.len();
         for slot in self.clicks.iter_mut() {
             let Some(c) = slot else { continue };
@@ -548,7 +557,9 @@ impl Pipeline {
             for i in 0..m {
                 let s = snd[c.idx + i] * c.gain;
                 l[start + i] += s;
-                r[start + i] += s;
+                if let Some(r) = r.as_deref_mut() {
+                    r[start + i] += s;
+                }
             }
             c.idx += m;
             c.delay = c.delay.saturating_sub(n);
@@ -565,8 +576,36 @@ impl Pipeline {
         f | std::mem::take(&mut self.pending_flags)
     }
 
-    /// Renders `l.len()` frames (overwrites `l`, `r`, `meta`).
+    /// Renders `l.len()` frames (overwrites `l`, `r`, `meta`): the music
+    /// (through the safety limiter, if on) plus the clicks.
     pub fn render(&mut self, l: &mut [f32], r: &mut [f32], meta: &mut [Meta]) {
+        self.render_music(l, r, meta);
+        if let Some(lim) = &mut self.limiter {
+            lim.process(l, r);
+        }
+        self.mix_clicks(l, Some(r));
+    }
+
+    /// Like [`Self::render`], but the clicks (click track and count-in, mono)
+    /// go to `click` (overwritten) instead of being added to the music, and
+    /// there must be no safety limiter (clicks would be delayed by its
+    /// latency). For the offline render, which limits the music on its own
+    /// before adding the clicks.
+    pub fn render_split(
+        &mut self,
+        l: &mut [f32],
+        r: &mut [f32],
+        click: &mut [f32],
+        meta: &mut [Meta],
+    ) {
+        debug_assert!(click.len() == l.len() && self.limiter.is_none());
+        self.render_music(l, r, meta);
+        click.fill(0.0);
+        self.mix_clicks(click, None);
+    }
+
+    /// Music, transport and click scheduling (clicks are triggered, not mixed).
+    fn render_music(&mut self, l: &mut [f32], r: &mut [f32], meta: &mut [Meta]) {
         let n = l.len();
         debug_assert!(r.len() == n && meta.len() == n);
         let sr = self.sr as f64;
@@ -731,10 +770,6 @@ impl Pipeline {
                 }
             }
         }
-        if let Some(lim) = &mut self.limiter {
-            lim.process(l, r);
-        }
-        self.mix_clicks(l, r);
     }
 }
 

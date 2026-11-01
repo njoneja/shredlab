@@ -1,11 +1,12 @@
 //! Offline render for export: the same mix and stretch path as playback,
-//! whole song, no click, no loop.
+//! whole song, no loop, optionally with the click track and a count-in.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use crate::encode::{limiter_gain, CEILING};
 use crate::mix::MixMode;
 use crate::pipeline::{Meta, Pipeline};
-use crate::{AudioError, Track};
+use crate::{AudioError, ClickConfig, Track};
 
 /// What to render.
 #[derive(Debug, Clone)]
@@ -22,13 +23,24 @@ pub struct RenderRequest {
     pub speed: f64,
     /// Pitch shift in semitones (semitones + cents/100), -12.5..=12.5 (clamped).
     pub semitones: f64,
+    /// Click track (`enabled`) and count-in (`count_in_beats > 0`), exactly
+    /// as in playback. [`ClickConfig::default`] = neither (plain music).
+    pub click: ClickConfig,
 }
 
 const BLOCK: usize = 16_384;
 
 /// Renders the whole song at the tracks' sample rate. Output length is
-/// `round(len / speed)` (exactly `len` without stretching). `progress` gets
-/// 0..=1 (at most ~100 calls); `cancel` is polled between blocks.
+/// `round(len / speed)` (exactly `len` without stretching), plus the
+/// count-in if `req.click` has one. `progress` gets 0..=1 (at most ~100
+/// calls); `cancel` is polled between blocks.
+///
+/// Without click and count-in the output is the raw mix (the encoder's
+/// limiter takes care of peaks). With them, it mirrors playback, where
+/// clicks are added after the music's safety limiter: the music alone goes
+/// through the export peak limiter ([`limiter_gain`], -0.1 dBFS), then the
+/// clicks are added unlimited. Music + click can still exceed full scale;
+/// [`crate::encode`] limits that final sum, so the file never clips.
 pub fn render(
     req: &RenderRequest,
     progress: &mut dyn FnMut(f32),
@@ -37,23 +49,33 @@ pub fn render(
     if req.tracks.is_empty() && req.original.is_none() {
         return Err(AudioError::Invalid("no tracks to render".into()));
     }
+    let with_click = req.click.enabled || req.click.count_in_beats > 0;
     let mut p = Pipeline::new(Vec::new(), &req.gains, false);
     p.set_mix(req.gains.clone(), req.mode);
     p.load_with_original(req.tracks.clone(), req.original.clone());
     p.set_speed(req.speed);
     p.set_pitch(req.semitones);
+    if with_click {
+        p.set_click(req.click.clone());
+        p.set_click_track(req.click.enabled);
+    }
     let duration = p.duration();
     if duration <= 0.0 {
         return Err(AudioError::Invalid("tracks are empty".into()));
     }
+    let sr = p.sample_rate();
     let speed = req.speed.clamp(0.5, 1.5);
-    let expect = (duration * p.sample_rate() as f64 / speed).round() as usize;
+    let count_in =
+        crate::click::plan_count_in(&req.click, 0.0, speed).map_or(0.0, |c| c.audio_start());
+    let expect = ((duration / speed + count_in) * sr as f64).round() as usize;
     let mut out = [
         Vec::with_capacity(expect + BLOCK),
         Vec::with_capacity(expect + BLOCK),
     ];
+    let mut clicks: Vec<f32> = Vec::with_capacity(if with_click { expect + BLOCK } else { 0 });
     let mut l = vec![0.0f32; BLOCK];
     let mut r = vec![0.0f32; BLOCK];
+    let mut c = vec![0.0f32; if with_click { BLOCK } else { 0 }];
     let mut meta = vec![Meta::default(); BLOCK];
     p.play();
     progress(0.0);
@@ -62,10 +84,17 @@ pub fn render(
         if cancel.load(Ordering::Relaxed) {
             return Err(AudioError::Cancelled);
         }
-        p.render(&mut l, &mut r, &mut meta);
+        if with_click {
+            p.render_split(&mut l, &mut r, &mut c, &mut meta);
+        } else {
+            p.render(&mut l, &mut r, &mut meta);
+        }
         let n = meta.iter().position(|m| !m.playing()).unwrap_or(BLOCK);
         out[0].extend_from_slice(&l[..n]);
         out[1].extend_from_slice(&r[..n]);
+        if with_click {
+            clicks.extend_from_slice(&c[..n]);
+        }
         if n < BLOCK {
             break;
         }
@@ -75,8 +104,29 @@ pub fn render(
             last_report = f;
         }
     }
+    if with_click {
+        add_clicks_after_limiter(&mut out, &clicks, sr);
+    }
     progress(1.0);
     Ok(out)
+}
+
+/// Limits the music to [`CEILING`] (as the encoder would), then adds the
+/// mono click track to both channels, like playback adds clicks after its
+/// safety limiter.
+fn add_clicks_after_limiter(music: &mut [Vec<f32>; 2], clicks: &[f32], sample_rate: u32) {
+    if let Some(g) = limiter_gain(music, sample_rate, CEILING) {
+        for ch in music.iter_mut() {
+            for (x, g) in ch.iter_mut().zip(&g) {
+                *x *= g;
+            }
+        }
+    }
+    for ch in music.iter_mut() {
+        for (x, c) in ch.iter_mut().zip(clicks) {
+            *x += c;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -112,6 +162,7 @@ mod tests {
             gains: vec![("bass".into(), 1.0)],
             speed: 1.0,
             semitones: 0.0,
+            click: ClickConfig::default(),
         };
         let mut calls = 0;
         let out = render(&req, &mut |_| calls += 1, &AtomicBool::new(false)).unwrap();
@@ -131,6 +182,7 @@ mod tests {
                 gains: vec![("mix".into(), 1.0)],
                 speed,
                 semitones: semis,
+                click: ClickConfig::default(),
             };
             let out = render(&req, &mut |_| {}, &AtomicBool::new(false)).unwrap();
             let want = (88_200.0 / speed).round() as usize;
@@ -167,6 +219,7 @@ mod tests {
             gains: vec![("bass".into(), 1.0)],
             speed: 1.0,
             semitones: 0.0,
+            click: ClickConfig::default(),
         };
         let out = render(&req, &mut |_| {}, &AtomicBool::new(false)).unwrap();
         for i in 0..n {
@@ -183,8 +236,221 @@ mod tests {
             gains: vec![],
             speed: 0.9,
             semitones: 0.0,
+            click: ClickConfig::default(),
         };
         let r = render(&req, &mut |_| {}, &AtomicBool::new(true));
         assert!(matches!(r, Err(AudioError::Cancelled)));
+    }
+
+    fn click_cfg(beats: Vec<f64>, downbeats: Vec<f64>) -> ClickConfig {
+        ClickConfig {
+            enabled: true,
+            beats,
+            downbeats,
+            subdivision: 1,
+            count_in_beats: 0,
+            beats_per_bar: 4,
+            volume: 0.8,
+        }
+    }
+
+    /// Rising edges after at least `gap` quiet samples.
+    fn onsets(x: &[f32], gap: usize) -> Vec<usize> {
+        let mut out = vec![];
+        let mut quiet = gap + 1;
+        for (i, &v) in x.iter().enumerate() {
+            if v.abs() > 1e-4 {
+                if quiet > gap {
+                    out.push(i);
+                }
+                quiet = 0;
+            } else {
+                quiet += 1;
+            }
+        }
+        out
+    }
+
+    fn peak_at(x: &[f32], i: usize) -> f32 {
+        x[i..(i + 1000).min(x.len())]
+            .iter()
+            .fold(0.0f32, |m, v| m.max(v.abs()))
+    }
+
+    #[test]
+    fn click_off_render_is_unchanged() {
+        // Beats present but click and count-in off: bit-identical to no click.
+        let a = sine_track("mix", 220.0, 1.0);
+        let base = RenderRequest {
+            tracks: vec![a],
+            original: None,
+            mode: MixMode::Stems,
+            gains: vec![("mix".into(), 1.0)],
+            speed: 0.9,
+            semitones: 1.0,
+            click: ClickConfig::default(),
+        };
+        let mut off = click_cfg(vec![0.0, 0.5], vec![0.0]);
+        off.enabled = false;
+        let with_cfg = RenderRequest {
+            click: off,
+            ..base.clone()
+        };
+        let none = AtomicBool::new(false);
+        let x = render(&base, &mut |_| {}, &none).unwrap();
+        let y = render(&with_cfg, &mut |_| {}, &none).unwrap();
+        assert_eq!(x, y);
+    }
+
+    #[test]
+    fn click_lands_on_beats_at_export_speed() {
+        // Silent music so only the clicks remain; speed 0.8 stretches.
+        let beats = vec![0.5, 1.0, 1.5, 2.0, 2.5, 3.0];
+        let req = RenderRequest {
+            tracks: vec![sine_track("mix", 220.0, 4.0)],
+            original: None,
+            mode: MixMode::Stems,
+            gains: vec![],
+            speed: 0.8,
+            semitones: 2.0,
+            click: click_cfg(beats.clone(), vec![0.5, 2.5]),
+        };
+        let out = render(&req, &mut |_| {}, &AtomicBool::new(false)).unwrap();
+        assert!(out[0].len().abs_diff((4.0 * 44_100.0 / 0.8) as usize) <= 2);
+        assert_eq!(out[0], out[1]);
+        let on = onsets(&out[0], 2000);
+        assert_eq!(on.len(), beats.len(), "{on:?}");
+        for (&o, &b) in on.iter().zip(&beats) {
+            let want = (b * 44_100.0 / 0.8).round() as usize;
+            assert!(o.abs_diff(want) <= 2, "onset {o}, want {want}: {on:?}");
+        }
+        // Downbeats (0.5 and 2.5 s) are accented: louder, at the click volume.
+        let p: Vec<f32> = on.iter().map(|&o| peak_at(&out[0], o)).collect();
+        assert!(p[0] > p[1] * 1.3 && p[4] > p[3] * 1.3, "{p:?}");
+        let bank = crate::click::ClickBank::new(44_100);
+        let accent = peak_at(bank.get(crate::click::ClickKind::Accent), 0);
+        assert!((p[0] - 0.8 * accent).abs() < 0.01, "{p:?}");
+    }
+
+    #[test]
+    fn count_in_is_prepended_in_silence_before_the_song() {
+        let speed = 0.8;
+        let beats: Vec<f64> = (0..8).map(|i| i as f64 * 0.5).collect(); // 120 bpm
+        let base = RenderRequest {
+            tracks: vec![sine_track("mix", 220.0, 2.0)],
+            original: None,
+            mode: MixMode::Stems,
+            gains: vec![("mix".into(), 1.0)],
+            speed,
+            semitones: 0.0,
+            click: ClickConfig::default(),
+        };
+        let mut c = click_cfg(beats, vec![0.0, 2.0]);
+        c.enabled = false;
+        c.count_in_beats = 4;
+        c.beats_per_bar = 4;
+        let req = RenderRequest {
+            click: c,
+            ..base.clone()
+        };
+        let none = AtomicBool::new(false);
+        let plain = render(&base, &mut |_| {}, &none).unwrap();
+        let out = render(&req, &mut |_| {}, &none).unwrap();
+        // 4 clicks at the song-start tempo (0.5 s) / speed, music right after.
+        let interval = 0.5 / speed * 44_100.0;
+        let ci = out[0].len() - plain[0].len();
+        assert!(ci.abs_diff((4.0 * interval).round() as usize) <= 1, "{ci}");
+        let on = onsets(&out[0][..ci], 2000);
+        assert_eq!(on.len(), 4, "{on:?}");
+        for (j, &o) in on.iter().enumerate() {
+            assert!(
+                o.abs_diff((j as f64 * interval).round() as usize) <= 1,
+                "{on:?}"
+            );
+        }
+        let interval = interval as usize;
+        // Click "4" (a full bar before the start) is accented.
+        let p: Vec<f32> = on.iter().map(|&o| peak_at(&out[0], o)).collect();
+        assert!(p[0] > p[1] * 1.3, "{p:?}");
+        // No music under the count-in: silent between the clicks.
+        let snd = (0.030 * 44_100.0f64).round() as usize;
+        assert!(out[0][snd + 10..interval - 10].iter().all(|&x| x == 0.0));
+        // After it: the same music as without the count-in (the stretcher
+        // runs in different block phases, so not bit-identical when stretching).
+        let diff: Vec<f32> = out[0][ci..]
+            .iter()
+            .zip(&plain[0])
+            .map(|(a, b)| a - b)
+            .collect();
+        let rel = rms(&diff) / rms(&plain[0]);
+        assert!(rel < 0.05, "music after the count-in differs: {rel}");
+
+        // Unstretched: bit-identical music after the count-in.
+        let base1 = RenderRequest { speed: 1.0, ..base };
+        let req1 = RenderRequest { speed: 1.0, ..req };
+        let plain = render(&base1, &mut |_| {}, &none).unwrap();
+        let out = render(&req1, &mut |_| {}, &none).unwrap();
+        let ci = out[0].len() - plain[0].len();
+        assert_eq!(ci, 4 * 22_050);
+        assert_eq!(&out[0][ci..], &plain[0][..]);
+        assert_eq!(&out[1][ci..], &plain[1][..]);
+    }
+
+    #[test]
+    fn click_is_added_after_the_music_limiter_and_the_file_cannot_clip() {
+        // Music far above full scale (+6 dB on a 0.8 sine) plus clicks.
+        let n = 2 * 44_100;
+        let v: Vec<f32> = (0..n)
+            .map(|i| 0.8 * (2.0 * std::f32::consts::PI * 100.0 * i as f32 / 44_100.0).sin())
+            .collect();
+        let t = Track {
+            name: "mix".into(),
+            channels: [Arc::new(v.clone()), Arc::new(v)],
+            sample_rate: 44_100,
+        };
+        let mut c = click_cfg(vec![0.25, 0.75, 1.25, 1.75], vec![0.25]);
+        c.volume = 1.0;
+        let base = RenderRequest {
+            tracks: vec![t],
+            original: None,
+            mode: MixMode::Stems,
+            gains: vec![("mix".into(), 2.0)],
+            speed: 1.0,
+            semitones: 0.0,
+            click: ClickConfig::default(),
+        };
+        let req = RenderRequest {
+            click: c,
+            ..base.clone()
+        };
+        let none = AtomicBool::new(false);
+        let mut music = render(&base, &mut |_| {}, &none).unwrap();
+        let out = render(&req, &mut |_| {}, &none).unwrap();
+        // out = limited music + full-level clicks (the click is not ducked).
+        let g = limiter_gain(&music, 44_100, CEILING).unwrap();
+        for ch in music.iter_mut() {
+            for (x, g) in ch.iter_mut().zip(&g) {
+                *x *= g;
+            }
+        }
+        let click: Vec<f32> = out[0].iter().zip(&music[0]).map(|(a, b)| a - b).collect();
+        let got = peak_at(&click, (0.25 * 44_100.0) as usize);
+        let bank = crate::click::ClickBank::new(44_100);
+        let want = peak_at(bank.get(crate::click::ClickKind::Accent), 0);
+        assert!((got - want).abs() < 1e-3, "accent peak {got}, want {want}");
+        assert!(crate::peak(&out) > 1.0, "test needs a sum above full scale");
+        // The encoder limits the final sum: the file stays below full scale.
+        let dir = std::env::temp_dir().join(format!("stemx-render-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("click.wav");
+        crate::encode(&path, &out, 44_100, crate::ExportFormat::Wav24).unwrap();
+        let mut rd = hound::WavReader::open(&path).unwrap();
+        let max = rd
+            .samples::<i32>()
+            .map(|s| s.unwrap().unsigned_abs())
+            .max()
+            .unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(max as f32 / 8_388_607.0 <= CEILING + 1e-6, "peak {max}");
     }
 }

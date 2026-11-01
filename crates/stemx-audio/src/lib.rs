@@ -4,7 +4,8 @@
 //!   default output device with per-track gains, tempo change without pitch
 //!   change, pitch shift, A–B loop, click track and count-in.
 //! - [`render`] + [`encode`]: offline "export what you hear" (same mix and
-//!   stretch path, no click, no loop) to WAV, FLAC or MP3.
+//!   stretch path, whole song, no loop; click track and count-in optional)
+//!   to WAV, FLAC or MP3.
 //!
 //! # Architecture
 //!
@@ -19,7 +20,8 @@
 //! Speed 1.0 with pitch 0 bypasses the stretcher (bit-transparent at unity
 //! gain). Playback runs the music through a soft-knee look-ahead safety
 //! limiter ([`limiter`], transparent below -1 dBFS) before the click is
-//! added; export uses its own whole-file limiter instead. The mixer can
+//! added; export uses its own whole-file limiter instead (on the music
+//! before the click is added, then on the final sum). The mixer can
 //! build the backing track from the original mix ([`mix`], P1). The gained tracks are mixed first and the stereo mix is stretched
 //! once. Seeks, loop wraps, pause and stretch on/off are crossfaded (~10 ms).
 
