@@ -1,0 +1,11 @@
+[package]
+name = "stemx-io"
+description = "Audio decode, encode and resampling for Stem Extractor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]

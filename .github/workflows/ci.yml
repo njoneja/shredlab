@@ -1,0 +1,87 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            tauri_args: --debug --no-bundle
+            artifact_path: target/debug/stem-extractor.exe
+          - os: macos-latest
+            tauri_args: --debug --bundles app
+            artifact_path: target/debug/bundle/macos/stem-extractor-app.tar.gz
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: app/pnpm-lock.yaml
+
+      - name: Install frontend dependencies
+        working-directory: app
+        run: pnpm install --frozen-lockfile
+
+      - name: Type-check frontend
+        working-directory: app
+        run: pnpm check
+
+      # tauri::generate_context! needs app/dist to exist, so build the
+      # frontend before clippy/test compile the Tauri crate.
+      - name: Build frontend
+        working-directory: app
+        run: pnpm build
+
+      - name: cargo fmt
+        run: cargo fmt --all --check
+
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: cargo test
+        run: cargo test --workspace
+
+      - name: Build Tauri app
+        working-directory: app
+        run: pnpm tauri build ${{ matrix.tauri_args }}
+
+      - name: Package macOS app bundle
+        if: runner.os == 'macOS'
+        working-directory: target/debug/bundle/macos
+        # tar keeps the executable bit, which upload-artifact's zip drops.
+        run: tar -czf stem-extractor-app.tar.gz "Stem Extractor.app"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: stem-extractor-${{ runner.os }}-debug
+          path: ${{ matrix.artifact_path }}
+          if-no-files-found: error

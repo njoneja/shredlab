@@ -1,0 +1,33 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/stemx-dsp",
+    "crates/stemx-io",
+    "crates/stemx-separation",
+    "crates/stemx-audio",
+    "crates/stemx-library",
+    "crates/stemx-cli",
+    "app/src-tauri",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Stem Extractor contributors"]
+rust-version = "1.85"
+
+[workspace.dependencies]
+stemx-dsp = { path = "crates/stemx-dsp" }
+stemx-io = { path = "crates/stemx-io" }
+stemx-separation = { path = "crates/stemx-separation" }
+stemx-audio = { path = "crates/stemx-audio" }
+stemx-library = { path = "crates/stemx-library" }
+
+# Release profile tuned for small binaries (see https://tauri.app/concept/size/).
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+panic = "abort"
+strip = true
