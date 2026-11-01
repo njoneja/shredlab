@@ -109,6 +109,9 @@ enum Command {
         /// Skip the device self-test (GPU output is then not verified).
         #[arg(long)]
         no_selftest: bool,
+        /// Number of time-shifted passes to average (demucs shifts; 1 = plain).
+        #[arg(long, default_value_t = 1)]
+        shifts: usize,
         #[command(flatten)]
         dirs: ModelDirs,
         #[command(flatten)]
@@ -321,6 +324,7 @@ fn cmd_separate(
     device: DevicePref,
     int16: bool,
     no_selftest: bool,
+    shifts: usize,
     dirs: &ModelDirs,
     rt: &RuntimeArgs,
 ) -> Result<()> {
@@ -359,8 +363,9 @@ fn cmd_separate(
     let t2 = Instant::now();
     let cancel = AtomicBool::new(false);
     let mut last = -1i32;
-    let stems = sep.separate(
+    let stems = sep.separate_shifts(
         &audio.as_slices(),
+        shifts,
         &mut |f| {
             let pct = (f * 100.0) as i32;
             if pct != last {
@@ -391,6 +396,7 @@ fn cmd_separate(
     println!("model:      {} ({})", m.id, m.name);
     println!("device:     {}", sep.ep().label());
     println!("self-test:  {}", sep.selftest_status());
+    println!("shifts:     {}", shifts.max(1));
     println!(
         "timing:     decode {t_decode:.2}s, load {t_load:.2}s, separate {t_sep:.2}s ({:.1}x realtime)",
         audio.duration_secs() / t_sep
@@ -444,9 +450,21 @@ fn main() -> ExitCode {
             device,
             int16,
             no_selftest,
+            shifts,
             dirs,
             rt,
-        } => cmd_separate(input, model, out, *device, *int16, *no_selftest, dirs, rt).map(|_| true),
+        } => cmd_separate(
+            input,
+            model,
+            out,
+            *device,
+            *int16,
+            *no_selftest,
+            *shifts,
+            dirs,
+            rt,
+        )
+        .map(|_| true),
     };
     match result {
         Ok(true) => ExitCode::SUCCESS,
@@ -493,9 +511,23 @@ mod tests {
             cli.command,
             Command::Separate {
                 device: DevicePref::Cpu,
+                shifts: 1,
                 ..
             }
         ));
+        let cli = Cli::try_parse_from([
+            "stemx",
+            "separate",
+            "song.mp3",
+            "--model",
+            "htdemucs_6s",
+            "--out",
+            "o",
+            "--shifts",
+            "2",
+        ])
+        .unwrap();
+        assert!(matches!(cli.command, Command::Separate { shifts: 2, .. }));
         let cli = Cli::try_parse_from(["stemx", "selftest", "--debug-dml-fusion"]).unwrap();
         assert!(matches!(
             cli.command,
