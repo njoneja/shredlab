@@ -1,13 +1,14 @@
 <script lang="ts">
+  import { tick } from "svelte";
   import { app } from "./store.svelte";
   import { THEMES, type ModelInfo, type Quality } from "./types";
   import { THEME_NAME, isTheme } from "./theme";
 
   let { onclose }: { onclose: () => void } = $props();
 
-  const QUALITIES: { v: Quality; label: string }[] = [
-    { v: "standard", label: "Standard (1 pass)" },
-    { v: "high", label: "High (2 passes)" },
+  const PASSES: { v: Quality; n: number }[] = [
+    { v: "standard", n: 1 },
+    { v: "high", n: 2 },
   ];
 
   const st = $derived(app.appSettings);
@@ -21,8 +22,27 @@
   // Picking the device default saves null, so the default keeps following the device.
   function pickQuality(q: Quality) {
     if (!st || app.savingSettings || q === st.quality) return;
-    app.saveAppSettings({ quality: q === st.default_quality ? null : q });
+    return app.saveAppSettings({ quality: q === st.default_quality ? null : q });
   }
+
+  // Radiogroup keys: arrows move the choice (and focus), like native radios.
+  async function passKeys(e: KeyboardEvent) {
+    if (!st) return;
+    const dir = e.key === "ArrowRight" || e.key === "ArrowDown" ? 1 : e.key === "ArrowLeft" || e.key === "ArrowUp" ? -1 : 0;
+    if (!dir) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const i = PASSES.findIndex((p) => p.v === st.quality);
+    const next = PASSES[(i + dir + PASSES.length) % PASSES.length];
+    const group = e.currentTarget as HTMLElement;
+    await pickQuality(next.v);
+    await tick(); // the buttons are disabled while saving; focus once they are back
+    group.querySelector<HTMLElement>(`[data-q="${next.v}"]`)?.focus();
+  }
+
+  const passesTip = $derived(
+    st ? `2 passes: cleaner stems, about twice as slow. Default on ${st.device_label}: ${st.default_quality === "high" ? 2 : 1}.` : "",
+  );
 
   function pickModel(id: string) {
     if (!st || id === st.model_id) return;
@@ -50,13 +70,20 @@
   {#if !st}
     <p class="muted">Settings are not available.</p>
   {:else}
-    <div class="field">
-      <div class="label">Separation quality</div>
-      <div class="options" role="radiogroup" aria-label="Separation quality">
-        {#each QUALITIES as q (q.v)}
-          <button role="radio" aria-checked={st.quality === q.v} disabled={app.savingSettings} onclick={() => pickQuality(q.v)}>
-            <span>{q.label}</span>
-            {#if q.v === st.default_quality}<span class="muted note">default on {st.device_label}</span>{/if}
+    <div class="row" title={passesTip}>
+      <span class="label" id="passes-label">Passes</span>
+      <!-- svelte-ignore a11y_interactive_supports_focus -->
+      <div class="seg" role="radiogroup" aria-label="Separation passes" tabindex="-1" onkeydown={passKeys}>
+        {#each PASSES as p (p.v)}
+          <button
+            role="radio"
+            data-q={p.v}
+            aria-checked={st.quality === p.v}
+            tabindex={st.quality === p.v ? 0 : -1}
+            disabled={app.savingSettings}
+            onclick={() => pickQuality(p.v)}
+          >
+            {p.n}
           </button>
         {/each}
       </div>
@@ -115,25 +142,33 @@
   .note {
     font-size: 11.5px;
   }
-  .options {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-  }
-  .options button {
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-    gap: 8px;
-    padding: 7px 10px;
-    background: var(--surface-2);
+  /* Segmented control: two joined native-size buttons, the chosen one accent-filled. */
+  .seg {
+    display: inline-flex;
     border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    text-align: left;
+    border-radius: 5px;
+    overflow: hidden;
   }
-  .options button[aria-checked="true"] {
-    border-color: var(--accent);
-    background: var(--accent-soft);
+  .seg button {
+    width: 36px;
+    height: 26px;
+    border: 0;
+    background: var(--surface-2);
+    font-size: 13px;
+    font-weight: 500;
+  }
+  .seg button + button {
+    border-left: 1px solid var(--border);
+  }
+  .seg button:hover:not(:disabled) {
+    background: var(--surface-3);
+  }
+  .seg button[aria-checked="true"] {
+    background: var(--accent);
+    color: var(--accent-fg);
+  }
+  .seg button:focus-visible {
+    outline-offset: -2px;
   }
   /* Label left, control right. */
   .row {
