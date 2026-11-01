@@ -10,3 +10,4 @@ node_modules/
 dist/
 spikes/third_party/
 tests/fixtures/local/
+.venv-models/

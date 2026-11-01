@@ -1,0 +1,26 @@
+# Model export environment (CPU only), used by tools/setup_models.py.
+# Installed into its own venv (.venv-models), never into .venv (DirectML).
+# Python 3.12. Resolves on Windows x64 and macOS 14+ arm64 (onnxruntime 1.24
+# has no wheels for older macOS or Intel Macs; checked with `uv pip compile
+# --python-platform aarch64-apple-darwin`, MACOSX_DEPLOYMENT_TARGET=14.0).
+#
+# torch 2.4.1 is the version the bundled ONNX files were first exported with
+# (pinned by torch-directml in .venv). PyPI's Windows wheel is CPU-only.
+torch==2.4.1
+torchaudio==2.4.1            # imported by beat_this.preprocessing
+numpy==2.5.4
+scipy==1.18.1
+soundfile==0.14.0
+soxr==1.1.0
+einops==0.8.2
+julius==0.2.8                # demucs
+openunmix==1.3.0             # demucs imports openunmix.filtering (MIT)
+rotary-embedding-torch==0.6.5  # beat_this
+beat-this==1.1.0             # Beat This! model code (CPJKU, MIT)
+onnx==1.23.2                 # needed by torch.onnx.export
+onnxruntime==1.24.4          # CPU build: self-test reference
+#
+# Installed separately with --no-deps by tools/setup_models.py, because its
+# declared dependencies (dora-search, diffq, lameenc, ...) are only needed for
+# training / the demucs CLI:
+#   demucs==4.0.1             # Hybrid Transformer Demucs model code (Meta, MIT)

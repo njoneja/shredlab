@@ -5,6 +5,38 @@ app). Run everything from the repo root with `.venv\Scripts\python.exe`.
 Scripts that decode audio need ffmpeg on PATH (in shells started by some apps,
 refresh PATH first; see docs/STATUS.md).
 
+## `setup_models.py` — build the bundled models from scratch
+
+```
+python tools/setup_models.py [--out DIR] [--venv DIR] [--force]
+```
+
+Runs with any Python 3.9+ (stdlib only); wrappers: `scripts/setup-models.ps1`,
+`scripts/setup-models.sh`. Steps, each skipped when its output exists with the
+expected sha256:
+
+1. CPU-only Python 3.12 venv `.venv-models` from `requirements-models.txt`
+   (+ `demucs==4.0.1` with `--no-deps`), via uv if available. `.venv` is
+   never touched.
+2. Checkpoints (sha256-checked): `5c90dfd2-34c22ccb.th` from
+   dl.fbaipublicfiles.com (Demucs, MIT) and `beat_this/beat_this-final0.ckpt`
+   from cloud.cp.jku.at (Beat This!, MIT).
+3. `onnx/htdemucs_6s_own.onnx` via `spikes/onnx_demucs_own.export`.
+4. `onnx/beat_this_final0.onnx` via `spikes/onnx_beat_this.export`.
+5. `registry/htdemucs_6s/` via `tools/registry.py build-htdemucs --onnx ...`.
+6. CPU verification: the folder's self-test, plus both ONNX files against
+   reference outputs of the known-good models in `reference/data/`
+   (`htdemucs_6s_selftest.json`, `beat_this_final0_check.json`), so a broken
+   export on another platform/torch build is caught.
+
+Exports are accepted as "done" if their sha256 is one of the known-good
+hashes or matches `<out>/.setup_models.json` (written by earlier runs).
+Files are never deleted; anything replaced is renamed to `*.bak-<timestamp>`.
+Model code comes from pinned PyPI packages (`demucs==4.0.1`,
+`beat-this==1.1.0`); the spikes fall back to them when audio-separator /
+`spikes/third_party/` are absent. Upstream `demucs.states` imports
+`omegaconf` and `dora` (training only), which are stubbed when missing.
+
 ## `reference/` — reference implementations
 
 Importable package (`from tools.reference import ...`, repo root on
