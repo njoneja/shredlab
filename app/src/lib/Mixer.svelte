@@ -51,16 +51,20 @@
 <svelte:window onclick={() => (menu = null)} onkeydown={(e) => e.key === "Escape" && (menu = null)} />
 
 <section class="mixer" class:disabled aria-label="Stem mixer">
+  <!-- Same columns as the rows: All on sits above S and ⊘, the heading above the labels. -->
   <div class="head">
-    <h2>Stems</h2>
     <button
-      class="btn small"
-      disabled={disabled || app.allOnAlready}
+      class="btn small all-on"
+      aria-pressed={app.allOnAlready}
+      {disabled}
       onclick={() => app.allOn()}
-      title="Turn every stem on and clear solo (volumes stay as set)"
+      title={app.allOnAlready
+        ? "All stems are on"
+        : "Turn every stem on and clear solo (volumes stay as set)"}
     >
       All on
     </button>
+    <h2>Stems</h2>
   </div>
   {#if disabled}
     <div class="notice">
@@ -167,10 +171,27 @@
     padding: 6px;
   }
   .head {
-    display: flex;
+    display: grid;
+    grid-template-columns: 40px 24px 24px minmax(120px, 160px) minmax(80px, 1fr) 62px;
     align-items: center;
-    justify-content: space-between;
-    padding: 0 4px 2px 8px;
+    gap: 10px;
+    /* Rows have a 3px stem-colour border plus 8px padding. */
+    padding: 0 8px 2px 11px;
+  }
+  .all-on {
+    grid-column: 2 / 4;
+    justify-content: center;
+    padding: 0;
+  }
+  /* Lit like a hardware button while every stem is on. */
+  .all-on[aria-pressed="true"] {
+    color: var(--lit);
+    border-color: var(--lit);
+    background: color-mix(in srgb, var(--lit) 16%, transparent);
+    box-shadow: 0 0 8px color-mix(in srgb, var(--lit) 35%, transparent);
+  }
+  .all-on[aria-pressed="true"]:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--lit) 22%, transparent);
   }
   h2 {
     margin: 0;
@@ -359,7 +380,8 @@
   }
 
   @media (max-width: 960px) {
-    .row {
+    .row,
+    .head {
       grid-template-columns: 40px 24px 24px minmax(100px, 130px) minmax(60px, 1fr) 58px;
       gap: 8px;
     }

@@ -39,6 +39,7 @@
   --loop-soft: rgba(61, 214, 255, 0.15);
   --solo: var(--accent);
   --danger: #FF5C4D;
+  --lit: var(--danger);
   --ok: #3DFFA0;
   --wave: #4A5163;
   --wave-played: #B9C0D0;
@@ -79,6 +80,7 @@
   --loop-soft: rgba(127, 196, 192, 0.15);
   --solo: var(--accent);
   --danger: #FF6B5B;
+  --lit: var(--danger);
   --ok: #7BCB8A;
   --wave: #5E4448;
   --wave-played: #D9C4BD;
@@ -119,6 +121,7 @@
   --loop-soft: rgba(95, 184, 214, 0.15);
   --solo: var(--accent);
   --danger: #FF6B5B;
+  --lit: var(--danger);
   --ok: #67CF8E;
   --wave: #5A4F42;
   --wave-played: #D2C6B3;
@@ -159,6 +162,7 @@
   --loop-soft: rgba(47, 109, 179, 0.12);
   --solo: var(--accent);
   --danger: #B42318;
+  --lit: var(--danger);
   --ok: #25784B; /* darker than the brand guide's #2E8B57 so "ok" text reaches 4.5:1 */
   --wave: #C9BFAD;
   --wave-played: #4A5060;
