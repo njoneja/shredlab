@@ -73,6 +73,11 @@ jobs:
         working-directory: app
         run: pnpm check
 
+      # The committed notices must match Cargo.lock and node_modules.
+      - name: Third-party licences up to date
+        if: runner.os == 'Windows'
+        run: node tools/third_party_licenses/generate.mjs --check
+
       # tauri::generate_context! needs app/dist to exist, so build the
       # frontend before clippy/test compile the Tauri crate.
       - name: Build frontend

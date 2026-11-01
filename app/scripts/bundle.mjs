@@ -7,6 +7,8 @@
 // DirectML.dll and would fail on the missing resource. (Not the automatic
 // tauri.windows.conf.json, because that is merged into every build, including
 // `tauri dev` and `cargo test`, before the release DLL exists.)
+// THIRD_PARTY_LICENSES.html is regenerated first so the notices always match
+// Cargo.lock and node_modules (it ships in the UI and as a bundle resource).
 // Extra arguments are passed to `tauri build`, e.g. `pnpm bundle --bundles nsis`.
 import { spawnSync } from "node:child_process";
 
@@ -19,6 +21,7 @@ function run(cmd, args) {
 }
 
 const extra = process.platform === "win32" ? ["--config", "src-tauri/tauri.bundle.windows.conf.json"] : [];
+run("node", ["../tools/third_party_licenses/generate.mjs"]);
 run("pnpm", ["exec", "vite", "build"]);
 run("cargo", ["build", "--release", "-p", "shredlab"]);
 run("pnpm", ["exec", "tauri", "build", ...extra, ...process.argv.slice(2)]);
