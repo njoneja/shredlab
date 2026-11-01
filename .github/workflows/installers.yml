@@ -1,0 +1,82 @@
+name: Installers
+
+# Unsigned release installers: NSIS + MSI on Windows, DMG on macOS (Apple
+# Silicon). Run by hand from the Actions tab, or by pushing a v* tag.
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+concurrency:
+  group: installers-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  bundle:
+    name: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            bundles: nsis,msi
+            artifact_path: |
+              target/release/bundle/nsis/*.exe
+              target/release/bundle/msi/*.msi
+          - os: macos-latest
+            bundles: app,dmg
+            artifact_path: target/release/bundle/dmg/*.dmg
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: app/pnpm-lock.yaml
+
+      # Same cache key as ci.yml, so the models built there are reused.
+      - name: Cache models
+        id: models-cache
+        uses: actions/cache@v4
+        with:
+          path: models
+          key: models-${{ runner.os }}-${{ hashFiles('requirements-models.txt', 'tools/setup_models.py', 'tools/registry.py', 'tools/reference/**', 'spikes/onnx_demucs.py', 'spikes/onnx_demucs_own.py', 'spikes/onnx_beat_this.py') }}
+
+      - uses: actions/setup-python@v5
+        if: steps.models-cache.outputs.cache-hit != 'true'
+        with:
+          python-version: '3.12'
+
+      - name: Build models
+        if: steps.models-cache.outputs.cache-hit != 'true'
+        run: python tools/setup_models.py
+
+      - name: Install frontend dependencies
+        working-directory: app
+        run: pnpm install --frozen-lockfile
+
+      - name: Build installers
+        working-directory: app
+        run: pnpm bundle --bundles ${{ matrix.bundles }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: shredlab-${{ runner.os }}-installers
+          path: ${{ matrix.artifact_path }}
+          if-no-files-found: error
