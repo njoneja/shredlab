@@ -1,6 +1,6 @@
 [package]
 name = "stemx-dsp"
-description = "STFT/iSTFT, chunking and overlap-add for Stem Extractor"
+description = "STFT/iSTFT, chunking, overlap-add and Refine/strength DSP for Stem Extractor"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -10,6 +10,8 @@ publish = false
 
 [dependencies]
 realfft.workspace = true
+serde.workspace = true
 
 [dev-dependencies]
+hound.workspace = true
 serde_json.workspace = true

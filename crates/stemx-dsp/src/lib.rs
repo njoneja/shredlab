@@ -8,12 +8,15 @@
 //! - [`chunk`]: demucs `apply_model` chunking (triangular weights, padded
 //!   short chunks) and MSST-style windowed overlap-add, plus song
 //!   normalization.
+//! - [`refine`]: the Refine panel's per-stem pan/width mask and EQ
+//!   ([`refine::RefineChain`]), real-time safe.
 //!
 //! Audio is planar: one `Vec<f32>` / slice per channel. Multi-stem outputs
 //! are flat `(stems, channels, samples)` buffers, last axis fastest.
 
 pub mod chunk;
 mod hybrid;
+pub mod refine;
 mod stft;
 
 pub use hybrid::HybridStft;
