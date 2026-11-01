@@ -1016,6 +1016,7 @@ checksum = "74c892c2b5fa08f967e8b5ad29121570b4762202f2402033ce08479ec65eccd0"
 dependencies = [
  "built",
  "crc",
+ "crossbeam-channel",
  "heapless",
  "md-5",
  "num-traits",

@@ -1,11 +1,25 @@
 [package]
 name = "stemx-audio"
-description = "Real-time audio engine for Stem Extractor"
+description = "Real-time audio engine and offline renderer for Stem Extractor"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
 rust-version.workspace = true
 publish = false
+build = "build.rs"
 
 [dependencies]
+cpal = "0.16"
+rtrb = "0.3"
+rubato = "0.16"
+hound = "3.5"
+flacenc = { version = "0.5", default-features = false, features = ["par"] }
+mp3lame-encoder = "0.2"
+thiserror = "2"
+
+[build-dependencies]
+cc = "1"
+
+[dev-dependencies]
+stemx-io = { path = "../stemx-io" }
