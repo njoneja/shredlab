@@ -10,6 +10,8 @@
 //!   normalization.
 //! - [`refine`]: the Refine panel's per-stem pan/width mask and EQ
 //!   ([`refine::RefineChain`]), real-time safe.
+//! - [`strength`]: separation strength, re-deriving stems from the original
+//!   with a sharpened ratio mask (offline).
 //!
 //! Audio is planar: one `Vec<f32>` / slice per channel. Multi-stem outputs
 //! are flat `(stems, channels, samples)` buffers, last axis fastest.
@@ -18,6 +20,7 @@ pub mod chunk;
 mod hybrid;
 pub mod refine;
 mod stft;
+pub mod strength;
 
 pub use hybrid::HybridStft;
 pub use realfft::num_complex::{Complex32, Complex64};
