@@ -28,6 +28,14 @@ const MIN_AHEAD_SECS: f64 = 0.025;
 const REPLY_TIMEOUT: Duration = Duration::from_millis(500);
 /// How often the producer publishes the stereo field (about 30 Hz).
 const FIELD_EVERY: Duration = Duration::from_millis(33);
+/// Paused this long, the output stream is paused too and the producer waits
+/// for commands instead of polling every millisecond (idle CPU wakeups).
+/// Short pauses keep the stream running, so Bluetooth outputs stay awake.
+const SUSPEND_AFTER: Duration = Duration::from_secs(5);
+/// Longest wait for a command while suspended (device checks still run).
+const SUSPENDED_WAIT: Duration = Duration::from_millis(250);
+/// Time constant of the master volume smoothing (no zipper noise).
+const MASTER_SMOOTH_SECS: f32 = 0.01;
 
 /// Latest stereo field of the analysed track (single slot; the producer
 /// overwrites it, readers take it).
@@ -35,6 +43,24 @@ const FIELD_EVERY: Duration = Duration::from_millis(33);
 struct FieldSlot {
     fresh: bool,
     bins: Vec<f32>,
+}
+
+/// Master volume (linear 0..1, as f32 bits); 1.0 by default.
+struct MasterGain(AtomicU32);
+
+impl Default for MasterGain {
+    fn default() -> Self {
+        Self(AtomicU32::new(1.0f32.to_bits()))
+    }
+}
+
+impl MasterGain {
+    fn get(&self) -> f32 {
+        f32::from_bits(self.0.load(Ordering::Relaxed))
+    }
+    fn set(&self, v: f32) {
+        self.0.store(v.to_bits(), Ordering::Relaxed);
+    }
 }
 
 /// One output frame plus the metadata the callback publishes.
@@ -65,6 +91,8 @@ struct Shared {
     render_nanos: AtomicU64,
     rendered_frames: AtomicU64,
     field: Mutex<FieldSlot>,
+    /// Master volume, applied to playback only.
+    master: MasterGain,
 }
 
 /// Diagnostics (interface addition).
@@ -245,6 +273,15 @@ impl Engine {
         self.send(Cmd::Click(cfg));
     }
 
+    /// Master volume, linear 0..1 (clamped; non-finite is ignored): scales
+    /// everything played, music and click, smoothed. Playback only;
+    /// offline renders and exports are not affected.
+    pub fn set_master_volume(&self, volume: f32) {
+        if volume.is_finite() {
+            self.shared.master.set(volume.clamp(0.0, 1.0));
+        }
+    }
+
     /// Refine parameters of one track (live and smoothed; also used for
     /// track sets loaded later). See [`crate::mix`].
     pub fn set_refine(&self, name: &str, p: RefineParams) {
@@ -354,9 +391,30 @@ impl Drop for Engine {
 
 /// The open device stream plus the producer side of its ring buffer.
 struct Output {
-    _stream: cpal::Stream,
+    stream: cpal::Stream,
     feeder: Feeder,
     device_name: String,
+    suspended: bool,
+}
+
+impl Output {
+    /// Pauses or resumes the device stream. A failed resume flags a stream
+    /// error so the producer reopens the device.
+    fn set_suspended(&mut self, suspend: bool, shared: &Shared) {
+        if suspend == self.suspended {
+            return;
+        }
+        let ok = if suspend {
+            self.stream.pause().is_ok()
+        } else {
+            self.stream.play().is_ok()
+        };
+        match ok {
+            true => self.suspended = suspend,
+            false if !suspend => shared.stream_error.store(true, Ordering::Relaxed),
+            false => {}
+        }
+    }
 }
 
 /// Producer side of the ring: renders the pipeline, resamples to the device
@@ -364,6 +422,8 @@ struct Output {
 struct Feeder {
     producer: rtrb::Producer<Frame>,
     rate: u32,
+    /// Master gain currently applied (follows `Shared::master`).
+    master: f32,
     resampler: Option<(u32, SincFixedIn<f32>, Vec<Vec<f32>>)>,
 }
 
@@ -418,10 +478,12 @@ fn open_output(shared: &Arc<Shared>) -> Result<Output, AudioError> {
     }
     .map_err(|e| AudioError::Device(format!("{device_name}: {e}")))?;
     Ok(Output {
-        _stream: stream,
+        stream,
+        suspended: false,
         feeder: Feeder {
             producer,
             rate: config.sample_rate.0,
+            master: shared.master.get(),
             resampler: None,
         },
         device_name,
@@ -517,6 +579,23 @@ fn make_resampler(from: u32, to: u32) -> Option<(u32, SincFixedIn<f32>, Vec<Vec<
 
 impl Feeder {
     /// Renders until the ring holds the target amount of audio.
+    /// Scales a rendered block by the master volume, gliding to a new value.
+    fn apply_master(&mut self, shared: &Shared, sr: u32, bufs: &mut Bufs) {
+        let target = shared.master.get();
+        if self.master == target && target == 1.0 {
+            return;
+        }
+        let k = 1.0 - (-1.0 / (MASTER_SMOOTH_SECS * sr as f32)).exp();
+        for (l, r) in bufs.l.iter_mut().zip(bufs.r.iter_mut()) {
+            self.master += (target - self.master) * k;
+            if (self.master - target).abs() < 1e-5 {
+                self.master = target;
+            }
+            *l *= self.master;
+            *r *= self.master;
+        }
+    }
+
     fn fill(&mut self, pipe: &mut Pipeline, shared: &Shared, bufs: &mut Bufs) {
         let max_cb = shared.max_cb_frames.load(Ordering::Relaxed);
         let target = ((MIN_AHEAD_SECS * self.rate as f64) as usize)
@@ -536,6 +615,7 @@ impl Feeder {
             }
             let t0 = Instant::now();
             pipe.render(&mut bufs.l, &mut bufs.r, &mut bufs.meta);
+            self.apply_master(shared, src_rate, bufs);
             let written = match &mut self.resampler {
                 None => {
                     let Ok(mut chunk) = self.producer.write_chunk_uninit(BLOCK) else {
@@ -648,8 +728,10 @@ fn producer_thread(
     let mut last_reopen = Instant::now();
     let mut field = [0.0f32; FIELD_LEN];
     let mut last_field = Instant::now();
+    let mut idle_since: Option<Instant> = None;
+    let mut next: Option<Cmd> = None;
     'main: loop {
-        while let Ok(cmd) = rx.try_recv() {
+        while let Some(cmd) = next.take().or_else(|| rx.try_recv().ok()) {
             match cmd {
                 Cmd::Quit => break 'main,
                 Cmd::Load(t, o) => pipe.load_with_original(t, o),
@@ -695,8 +777,25 @@ fn producer_thread(
             drop(out.take()); // drop the old stream first
             out = open_output(&shared).ok();
         }
+        if pipe.is_playing() {
+            idle_since = None;
+        } else {
+            idle_since.get_or_insert_with(Instant::now);
+        }
+        let suspend = idle_since.is_some_and(|t| t.elapsed() >= SUSPEND_AFTER);
         if let Some(o) = &mut out {
-            o.feeder.fill(&mut pipe, &shared, &mut bufs);
+            o.set_suspended(suspend, &shared);
+            if !o.suspended {
+                o.feeder.fill(&mut pipe, &shared, &mut bufs);
+            }
+        }
+        if out.as_ref().is_some_and(|o| o.suspended) {
+            match rx.recv_timeout(SUSPENDED_WAIT) {
+                Ok(cmd) => next = Some(cmd),
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => break 'main,
+            }
+            continue;
         }
         if last_field.elapsed() >= FIELD_EVERY {
             last_field = Instant::now();
@@ -752,6 +851,40 @@ fn spawn_device_watcher(shared: Arc<Shared>, initial: Option<String>) -> Option<
 mod tests {
     use super::*;
 
+    #[test]
+    fn master_volume_glides_to_target() {
+        let shared = Shared::default();
+        let (producer, _consumer) = rtrb::RingBuffer::<Frame>::new(RING);
+        let mut f = Feeder {
+            producer,
+            rate: 44_100,
+            master: 1.0,
+            resampler: None,
+        };
+        let bufs = |v: f32| Bufs {
+            l: vec![v; BLOCK],
+            r: vec![v; BLOCK],
+            meta: vec![Meta::default(); BLOCK],
+        };
+        // Unity: untouched.
+        let mut b = bufs(0.5);
+        f.apply_master(&shared, 44_100, &mut b);
+        assert!(b.l.iter().all(|&x| x == 0.5));
+        // To 0.25: no jump at the start, exactly there after ~12 time constants.
+        shared.master.set(0.25);
+        let mut b = bufs(1.0);
+        f.apply_master(&shared, 44_100, &mut b);
+        assert!(b.l[0] > 0.99, "{}", b.l[0]);
+        assert!(b.l.windows(2).all(|w| w[1] <= w[0]));
+        for _ in 0..30 {
+            let mut b = bufs(1.0);
+            f.apply_master(&shared, 44_100, &mut b);
+        }
+        let mut b = bufs(1.0);
+        f.apply_master(&shared, 44_100, &mut b);
+        assert!(b.l.iter().chain(&b.r).all(|&x| x == 0.25));
+    }
+
     fn sine_track(secs: f64) -> Track {
         let n = (secs * 44_100.0) as usize;
         let v: Vec<f32> = (0..n)
@@ -770,6 +903,7 @@ mod tests {
         let mut feeder = Feeder {
             producer,
             rate,
+            master: 1.0,
             resampler: None,
         };
         let shared = Shared::default();

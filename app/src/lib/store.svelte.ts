@@ -84,6 +84,8 @@ class AppState {
 
   // app settings (model, quality); persisted by the backend
   appSettings = $state<AppSettingsInfo | null>(null);
+  /** Master playback volume, linear 0..1 (app setting; not in exports). */
+  masterVolume = $state(1);
   savingSettings = $state(false);
   /** UI theme; applied to <html> before first paint from a localStorage mirror. */
   theme = $state<Theme>(currentTheme());
@@ -329,6 +331,8 @@ class AppState {
   async loadAppSettings() {
     try {
       this.appSettings = await api.getAppSettings();
+      this.click.volume = this.appSettings.click_volume;
+      this.masterVolume = this.appSettings.master_volume;
       // The backend setting wins over the mirror (e.g. a cleared WebView cache).
       const t = this.appSettings.theme;
       if (isTheme(t) && t !== this.theme) {
@@ -767,6 +771,29 @@ class AppState {
   async toggleClick() {
     this.click.enabled = !this.click.enabled;
     await this.pushClick(false);
+  }
+
+  /** Master volume (0..1): heard at once; `save` (on release) stores it. */
+  async setMasterVolume(volume: number, save = false) {
+    this.masterVolume = clamp(volume, 0, 1);
+    try {
+      const s = await api.setMasterVolume(this.masterVolume, save);
+      if (save) this.appSettings = s;
+    } catch (e) {
+      this.report(e);
+    }
+  }
+
+  /** Click and count-in volume (0..1): heard at once while dragging; `save`
+   *  (on release) stores it with the app settings. */
+  async setClickVolume(volume: number, save = false) {
+    this.click.volume = clamp(volume, 0, 1);
+    try {
+      if (save) this.appSettings = await api.setClickVolume(this.click.volume);
+      else await this.pushClick(false);
+    } catch (e) {
+      this.report(e);
+    }
   }
 
   async toggleCountIn() {

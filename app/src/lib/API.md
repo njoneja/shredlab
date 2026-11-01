@@ -92,6 +92,8 @@ AppSettingsInfo {
   device_label: string,        // predicted device of model_id: "GPU" | "CPU"
   theme: Theme,                // UI theme; "stage" when none is saved
   count_in_to_music_start: boolean // "Count in to where the music starts"; true when none is saved
+  click_volume: number // click and count-in volume, linear 0..1; 0.8 when none is saved
+  master_volume: number // master playback volume, linear 0..1; 1 when none is saved
 }
 
 Theme = "stage" | "rosewood" | "valve" | "manuscript"
@@ -226,6 +228,8 @@ StrengthSetting { level: number, smooth: boolean }
 | `save_song_settings` | `song_id: String, settings: serde_json::Value` | `()` | Persist next to the song's library entry. Returned verbatim in `SongInfo.settings` on the next `open_song` of that song. Called debounced (~600 ms) after changes. |
 | `get_app_settings` | – | `AppSettingsInfo` | Models and the separation settings. |
 | `set_count_in_to_music_start` | `on: bool` | `AppSettingsInfo` | Saves "Count in to where the music starts" with the app settings (`settings.json`) and applies it to playback at once. |
+| `set_master_volume` | `volume: f32, save: bool` | `AppSettingsInfo` | Master playback volume (linear, clamped to 0..1), applied at once to everything played (music and click, smoothed). Playback only: exports are not affected. `save` also stores it with the app settings; the UI saves when a slider drag ends. Applied at startup from the saved value. `Err` for a non-finite value. |
+| `set_click_volume` | `volume: f32` | `AppSettingsInfo` | Saves the click and count-in volume (linear, clamped to 0..1) with the app settings and applies it to playback at once. While the slider is dragged the UI sends `set_click` with the new `volume` instead (heard at once, not saved). `Err` for a non-finite value. |
 | `set_theme` | `theme: String` | `AppSettingsInfo` | Saves the UI theme with the app settings (`<data dir>/settings.json`). `Err` for an unknown theme. The UI applies the theme itself and mirrors it in `localStorage` for the next start (no flash before `get_app_settings` returns). |
 | `get_refine_presets` | – | `RefinePreset[]` | The Refine panel's EQ presets (stemx-dsp `presets.rs`). A preset sets the EQ and keeps the stereo selection. |
 | `set_refine` | `update: { stem: StemName, params: RefineParams }` | `()` | Live: heard at once (smoothed, no clicks), also during playback; turning an exception on or off on an off row also makes it audible or silent; saved in the song's `song.json` about 600 ms after the last change (and on song switch). Identity params = unrefined. `Err` for an unknown stem or no song. |

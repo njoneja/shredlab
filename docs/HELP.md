@@ -18,6 +18,11 @@ obvious. The same text, shorter, is in the app under **Help & shortcuts**
 - **Count-in.** Turn on Count-in to hear clicks before playback starts. Its
   length is in bars, in one-beat steps. The count-in always ends exactly
   where playback (or the loop) starts.
+- **Volume.** The slider with the speaker, next to Play, is the master
+  volume: everything you hear, stems and click. Exports are not affected.
+  The slider inside the Click button sets only the click and count-in
+  level. Both are remembered for every song; double-click to reset (100 %
+  and 80 %).
 - **Pickups.** If the part starts on a pickup before the bar, set A on the
   pickup note and use a fractional count-in. In 4/4 with a one-beat pickup,
   1¾ bars counts you in for 7 beats, so you come in on the pickup.

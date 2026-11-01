@@ -68,6 +68,7 @@
           <ul>
             <li><b>Loop:</b> drag across the waveform to loop a section, or press <kbd>[</kbd> and <kbd>]</kbd> to set A and B at the playhead.</li>
             <li><b>Speed</b> slows down without changing the key. <b>Pitch</b> moves the key in semitones (fine-tune in cents) without changing the speed.</li>
+            <li><b>Volume:</b> the speaker slider next to Play is the master volume (stems and click; exports are not affected). The slider inside Click sets only the click and count-in level. Double-click resets either.</li>
             <li><b>Count-in</b> length is in bars. For a pickup, set A on the pickup note and use a fractional count-in, e.g. 1¾ bars.</li>
             <li><b>Count in to where the music starts:</b> playing from the top skips a quiet intro (studio talk, silence) and counts you into the music. Turn it off in Settings.</li>
           </ul>

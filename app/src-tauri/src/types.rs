@@ -85,6 +85,10 @@ pub struct AppSettingsInfo {
     pub theme: String,
     /// A count-in from the song start skips a quiet intro (default on).
     pub count_in_to_music_start: bool,
+    /// Click and count-in volume, linear 0..1 (default 0.8).
+    pub click_volume: f32,
+    /// Master playback volume, linear 0..1 (default 1). Not in exports.
+    pub master_volume: f32,
 }
 
 /// `set_app_settings` payload. Null = use the default.
@@ -184,7 +188,7 @@ impl Default for ClickState {
             count_in_beats: 4,
             subdivision: 1,
             beats_per_bar: 4,
-            volume: 0.8,
+            volume: crate::settings::DEFAULT_CLICK_VOLUME,
         }
     }
 }

@@ -229,6 +229,18 @@ pub async fn set_app_settings(b: B<'_>, settings: AppSettingsUpdate) -> R<AppSet
 }
 
 #[tauri::command]
+pub async fn set_master_volume(b: B<'_>, volume: f32, save: bool) -> R<AppSettingsInfo> {
+    let b = b.inner().clone();
+    blocking(move || b.set_master_volume(volume, save)).await
+}
+
+#[tauri::command]
+pub async fn set_click_volume(b: B<'_>, volume: f32) -> R<AppSettingsInfo> {
+    let b = b.inner().clone();
+    blocking(move || b.set_click_volume(volume)).await
+}
+
+#[tauri::command]
 pub async fn set_count_in_to_music_start(b: B<'_>, on: bool) -> R<AppSettingsInfo> {
     let b = b.inner().clone();
     blocking(move || b.set_count_in_to_music_start(on)).await

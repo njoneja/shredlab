@@ -13,6 +13,11 @@ pub const FILE: &str = "settings.json";
 /// UI themes (from the brand guide); the first is the default.
 pub const THEMES: [&str; 4] = ["stage", "rosewood", "valve", "manuscript"];
 
+/// Click and count-in volume when none is saved (linear).
+pub const DEFAULT_CLICK_VOLUME: f32 = 0.8;
+/// Master (playback) volume when none is saved (linear).
+pub const DEFAULT_MASTER_VOLUME: f32 = 1.0;
+
 /// Separation quality: number of time-shifted passes averaged.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -49,7 +54,7 @@ impl Quality {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct AppSettings {
     /// Chosen model id (`None` = default model).
     #[serde(default)]
@@ -64,6 +69,12 @@ pub struct AppSettings {
     /// Count-in from the song start skips a quiet intro (`None` = on).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub count_in_to_music_start: Option<bool>,
+    /// Click and count-in volume, linear 0..1 (`None` = 0.8).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub click_volume: Option<f32>,
+    /// Master playback volume, linear 0..1 (`None` = 1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub master_volume: Option<f32>,
 }
 
 impl AppSettings {
@@ -79,6 +90,20 @@ impl AppSettings {
     /// "Count in to where the music starts" (on by default).
     pub fn count_in_to_music_start(&self) -> bool {
         self.count_in_to_music_start.unwrap_or(true)
+    }
+
+    /// Click and count-in volume (0.8 by default).
+    pub fn click_volume(&self) -> f32 {
+        self.click_volume
+            .filter(|v| v.is_finite())
+            .map_or(DEFAULT_CLICK_VOLUME, |v| v.clamp(0.0, 1.0))
+    }
+
+    /// Master playback volume (1 by default).
+    pub fn master_volume(&self) -> f32 {
+        self.master_volume
+            .filter(|v| v.is_finite())
+            .map_or(DEFAULT_MASTER_VOLUME, |v| v.clamp(0.0, 1.0))
     }
 
     pub fn path(data_dir: &Path) -> PathBuf {
@@ -135,6 +160,8 @@ mod tests {
             quality: Some(Quality::Standard),
             theme: Some("manuscript".into()),
             count_in_to_music_start: Some(false),
+            click_volume: Some(0.5),
+            master_volume: Some(0.7),
         };
         s.save(&d).unwrap();
         assert_eq!(AppSettings::load(&d).0, s);

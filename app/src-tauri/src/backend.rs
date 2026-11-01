@@ -459,6 +459,13 @@ impl Backend {
                     "standard"
                 })
         );
+        if let Some(e) = &engine {
+            e.set_master_volume(app_settings.master_volume());
+        }
+        let click = ClickState {
+            volume: app_settings.click_volume(),
+            ..ClickState::default()
+        };
         let engine = engine.map(Arc::new);
         let b = Arc::new(Self {
             cfg,
@@ -485,7 +492,7 @@ impl Backend {
                 semitones: 0,
                 cents: 0,
                 loop_state: LoopState::default(),
-                click: ClickState::default(),
+                click,
                 downbeats: None,
                 separation: None,
                 export: None,
@@ -640,6 +647,8 @@ impl Backend {
                 .to_string(),
             theme: saved.theme().to_string(),
             count_in_to_music_start: saved.count_in_to_music_start(),
+            click_volume: saved.click_volume(),
+            master_volume: saved.master_volume(),
         }
     }
 
@@ -692,6 +701,50 @@ impl Backend {
         log!("count in to where the music starts: {on}");
         *lock(&self.app_settings) = new;
         self.apply_click(&lock(&self.st));
+        Ok(self.app_settings())
+    }
+
+    /// Saves the click and count-in volume (linear 0..1) with the app
+    /// settings and applies it to playback at once.
+    pub fn set_click_volume(&self, volume: f32) -> Result<AppSettingsInfo, String> {
+        if !volume.is_finite() {
+            return Err(format!("Invalid click volume {volume}"));
+        }
+        let volume = volume.clamp(0.0, 1.0);
+        let new = AppSettings {
+            click_volume: Some(volume),
+            ..lock(&self.app_settings).clone()
+        };
+        new.save(&self.cfg.data_dir)
+            .map_err(|e| format!("Cannot save settings: {e}"))?;
+        log!("click volume: {volume:.2}");
+        *lock(&self.app_settings) = new;
+        let mut st = lock(&self.st);
+        st.click.volume = volume;
+        self.apply_click(&st);
+        Ok(self.app_settings())
+    }
+
+    /// Sets the master playback volume (linear 0..1) at once; `save` also
+    /// stores it with the app settings (the UI saves when a drag ends).
+    pub fn set_master_volume(&self, volume: f32, save: bool) -> Result<AppSettingsInfo, String> {
+        if !volume.is_finite() {
+            return Err(format!("Invalid master volume {volume}"));
+        }
+        let volume = volume.clamp(0.0, 1.0);
+        if let Some(e) = &self.engine {
+            e.set_master_volume(volume);
+        }
+        let new = AppSettings {
+            master_volume: Some(volume),
+            ..lock(&self.app_settings).clone()
+        };
+        if save {
+            new.save(&self.cfg.data_dir)
+                .map_err(|e| format!("Cannot save settings: {e}"))?;
+            log!("master volume: {volume:.2}");
+        }
+        *lock(&self.app_settings) = new;
         Ok(self.app_settings())
     }
 
@@ -809,7 +862,7 @@ impl Backend {
             volume: if c.volume.is_finite() {
                 c.volume.clamp(0.0, 1.0)
             } else {
-                0.8
+                settings::DEFAULT_CLICK_VOLUME
             },
             music_start,
         }
@@ -2479,6 +2532,39 @@ mod tests {
             beat_device: DevicePref::Cpu,
         };
         (Backend::new(cfg, None, sink).unwrap(), events)
+    }
+
+    #[test]
+    fn click_volume_is_saved_and_applied() {
+        let (b, _) = test_backend("click-volume");
+        assert_eq!(
+            b.app_settings().click_volume,
+            settings::DEFAULT_CLICK_VOLUME
+        );
+        assert_eq!(b.set_click_volume(0.35).unwrap().click_volume, 0.35);
+        assert_eq!(AppSettings::load(b.data_dir()).0.click_volume, Some(0.35));
+        assert_eq!(b.click_config(&lock(&b.st)).volume, 0.35);
+        // Clamped; non-finite is refused and leaves the setting alone.
+        assert_eq!(b.set_click_volume(3.0).unwrap().click_volume, 1.0);
+        assert!(b.set_click_volume(f32::NAN).is_err());
+        assert_eq!(b.app_settings().click_volume, 1.0);
+    }
+
+    #[test]
+    fn master_volume_is_saved_on_request() {
+        let (b, _) = test_backend("master-volume");
+        assert_eq!(
+            b.app_settings().master_volume,
+            settings::DEFAULT_MASTER_VOLUME
+        );
+        // While dragging: effective at once, not written.
+        assert_eq!(b.set_master_volume(0.4, false).unwrap().master_volume, 0.4);
+        assert_eq!(AppSettings::load(b.data_dir()).0.master_volume, None);
+        // On release: saved.
+        assert_eq!(b.set_master_volume(0.6, true).unwrap().master_volume, 0.6);
+        assert_eq!(AppSettings::load(b.data_dir()).0.master_volume, Some(0.6));
+        assert_eq!(b.set_master_volume(-1.0, true).unwrap().master_volume, 0.0);
+        assert!(b.set_master_volume(f32::INFINITY, true).is_err());
     }
 
     #[test]

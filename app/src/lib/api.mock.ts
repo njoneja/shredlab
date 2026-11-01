@@ -99,6 +99,10 @@ let appChoice: AppSettingsUpdate = lsGet<AppSettingsUpdate>(LS_APP, { model_id: 
 let themeChoice: Theme = lsGet<Theme>(LS_THEME, THEMES[0]);
 const LS_MUSIC_START = "stemx.mock.countInToMusicStart";
 let toMusicStart: boolean = lsGet<boolean>(LS_MUSIC_START, true);
+const LS_CLICK_VOLUME = "stemx.mock.clickVolume";
+let clickVolume: number = lsGet<number>(LS_CLICK_VOLUME, 0.8);
+const LS_MASTER_VOLUME = "stemx.mock.masterVolume";
+let masterVolume: number = lsGet<number>(LS_MASTER_VOLUME, 1);
 
 function appSettings(): AppSettingsInfo {
   const model_id = appChoice.model_id && MODELS.some((m) => m.id === appChoice.model_id) ? appChoice.model_id : DEFAULT_MODEL;
@@ -113,6 +117,8 @@ function appSettings(): AppSettingsInfo {
     device_label: MOCK_DEVICE,
     theme: THEMES.includes(themeChoice) ? themeChoice : THEMES[0],
     count_in_to_music_start: toMusicStart,
+    click_volume: clickVolume,
+    master_volume: masterVolume,
   };
 }
 
@@ -653,6 +659,17 @@ export const mockBackend: Backend = {
   async setCountInToMusicStart(on) {
     toMusicStart = on;
     lsSet(LS_MUSIC_START, on);
+    return appSettings();
+  },
+  async setClickVolume(volume) {
+    clickVolume = Math.min(1, Math.max(0, volume));
+    click = { ...click, volume: clickVolume };
+    lsSet(LS_CLICK_VOLUME, clickVolume);
+    return appSettings();
+  },
+  async setMasterVolume(volume, save) {
+    masterVolume = Math.min(1, Math.max(0, volume));
+    if (save) lsSet(LS_MASTER_VOLUME, masterVolume);
     return appSettings();
   },
   async getRefinePresets() {

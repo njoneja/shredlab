@@ -20,15 +20,47 @@
     {#if app.countInLeft > 0}
       <span class="countdown mono" title="Count-in">{app.countInLeft}</span>
     {/if}
+    <label class="field master" title="Master volume: everything you hear, stems and click. Not applied to exports. Double-click to reset.">
+      <Icon name="volume" size={16} />
+      <input
+        type="range"
+        min="0"
+        max="100"
+        step="1"
+        value={Math.round(app.masterVolume * 100)}
+        aria-label="Master volume"
+        oninput={(e) => app.setMasterVolume(Number(e.currentTarget.value) / 100)}
+        onchange={(e) => app.setMasterVolume(Number(e.currentTarget.value) / 100, true)}
+        ondblclick={() => app.setMasterVolume(1, true)}
+      />
+      <span class="mono val" class:changed={app.masterVolume !== 1}>{Math.round(app.masterVolume * 100)}%</span>
+    </label>
   </div>
 
   <div class="group">
     <button class="btn toggle" aria-pressed={app.loop.enabled} onclick={() => app.toggleLoop()} disabled={noSong} title="A–B loop on/off (L). [ and ] set A/B at the playhead.">
       <Icon name="loop" /> A–B
     </button>
-    <button class="btn toggle" aria-pressed={app.click.enabled} onclick={() => app.toggleClick()} disabled={noSong || noGrid} title={noGrid ? "Waiting for beat detection" : "Click track on/off (C)"}>
-      <Icon name="metronome" /> Click
-    </button>
+    <div class="click-group">
+      <button class="btn toggle" aria-pressed={app.click.enabled} onclick={() => app.toggleClick()} disabled={noSong || noGrid} title={noGrid ? "Waiting for beat detection" : "Click track on/off (C)"}>
+        <Icon name="metronome" /> Click
+      </button>
+      <label class="field" title="Click and count-in volume (only the click, not the music). Double-click to reset.">
+        <input
+          class="click-vol"
+          type="range"
+          min="0"
+          max="100"
+          step="5"
+          value={Math.round(app.click.volume * 100)}
+          aria-label="Click volume"
+          oninput={(e) => app.setClickVolume(Number(e.currentTarget.value) / 100)}
+          onchange={(e) => app.setClickVolume(Number(e.currentTarget.value) / 100, true)}
+          ondblclick={() => app.setClickVolume(0.8, true)}
+        />
+        <span class="mono val">{Math.round(app.click.volume * 100)}%</span>
+      </label>
+    </div>
     <button class="btn toggle" aria-pressed={app.click.count_in_enabled} onclick={() => app.toggleCountIn()} disabled={noSong || noGrid} title="Count-in before playback starts">
       <Icon name="countin" /> Count-in
     </button>
@@ -183,8 +215,33 @@
   .field input[type="range"] {
     width: 110px;
   }
-  .field input.cents {
+  .field input.cents,
+  .field input.click-vol {
     width: 80px;
+  }
+  /* The click volume sits inside the Click control, so it reads as the
+     click's own level rather than a master volume. */
+  .click-group {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 8px 2px 2px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface-2);
+  }
+  .click-group .btn {
+    border-color: transparent;
+  }
+  .click-group input.click-vol {
+    width: 64px;
+  }
+  .master {
+    margin-left: 6px;
+    color: var(--muted);
+  }
+  .master input[type="range"] {
+    width: 90px;
   }
   .val {
     font-size: 12.5px;

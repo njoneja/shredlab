@@ -136,6 +136,8 @@ export interface AppSettingsInfo {
   device_label: string; // predicted device of model_id
   theme: Theme; // UI theme ("stage" by default)
   count_in_to_music_start: boolean; // "Count in to where the music starts" (on by default)
+  click_volume: number; // click and count-in volume, linear 0..1 (0.8 by default)
+  master_volume: number; // master playback volume, linear 0..1 (1 by default; not in exports)
 }
 
 /** null = use the default. */
@@ -348,6 +350,8 @@ export interface Backend {
   setAppSettings(settings: AppSettingsUpdate): Promise<AppSettingsInfo>;
   setTheme(theme: Theme): Promise<AppSettingsInfo>;
   setCountInToMusicStart(on: boolean): Promise<AppSettingsInfo>;
+  setClickVolume(volume: number): Promise<AppSettingsInfo>;
+  setMasterVolume(volume: number, save: boolean): Promise<AppSettingsInfo>;
   getRefinePresets(): Promise<RefinePreset[]>;
   /** Live: heard at once; saved with the song shortly after the last change. */
   setRefine(stem: StemName, params: RefineParams): Promise<void>;
