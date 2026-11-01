@@ -324,6 +324,8 @@ export interface Backend {
   getLibrary(): Promise<LibraryEntry[]>;
   hideRecent(songId: string): Promise<void>;
   listLibrary(): Promise<LibraryListing>;
+  /** Bytes stored for one song (what deleteSong would free). */
+  songSize(songId: string): Promise<number>;
   /** Returns the bytes freed. */
   deleteSong(songId: string): Promise<number>;
   startSeparation(): Promise<SeparationStarted>;

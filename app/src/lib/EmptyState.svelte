@@ -4,8 +4,24 @@
   import { formatTime } from "./meter";
   import Wordmark from "./Wordmark.svelte";
   import { ago, recentStatus } from "./recent";
+  import type { LibraryEntry } from "./types";
+  import { tick } from "svelte";
 
   let dragOver = $state(false);
+  let openBtn: HTMLButtonElement;
+  let list = $state<HTMLElement>();
+
+  // ✕ asks first (RemoveRecentDialog). Afterwards focus goes back to the ✕, or to the next
+  // song (or Open…) if this one left the list.
+  function remove(ev: MouseEvent, entry: LibraryEntry, index: number) {
+    const x = ev.currentTarget as HTMLButtonElement;
+    app.askRemoveRecent(entry, async (removed) => {
+      await tick();
+      if (!removed) return x.focus();
+      const rows = Array.from(list?.querySelectorAll<HTMLElement>("li > button:not(.x)") ?? []);
+      (rows[Math.min(index, rows.length - 1)] ?? openBtn)?.focus();
+    });
+  }
 </script>
 
 <div class="empty">
@@ -22,7 +38,7 @@
     <p class="tagline muted">Split songs into stems to play along or transcribe</p>
     <h2>Open a song to get started</h2>
     <p class="muted">Drop an audio file here (MP3, WAV, FLAC, M4A, OGG) or choose one.</p>
-    <button class="btn primary" onclick={() => app.pickAndOpen()} disabled={app.opening}>
+    <button class="btn primary" bind:this={openBtn} onclick={() => app.pickAndOpen()} disabled={app.opening}>
       <Icon name="open" /> Open…
     </button>
     {#if app.opening}<p class="muted small">Opening…</p>{/if}
@@ -31,8 +47,8 @@
   {#if app.library.length}
     <div class="recent">
       <h3>Recent songs</h3>
-      <ul>
-        {#each app.library as e (e.song_id)}
+      <ul bind:this={list}>
+        {#each app.library as e, i (e.song_id)}
           <li>
             <button onclick={() => app.openPath(e.path)} title={e.path} disabled={app.opening}>
               <span class="t">{e.title}</span>
@@ -44,8 +60,8 @@
             <button
               class="x"
               aria-label={`Remove ${e.title} from recent`}
-              title="Remove from recent (stems are kept)"
-              onclick={() => app.hideRecent(e.song_id)}
+              title="Remove from recent…"
+              onclick={(ev) => remove(ev, e, i)}
             >
               <Icon name="close" size={12} />
             </button>

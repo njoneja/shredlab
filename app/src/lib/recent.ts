@@ -1,4 +1,4 @@
-// Shared by the start screen's recent list and the header's Open menu.
+// Shared by the start screen's recent list, the header's Open menu and the storage dialogs.
 import type { LibraryEntry } from "./types";
 
 export function ago(ms: number) {
@@ -13,4 +13,16 @@ export function ago(ms: number) {
 
 export function recentStatus(e: LibraryEntry) {
   return e.stems_cached ? "Stems ready" : "Not separated";
+}
+
+export function formatBytes(n: number) {
+  if (n < 1024) return `${n} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let v = n / 1024;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i++;
+  }
+  return `${v >= 100 ? v.toFixed(0) : v.toFixed(1)} ${units[i]}`;
 }

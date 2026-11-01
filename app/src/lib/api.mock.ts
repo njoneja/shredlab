@@ -485,6 +485,11 @@ export const mockBackend: Backend = {
       songs,
     };
   },
+  async songSize(songId) {
+    const s = (await mockBackend.listLibrary()).songs.find((x) => x.song_id === songId);
+    if (!s) throw new Error(`Unknown song ${songId}`);
+    return s.size_bytes;
+  },
   async deleteSong(songId) {
     await delay(150);
     if (song?.song_id === songId) throw new Error("This song is open. Close it before deleting its stems.");

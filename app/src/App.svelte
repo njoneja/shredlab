@@ -13,6 +13,7 @@
   import ShortcutsHelp from "./lib/ShortcutsHelp.svelte";
   import AboutDialog from "./lib/AboutDialog.svelte";
   import StorageDialog from "./lib/StorageDialog.svelte";
+  import RemoveRecentDialog from "./lib/RemoveRecentDialog.svelte";
 
   onMount(() => {
     app.init();
@@ -27,7 +28,7 @@
   // Keyboard shortcuts (listed in lib/ShortcutsHelp.svelte). Uses e.code for digits so Shift+1
   // works regardless of keyboard layout ("!" etc.).
   function onKeydown(e: KeyboardEvent) {
-    if (!app.song || app.exportOpen || app.helpOpen || app.aboutOpen || app.storageOpen || isTyping(e.target)) return;
+    if (!app.song || app.exportOpen || app.helpOpen || app.aboutOpen || app.storageOpen || app.removeAsk || isTyping(e.target)) return;
     if (e.ctrlKey || e.metaKey) return;
     const digit = /^Digit([1-6])$/.exec(e.code) ?? /^Numpad([1-6])$/.exec(e.code);
     let handled = true;
@@ -66,7 +67,7 @@
 
   // A focused button would also "click" on Space keyup; swallow it.
   function onKeyup(e: KeyboardEvent) {
-    if (e.code === "Space" && app.song && !isTyping(e.target) && !app.exportOpen && !app.helpOpen && !app.aboutOpen && !app.storageOpen) e.preventDefault();
+    if (e.code === "Space" && app.song && !isTyping(e.target) && !app.exportOpen && !app.helpOpen && !app.aboutOpen && !app.storageOpen && !app.removeAsk) e.preventDefault();
   }
 </script>
 
@@ -102,6 +103,7 @@
 {#if app.helpOpen}<ShortcutsHelp />{/if}
 {#if app.aboutOpen}<AboutDialog />{/if}
 {#if app.storageOpen}<StorageDialog />{/if}
+{#if app.removeAsk}<RemoveRecentDialog />{/if}
 {#if app.toast}<div class="toast" role="status">{app.toast}</div>{/if}
 
 <style>

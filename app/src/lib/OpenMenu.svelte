@@ -78,6 +78,8 @@
   }
 
   function onWindowClick(e: MouseEvent) {
+    // A click in the remove dialog reopens the menu (keyboard); don't close it again here.
+    if (e.target instanceof Element && e.target.closest('[role="dialog"]')) return;
     if (open && wrap && !wrap.contains(e.target as Node)) hide(false);
   }
 
@@ -88,18 +90,30 @@
     app.openPath(entry.path);
   }
 
-  // Hide from the recent list only (stems stay); keeps focus in the menu on the next row.
-  async function remove(ev: MouseEvent | null, entry: LibraryEntry) {
+  // Asks first (RemoveRecentDialog: remove from recent, optionally delete the stems). The menu
+  // closes meanwhile; from the keyboard (Delete, or Enter on ✕) it reopens afterwards with
+  // focus where it was, or on the next row if the song went.
+  function remove(ev: MouseEvent | null, entry: LibraryEntry) {
     ev?.stopPropagation();
+    const keyboard = !ev || ev.detail === 0;
     const all = menuItems();
-    const at = all.findIndex((el) => el.dataset.song === entry.song_id);
-    const keyboard = menu?.contains(document.activeElement) ?? false;
-    await app.hideRecent(entry.song_id);
-    await tick();
-    if (!keyboard) return;
-    const rest = menuItems().filter((el) => el.dataset.song || el.classList.contains("file"));
-    const songsLeft = rest.filter((el) => el.dataset.song);
-    (songsLeft[Math.min(Math.max(at, 0) / 2, songsLeft.length - 1)] ?? rest[rest.length - 1])?.focus();
+    const at = Math.max(all.indexOf(document.activeElement as HTMLElement), 0);
+    const row = Math.floor(all.findIndex((el) => el.dataset.song === entry.song_id) / 2);
+    hide(false);
+    app.askRemoveRecent(entry, async (removed) => {
+      if (!keyboard) {
+        chevron?.focus();
+        return;
+      }
+      await show();
+      if (!removed) {
+        menuItems()[at]?.focus();
+        return;
+      }
+      const rest = menuItems().filter((el) => el.dataset.song || el.classList.contains("file"));
+      const songsLeft = rest.filter((el) => el.dataset.song);
+      (songsLeft[Math.min(Math.max(row, 0), songsLeft.length - 1)] ?? rest[rest.length - 1])?.focus();
+    });
   }
 
   function openFile() {
@@ -158,7 +172,7 @@
             role="menuitem"
             tabindex="-1"
             aria-label={`Remove ${e.title} from recent`}
-            title="Remove from recent (stems are kept)"
+            title="Remove from recent…"
             onclick={(ev) => remove(ev, e)}
           >
             <Icon name="close" size={12} />

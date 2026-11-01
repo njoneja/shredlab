@@ -3,7 +3,7 @@
   import Icon from "./Icon.svelte";
   import { api } from "./api";
   import { app } from "./store.svelte";
-  import { ago } from "./recent";
+  import { ago, formatBytes } from "./recent";
   import type { LibraryListing, StoredSongInfo } from "./types";
 
   // Manage storage: every song in the library (hidden ones too) with the size of its stored
@@ -33,18 +33,6 @@
   const chosen = $derived(songs.filter((s) => selected.has(s.song_id) && !s.open));
   const allChosen = $derived(deletable.length > 0 && chosen.length === deletable.length);
   const confirmBytes = $derived(confirm?.reduce((n, s) => n + s.size_bytes, 0) ?? 0);
-
-  function formatBytes(n: number) {
-    if (n < 1024) return `${n} B`;
-    const units = ["KB", "MB", "GB", "TB"];
-    let v = n / 1024;
-    let i = 0;
-    while (v >= 1024 && i < units.length - 1) {
-      v /= 1024;
-      i++;
-    }
-    return `${v >= 100 ? v.toFixed(0) : v.toFixed(1)} ${units[i]}`;
-  }
 
   function fileName(path: string) {
     return path.split(/[\\/]/).pop() || path;

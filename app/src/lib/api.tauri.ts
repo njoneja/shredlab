@@ -15,6 +15,7 @@ export const tauriBackend: Backend = {
   getLibrary: () => invoke("get_library"),
   hideRecent: (songId) => invoke("hide_recent", { songId }),
   listLibrary: () => invoke("list_library"),
+  songSize: (songId) => invoke("song_size", { songId }),
   deleteSong: (songId) => invoke("delete_song", { songId }),
   startSeparation: () => invoke("start_separation"),
   cancelSeparation: () => invoke("cancel_separation"),

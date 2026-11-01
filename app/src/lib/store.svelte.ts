@@ -115,6 +115,9 @@ class AppState {
   aboutOpen = $state(false);
   // Manage storage dialog (StorageDialog.svelte)
   storageOpen = $state(false);
+  // "Remove from recent?" confirmation (RemoveRecentDialog.svelte): the song, and a callback
+  // the opener uses to put focus back (removed = the song left the list).
+  removeAsk = $state<{ entry: LibraryEntry; done?: (removed: boolean) => void } | null>(null);
 
   // export
   exportOpen = $state(false);
@@ -847,6 +850,29 @@ class AppState {
 
   closeAbout() {
     this.aboutOpen = false;
+  }
+
+  // ---- remove from recent (with an option to delete the stems) ----
+  askRemoveRecent(entry: LibraryEntry, done?: (removed: boolean) => void) {
+    this.removeAsk = { entry, done };
+  }
+
+  closeRemoveRecent(removed: boolean) {
+    const done = this.removeAsk?.done;
+    this.removeAsk = null;
+    done?.(removed);
+  }
+
+  /** Deletes everything stored for a song (not the open one) and refreshes the recent list. */
+  async deleteSongData(songId: string): Promise<number | null> {
+    try {
+      return await api.deleteSong(songId);
+    } catch (e) {
+      this.report(e);
+      return null;
+    } finally {
+      await this.refreshLibrary();
+    }
   }
 
   // ---- storage ----
