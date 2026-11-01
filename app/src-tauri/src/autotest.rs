@@ -170,6 +170,10 @@ fn mix_all_but(without: &str, boost: Option<(&str, f32)>) -> Vec<ExportStem> {
         .collect()
 }
 
+/// Minimum SNR (dB) of an unstretched export against its reference mix
+/// (the export limiter caps it below the 24-bit rounding limit).
+const MIX_SNR_MIN: f64 = 40.0;
+
 fn export_wait(b: &Arc<Backend>, rx: &Receiver<Event>, req: ExportRequest) -> Result<f64, String> {
     let t = Instant::now();
     b.export_mix(req)?;
@@ -429,7 +433,10 @@ fn run(b: &Arc<Backend>, song: &Path, out: &Path, rx: &Receiver<Event>) -> Resul
     log!(
         "autotest: all-but-guitar export {secs:.1}s: vs original-guitar {snr_p1:.1} dB (gain {k:.3}), vs sum of stems {snr_sum:.1} dB"
     );
-    if snr_p1 < 60.0 || snr_sum > snr_p1 - 10.0 {
+    // The export's peak limiter touches the few samples above full scale
+    // (Houses Of The Holy peaks at ~1.07), which caps the SNR near 47 dB;
+    // the plain sum is far worse (~17 dB).
+    if snr_p1 < MIX_SNR_MIN || snr_sum > snr_p1 - 10.0 {
         return Err("all-but-guitar export is not original - guitar".into());
     }
 
@@ -467,7 +474,7 @@ fn run(b: &Arc<Backend>, song: &Path, out: &Path, rx: &Receiver<Event>) -> Resul
     log!(
         "autotest: solo export {secs:.1}s: vs sum of soloed stems {snr_sum:.1} dB (gain {k:.3}), vs P1 backing track {snr_p1:.1} dB"
     );
-    if snr_sum < 60.0 || snr_p1 > snr_sum - 10.0 {
+    if snr_sum < MIX_SNR_MIN || snr_p1 > snr_sum - 10.0 {
         return Err("solo export is not the plain sum of the soloed stems".into());
     }
 
