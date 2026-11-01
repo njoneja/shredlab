@@ -11,6 +11,7 @@ Status: works end to end on Windows (separate, beats, mixer, speed/pitch,
 loops, click, export); macOS has not been built or run yet. See
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for how it fits together and
 [docs/DEVELOPING.md](docs/DEVELOPING.md) for practical development notes.
+How to use it: [docs/HELP.md](docs/HELP.md).
 
 ## Repository layout
 
@@ -26,7 +27,7 @@ loops, click, export); macOS has not been built or run yet. See
 | `crates/stemx-cli` | `stemx`, headless CLI |
 | `tools/` | Python tooling: model setup/export, model folders, fixtures ([tools/README.md](tools/README.md)) |
 | `spikes/`, `scripts/` | Python reference implementations (Rust ports are validated against them; [spikes/README.md](spikes/README.md)) |
-| `docs/` | Architecture, development notes, model manifest format |
+| `docs/` | User help, architecture, development notes, model manifest format |
 
 ## Building from scratch
 

@@ -47,6 +47,8 @@ const MIN_LOOP = 0.05;
 
 /** What the export covers: the whole song, playhead → end, or the A–B loop once. */
 export type ExportRange = "song" | "playhead" | "loop";
+/** Sections of the help dialog that other panels can link to. */
+export type HelpSection = "practice" | "play-along" | "click" | "keys";
 
 function defaultMix(): Record<StemName, StemUi> {
   return Object.fromEntries(STEMS.map((s) => [s, { on: true, volume: 1, solo: false }])) as Record<StemName, StemUi>;
@@ -97,6 +99,10 @@ class AppState {
   loop = $state<LoopState>({ a_sec: null, b_sec: null, enabled: false });
   click = $state<ClickState>({ enabled: false, count_in_enabled: false, count_in_beats: 4, subdivision: 1, beats_per_bar: 4, volume: 0.8 });
   countInSet = false; // count_in_beats came from saved settings
+
+  // help dialog (ShortcutsHelp.svelte): open, and the section to scroll to
+  helpOpen = $state(false);
+  helpSection = $state<HelpSection | null>(null);
 
   // export
   exportOpen = $state(false);
@@ -661,6 +667,17 @@ class AppState {
 
   async clearOverrides() {
     await this.setOverrides([]);
+  }
+
+  // ---- help ----
+  openHelp(section: HelpSection | null = null) {
+    this.helpSection = section;
+    this.helpOpen = true;
+  }
+
+  closeHelp() {
+    this.helpOpen = false;
+    this.helpSection = null;
   }
 
   // ---- export ----

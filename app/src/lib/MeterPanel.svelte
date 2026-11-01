@@ -11,7 +11,6 @@
   // Initialised from the playhead once, when the panel opens.
   let fromBar = $state(Math.max(1, barAt(app.downbeats, app.position)));
   let bpb = $state(app.beatsPerBar);
-  let showHelp = $state(false);
 
   const SUBDIVS: { v: Subdivision; label: string }[] = [
     { v: 1, label: "None" },
@@ -24,6 +23,11 @@
     const t = app.grid?.beats[o.beat_index] ?? 0;
     if (o.kind === "beat_one") return `Beat 1 at ${formatTime(t, true)}`;
     return `${o.beats_per_bar} beats per bar from ${formatTime(t, true)}`;
+  }
+
+  function openClickHelp() {
+    onclose();
+    app.openHelp("click");
   }
 
   function onWindowDown(e: PointerEvent) {
@@ -85,19 +89,9 @@
     </div>
   {/if}
 
-  <button class="link small" onclick={() => (showHelp = !showHelp)}>
-    <Icon name="help" size={14} /> When is detection wrong?
+  <button class="link small" onclick={openClickHelp} title="How to fix the click, and when beat detection gets it wrong">
+    <Icon name="help" size={14} /> Click sounds off?
   </button>
-  {#if showHelp}
-    <div class="help small muted">
-      <p>The click follows the detected beats, so tempo and meter changes work. Detection is good but not perfect:</p>
-      <ul>
-        <li>Odd meters (5/4, 7/4) usually get the right beats but misplaced downbeats. Use “This is beat 1” and set the beats per bar.</li>
-        <li>Additive meters (7/8 = 2+2+3) may track as an even pulse.</li>
-        <li>3/4 vs 6/8 can’t be told apart; 6/8 usually shows as 2 beats per bar. Use subdivision 3 for the 6/8 feel.</li>
-      </ul>
-    </div>
-  {/if}
 </div>
 
 <style>
@@ -200,16 +194,5 @@
   }
   .link:hover {
     color: var(--fg);
-  }
-  .help p {
-    margin: 0 0 4px;
-  }
-  .help ul {
-    list-style: disc;
-    padding-left: 18px;
-  }
-  .help li {
-    display: list-item;
-    font-size: 12px;
   }
 </style>

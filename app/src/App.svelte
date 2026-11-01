@@ -12,8 +12,6 @@
   import ExportDialog from "./lib/ExportDialog.svelte";
   import ShortcutsHelp from "./lib/ShortcutsHelp.svelte";
 
-  let helpOpen = $state(false);
-
   onMount(() => {
     app.init();
   });
@@ -27,7 +25,7 @@
   // Keyboard shortcuts (listed in lib/ShortcutsHelp.svelte). Uses e.code for digits so Shift+1
   // works regardless of keyboard layout ("!" etc.).
   function onKeydown(e: KeyboardEvent) {
-    if (!app.song || app.exportOpen || helpOpen || isTyping(e.target)) return;
+    if (!app.song || app.exportOpen || app.helpOpen || isTyping(e.target)) return;
     if (e.ctrlKey || e.metaKey) return;
     const digit = /^Digit([1-6])$/.exec(e.code) ?? /^Numpad([1-6])$/.exec(e.code);
     let handled = true;
@@ -66,14 +64,14 @@
 
   // A focused button would also "click" on Space keyup; swallow it.
   function onKeyup(e: KeyboardEvent) {
-    if (e.code === "Space" && app.song && !isTyping(e.target) && !app.exportOpen && !helpOpen) e.preventDefault();
+    if (e.code === "Space" && app.song && !isTyping(e.target) && !app.exportOpen && !app.helpOpen) e.preventDefault();
   }
 </script>
 
 <svelte:window onkeydown={onKeydown} onkeyup={onKeyup} />
 
 <div class="shell">
-  <Header onhelp={() => (helpOpen = true)} />
+  <Header onhelp={() => app.openHelp()} />
 
   {#if app.error}
     <div class="error" role="alert">
@@ -99,7 +97,7 @@
 </div>
 
 {#if app.exportOpen}<ExportDialog />{/if}
-{#if helpOpen}<ShortcutsHelp onclose={() => (helpOpen = false)} />{/if}
+{#if app.helpOpen}<ShortcutsHelp />{/if}
 {#if app.toast}<div class="toast" role="status">{app.toast}</div>{/if}
 
 <style>
