@@ -32,9 +32,9 @@
   --fg: #EEF0F6;
   --muted: #8F96A8;
   --faint: #5E6578;
-  --accent: #FF3D7F;
-  --accent-fg: #14060C;
-  --accent-soft: rgba(255, 61, 127, 0.16);
+  --accent: #4D8DFF;
+  --accent-fg: #060B18;
+  --accent-soft: rgba(77, 141, 255, 0.16);
   --loop: #3DD6FF;
   --loop-soft: rgba(61, 214, 255, 0.15);
   --solo: var(--accent);
