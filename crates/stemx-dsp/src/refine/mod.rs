@@ -100,6 +100,25 @@ impl RefineChain {
         self.eq.process_inplace(l, r);
     }
 
+    /// Processes a block in place and also returns the pan-selected part
+    /// before the EQ: afterwards `l, r` hold the selection `p` (pan mask
+    /// only) and `eq_l, eq_r` the refined part `r` (selection then EQ), both
+    /// `latency()` samples late. With a flat EQ, `r == p` bit-exact. The
+    /// engine needs both for the backing mix (`the unpublished Refine notes`):
+    /// `mix = w·original + Σ (g_i·r_i − w·p_i)`.
+    pub fn process_parts(
+        &mut self,
+        l: &mut [f32],
+        r: &mut [f32],
+        eq_l: &mut [f32],
+        eq_r: &mut [f32],
+    ) {
+        self.pan.process_inplace(l, r);
+        eq_l.copy_from_slice(l);
+        eq_r.copy_from_slice(r);
+        self.eq.process_inplace(eq_l, eq_r);
+    }
+
     /// Processes a block: `out` = refined `in`, `latency()` samples late.
     pub fn process(&mut self, in_l: &[f32], in_r: &[f32], out_l: &mut [f32], out_r: &mut [f32]) {
         out_l.copy_from_slice(in_l);

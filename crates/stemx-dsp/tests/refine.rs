@@ -306,6 +306,32 @@ fn streaming_matches_offline_for_any_block_size() {
 }
 
 #[test]
+fn process_parts_returns_the_selection_and_the_refined_part() {
+    let n = 30_000;
+    let (l, r) = lcr_signal(n);
+    let mut p = pan_only(PanParams::left());
+    let sel = refine_offline(&p, SR, &l, &r);
+    p.eq = eq_preset("guitar-focus").unwrap().eq;
+    let full = refine_offline(&p, SR, &l, &r);
+    let mut chain = RefineChain::new(SR);
+    chain.set_params_now(&p);
+    let lat = chain.latency();
+    let (mut pl, mut pr) = (l.clone(), r.clone());
+    let (mut el, mut er) = (vec![0.0; n], vec![0.0; n]);
+    chain.process_parts(&mut pl, &mut pr, &mut el, &mut er);
+    assert_eq!(&pl[lat..], &sel[0][..n - lat]);
+    assert_eq!(&pr[lat..], &sel[1][..n - lat]);
+    assert_eq!(&el[lat..], &full[0][..n - lat]);
+    assert_eq!(&er[lat..], &full[1][..n - lat]);
+    // Flat EQ: the refined part is the selection, bit-exact.
+    chain.set_params_now(&pan_only(PanParams::left()));
+    let (mut pl, mut pr) = (l.clone(), r.clone());
+    chain.process_parts(&mut pl, &mut pr, &mut el, &mut er);
+    assert_eq!(pl, el);
+    assert_eq!(pr, er);
+}
+
+#[test]
 fn reset_and_prime_reproduce_the_offline_result() {
     // Seek pattern: reset, prime with the next `latency()` samples, then
     // the output is aligned with the play position from the first sample.
