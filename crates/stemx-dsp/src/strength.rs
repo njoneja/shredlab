@@ -50,6 +50,11 @@ pub struct StrengthOptions {
     pub threads: usize,
     /// Frames per work item (~1.5 s at 64 frames of hop 1024).
     pub chunk_frames: usize,
+    /// "Smooth" variant: scale each stem's own spectrum by
+    /// `min(1, m_i(p) / m_i(1))` instead of splitting the original, so
+    /// small `p` stays close to the model's stems. The result no longer sums
+    /// to the original (see the module docs).
+    pub smooth: bool,
 }
 
 impl Default for StrengthOptions {
@@ -59,6 +64,7 @@ impl Default for StrengthOptions {
             hop: 1024,
             threads: 0,
             chunk_frames: 64,
+            smooth: false,
         }
     }
 }
@@ -86,6 +92,7 @@ struct Plan {
     /// Samples a chunk's local buffer spans per lane.
     span: usize,
     p: f32,
+    smooth: bool,
     window: Vec<f32>,
     ola_scale: f32,
 }
@@ -192,19 +199,36 @@ impl Worker {
                     }
                     let inv = 1.0 / mx;
                     let mut sum = 0.0f32;
+                    let mut sum1 = 0.0f32;
                     for j in 0..ns {
-                        let wj = weight(self.mag2[j * bins + f] * inv, plan.p, p_half);
+                        let r2 = self.mag2[j * bins + f] * inv;
+                        let wj = weight(r2, plan.p, p_half);
                         self.w[j] = wj;
                         sum += wj;
+                        if plan.smooth {
+                            sum1 += r2.sqrt();
+                        }
                     }
                     let k = 1.0 / sum;
                     for j in 0..ns {
-                        self.mag2[j * bins + f] = self.w[j] * k;
+                        let m = self.w[j] * k;
+                        self.mag2[j * bins + f] = if plan.smooth {
+                            // min(1, m(p) / m(1)), applied to the stem itself.
+                            let m1 = (self.mag2[j * bins + f] * inv).sqrt() / sum1;
+                            if m1 > 0.0 {
+                                (m / m1).min(1.0)
+                            } else {
+                                0.0
+                            }
+                        } else {
+                            m
+                        };
                     }
                 }
                 for s in 0..ns {
                     let mask = &self.mag2[s * bins..(s + 1) * bins];
-                    for ((y, x), &m) in self.ys.iter_mut().zip(&self.xs).zip(mask) {
+                    let src = if plan.smooth { &self.ss[s] } else { &self.xs };
+                    for ((y, x), &m) in self.ys.iter_mut().zip(src).zip(mask) {
                         *y = x * m;
                     }
                     self.ys[0].im = 0.0;
@@ -290,6 +314,7 @@ pub fn strength_stream(
         chunks,
         span: chunk_frames * hop + n_fft - hop,
         p,
+        smooth: opts.smooth,
         window,
         ola_scale: 1.0 / (n_fft as f32 * ola_norm),
     };

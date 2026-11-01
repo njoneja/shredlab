@@ -2,7 +2,7 @@
 
 use std::f64::consts::PI;
 
-use stemx_dsp::refine::eq::{Coefs, EqParams};
+use stemx_dsp::refine::eq::{Coefs, EndMode, EqParams};
 use stemx_dsp::refine::pan::window_gain;
 use stemx_dsp::refine::*;
 
@@ -437,6 +437,7 @@ fn eq_parameter_changes_do_not_click() {
             low_cut: CutParams {
                 enabled: true,
                 freq: 300.0,
+                ..CutParams::default()
             },
             ..EqParams::default()
         };
@@ -445,6 +446,7 @@ fn eq_parameter_changes_do_not_click() {
         eq_sweep.low_cut = CutParams {
             enabled: true,
             freq: 150.0,
+            ..CutParams::default()
         };
         let seq = [eq_boost, eq_cut, eq_sweep, EqParams::default(), eq_cut];
         let mut i = 0;
@@ -493,10 +495,12 @@ fn eq_matches_the_analytic_biquad_response() {
         low_cut: CutParams {
             enabled: true,
             freq: 120.0,
+            ..CutParams::default()
         },
         high_cut: CutParams {
             enabled: true,
             freq: 8000.0,
+            ..CutParams::default()
         },
         ..EqParams::default()
     };
@@ -596,4 +600,192 @@ fn params_serialize_and_presets_are_sane() {
         response_db(&pr.eq, SR as f32, &freqs, &mut c);
         assert!(c.iter().all(|&v| v < 6.5), "{}", pr.id);
     }
+}
+
+fn shelf_end(freq: f32, gain_db: f32) -> CutParams {
+    CutParams {
+        enabled: true,
+        freq,
+        mode: EndMode::Shelf,
+        gain_db,
+    }
+}
+
+#[test]
+fn shelf_matches_the_analytic_rbj_shelf() {
+    let fs = SR as f64;
+    // Independent evaluation of the RBJ shelf (S = 1) transfer function.
+    let rbj = |f0: f64, g: f64, high: bool, f: f64| -> f64 {
+        let a = 10f64.powf(g / 40.0);
+        let w0 = 2.0 * PI * f0 / fs;
+        let al = w0.sin() / 2.0 * 2f64.sqrt();
+        let c = w0.cos();
+        let k = 2.0 * a.sqrt() * al;
+        let (b, aa) = if high {
+            (
+                [
+                    a * ((a + 1.0) + (a - 1.0) * c + k),
+                    -2.0 * a * ((a - 1.0) + (a + 1.0) * c),
+                    a * ((a + 1.0) + (a - 1.0) * c - k),
+                ],
+                [
+                    (a + 1.0) - (a - 1.0) * c + k,
+                    2.0 * ((a - 1.0) - (a + 1.0) * c),
+                    (a + 1.0) - (a - 1.0) * c - k,
+                ],
+            )
+        } else {
+            (
+                [
+                    a * ((a + 1.0) - (a - 1.0) * c + k),
+                    2.0 * a * ((a - 1.0) - (a + 1.0) * c),
+                    a * ((a + 1.0) - (a - 1.0) * c - k),
+                ],
+                [
+                    (a + 1.0) + (a - 1.0) * c + k,
+                    -2.0 * ((a - 1.0) + (a + 1.0) * c),
+                    (a + 1.0) + (a - 1.0) * c - k,
+                ],
+            )
+        };
+        let w = 2.0 * PI * f / fs;
+        let h = |co: [f64; 3]| {
+            let re = co[0] + co[1] * w.cos() + co[2] * (2.0 * w).cos();
+            let im = -co[1] * w.sin() - co[2] * (2.0 * w).sin();
+            (re * re + im * im).sqrt()
+        };
+        20.0 * (h(b) / h(aa)).log10()
+    };
+    let freqs = [20.0f32, 100.0, 250.0, 1000.0, 4000.0, 10_000.0, 18_000.0];
+    for (lo, hi) in [
+        ((200.0, 6.0), (6000.0, -4.5)),
+        ((80.0, -12.0), (10_000.0, 12.0)),
+    ] {
+        let p = EqParams {
+            low_cut: shelf_end(lo.0, lo.1),
+            high_cut: shelf_end(hi.0, hi.1),
+            ..EqParams::default()
+        };
+        let mut out = [0.0f32; 7];
+        response_db(&p, SR as f32, &freqs, &mut out);
+        for (&f, &got) in freqs.iter().zip(&out) {
+            let want = rbj(lo.0 as f64, lo.1 as f64, false, f as f64)
+                + rbj(hi.0 as f64, hi.1 as f64, true, f as f64);
+            assert!((got as f64 - want).abs() < 1e-3, "{f} Hz: {got} vs {want}");
+        }
+        // Textbook points: half the gain at the corner, full gain far away.
+        let mut c = [0.0f32; 2];
+        let low_only = EqParams {
+            low_cut: shelf_end(lo.0, lo.1),
+            ..EqParams::default()
+        };
+        response_db(&low_only, SR as f32, &[lo.0, 15.0], &mut c);
+        assert!((c[0] - lo.1 / 2.0).abs() < 0.05, "{c:?}");
+        assert!((c[1] - lo.1).abs() < 0.5, "{c:?}");
+    }
+    // The running EQ follows the curve (steady-state sine gain).
+    let p = RefineParams {
+        eq: EqParams {
+            low_cut: shelf_end(150.0, 8.0),
+            high_cut: shelf_end(5000.0, -6.0),
+            ..EqParams::default()
+        },
+        ..RefineParams::default()
+    };
+    let n = SR as usize;
+    for f in [60.0f32, 150.0, 1000.0, 5000.0, 12_000.0] {
+        let mut want = [0.0f32];
+        response_db(&p.eq, SR as f32, &[f], &mut want);
+        let x = sine(f as f64, n, 0.2);
+        let [ol, _] = refine_offline(&p, SR, &x, &x);
+        let got = db(amp_at(&ol, f as f64, n / 2..n) / 0.2);
+        assert!(
+            (got - want[0] as f64).abs() < 0.05,
+            "{f} Hz: {got} vs {}",
+            want[0]
+        );
+    }
+    // Shelf gain is clamped to ±12 dB; a 0 dB shelf is identity.
+    assert_eq!(shelf_end(100.0, 30.0).shelf_gain(), 12.0);
+    assert!(EqParams {
+        low_cut: shelf_end(100.0, 0.0),
+        ..EqParams::default()
+    }
+    .is_identity());
+}
+
+#[test]
+fn switching_cut_and_shelf_does_not_click() {
+    let n = SR as usize * 2;
+    let mut chain = RefineChain::new(SR);
+    let lat = chain.latency();
+    for (f, a) in [(100.0, 0.5), (8000.0, 0.2)] {
+        chain.reset();
+        chain.set_params_now(&RefineParams::default());
+        let l = sine(f, n, a);
+        let mut ol = vec![0.0; n];
+        let mut or = vec![0.0; n];
+        let eq = |lo: CutParams, hi: CutParams| RefineParams {
+            eq: EqParams {
+                low_cut: lo,
+                high_cut: hi,
+                ..EqParams::default()
+            },
+            ..RefineParams::default()
+        };
+        let seq = [
+            eq(CutParams::cut(300.0), CutParams::cut(4000.0)),
+            eq(shelf_end(300.0, 9.0), shelf_end(4000.0, -9.0)),
+            {
+                // Low end off while a low bell glides in.
+                let mut e = eq(CutParams::off(300.0), shelf_end(4000.0, 9.0));
+                e.eq.bands[0] = BandParams::new(150.0, 9.0, 0.7);
+                e
+            },
+            eq(shelf_end(300.0, -12.0), CutParams::cut(4000.0)),
+            RefineParams::default(),
+        ];
+        let (mut i, mut k) = (0, 0);
+        while i < n {
+            if i >= lat + 2_000 + k * 12_000 && k < seq.len() {
+                chain.set_params(&seq[k]);
+                k += 1;
+            }
+            let b = 256.min(n - i);
+            chain.process(
+                &l[i..i + b],
+                &l[i..i + b],
+                &mut ol[i..i + b],
+                &mut or[i..i + b],
+            );
+            i += b;
+        }
+        assert_eq!(k, seq.len());
+        // The loudest setting (+9 dB shelf at 100 Hz, ~2.8x) bounds the
+        // slope; a click or zipper step would exceed it.
+        let sine_step = (2.9 * a * 2.0 * PI * f / SR as f64) as f32;
+        let got = max_step(&ol[2 * lat + 1_000..]);
+        assert!(
+            got <= sine_step * 1.05,
+            "{f} Hz: max step {got} vs {sine_step}"
+        );
+        // Back to flat: ends bypassed again, output = input.
+        assert!(chain.is_bypassed());
+    }
+}
+
+#[test]
+fn old_params_and_presets_stay_cuts() {
+    // Saved before shelves existed: no mode / gain_db fields.
+    let p: CutParams = serde_json::from_str(r#"{"enabled":true,"freq":120.0}"#).unwrap();
+    assert_eq!(p, CutParams::cut(120.0));
+    assert!(p.cut_on() && p.shelf_gain() == 0.0);
+    for pr in EQ_PRESETS {
+        assert_eq!(pr.eq.low_cut.mode, EndMode::Cut, "{}", pr.id);
+        assert_eq!(pr.eq.high_cut.mode, EndMode::Cut, "{}", pr.id);
+    }
+    // Default params: exact passthrough (delayed).
+    let x = sine(440.0, 20_000, 0.3);
+    let [ol, _] = refine_offline(&RefineParams::default(), SR, &x, &x);
+    assert_eq!(ol, x);
 }

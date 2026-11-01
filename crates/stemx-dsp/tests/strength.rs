@@ -237,3 +237,52 @@ fn single_thread_equals_multi_thread() {
         }
     }
 }
+
+#[test]
+fn smooth_keeps_the_stems_at_p1_and_never_boosts() {
+    let n = 40_000;
+    let st = stems(n);
+    let residual = [noise(n, 7, 0.02), noise(n, 8, 0.02)];
+    let orig = mix(&st, Some(&residual));
+    let cancel = AtomicBool::new(false);
+    let run = |p| {
+        apply_strength(
+            [&orig[0], &orig[1]],
+            &views(&st),
+            p,
+            &StrengthOptions {
+                smooth: true,
+                ..Default::default()
+            },
+            &mut |_| {},
+            &cancel,
+        )
+        .unwrap()
+    };
+    // p = 1: factor 1 everywhere, so the model's stems come back (STFT
+    // round trip only), leftover and all; the residual is NOT in the sum.
+    let one = run(1.0);
+    let r = 5000..n - 5000;
+    for s in 0..st.len() {
+        for ch in 0..2 {
+            let snr = snr_db(&st[s][ch][r.clone()], &one[s][ch][r.clone()]);
+            assert!(snr > 60.0, "stem {s} ch {ch}: {snr:.1} dB");
+        }
+    }
+    // p > 1: each stem only loses energy (the factor is at most 1), and the
+    // sum stays the stems' sum minus what was removed (not the original).
+    for p in [1.5, 2.0, 4.0] {
+        let out = run(p);
+        let e = |x: &[f32]| {
+            x[r.clone()]
+                .iter()
+                .map(|v| (*v as f64).powi(2))
+                .sum::<f64>()
+        };
+        for s in 0..st.len() {
+            assert!(e(&out[s][0]) <= e(&st[s][0]) * 1.001, "p {p} stem {s} grew");
+        }
+        // The broadband stem loses the tones' leakage more as p grows.
+        assert!(e(&out[3][0]) < e(&st[3][0]));
+    }
+}

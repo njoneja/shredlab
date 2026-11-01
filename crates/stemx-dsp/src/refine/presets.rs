@@ -50,21 +50,12 @@ const OFF_BAND: BandParams = BandParams {
 };
 
 const fn cut(freq: f32) -> CutParams {
-    CutParams {
-        enabled: true,
-        freq,
-    }
+    CutParams::cut(freq)
 }
 
-const NO_LOW: CutParams = CutParams {
-    enabled: false,
-    freq: 80.0,
-};
+const NO_LOW: CutParams = CutParams::off(80.0);
 
-const NO_HIGH: CutParams = CutParams {
-    enabled: false,
-    freq: 12_000.0,
-};
+const NO_HIGH: CutParams = CutParams::off(12_000.0);
 
 /// The preset list, in UI order (Flat last).
 pub const EQ_PRESETS: [EqPreset; 7] = [

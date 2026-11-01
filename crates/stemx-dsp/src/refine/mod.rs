@@ -81,6 +81,13 @@ impl RefineChain {
         self.pan.is_bypassed() && self.eq.is_bypassed()
     }
 
+    /// True while the EQ stage passes its input unchanged (flat and all fades
+    /// finished): then [`process_parts`](Self::process_parts) returns
+    /// `r == p` bit-exact, and the engine can mix the selection alone.
+    pub fn eq_bypassed(&self) -> bool {
+        self.eq.is_bypassed()
+    }
+
     /// Clears signal state and jumps to the target params (seek). Follow with
     /// [`prime`](Self::prime) of the next `latency()` input samples.
     pub fn reset(&mut self) {
