@@ -128,11 +128,14 @@ default output device via cpal.
   track. Otherwise it is the plain sum of the enabled stems. `choose_mode`
   is shared by playback and export.
 - **Refine.** Every stem runs through its own Refine chain (an STFT mask
-  that keeps or removes a stereo position, then an EQ) before the mix, at
-  the song rate, so before the stretcher. With the selection `p` and the
-  refined part `r`, the mix is `w·original + Σ (gain_i·r_i − w·p_i)`
-  (`w` = 1 in the backing-track mode, 0 for the plain sum); an unrefined
-  chain is an exact delay, so that is the formula above. The chain's
+  for a stereo window, then an EQ) before the mix, at the song rate, so
+  before the stretcher. The window is an exception to the row's on switch:
+  with the switch on the mask passes everything but the window, with it off
+  only the window (the app sets the mask's run-time `invert` flag from the
+  switch). With `s` the whole stem and `r` the heard part after EQ, the mix
+  is `w·original + Σ (gain_i·r_i − w·s_i)` (`w` = 1 in the backing-track
+  mode, 0 for the plain sum); an unrefined chain is an exact delay, so
+  that is the formula above. The chain's
   latency (4096 samples) is hidden by feeding it ahead of the play
   position; chains re-prime whenever playback jumps (seek, loop, pre-roll).
 - **Separation strength** re-derives the stems from the original with a
