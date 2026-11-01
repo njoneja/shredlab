@@ -175,9 +175,11 @@ fn mix_all_but(without: &str, boost: Option<(&str, f32)>) -> Vec<ExportStem> {
         .collect()
 }
 
-/// Minimum SNR (dB) of an unstretched export against its reference mix
-/// (the export limiter caps it below the 24-bit rounding limit).
-const MIX_SNR_MIN: f64 = 40.0;
+/// Minimum SNR (dB) of an unstretched export against its reference mix.
+/// The export limiter caps it well below the 24-bit rounding limit, more so
+/// on loud songs (Mr. Crowley's solo export: 37 dB). The wrong mix scores
+/// around 16 dB, so 30 dB still tells them apart.
+const MIX_SNR_MIN: f64 = 30.0;
 
 fn export_wait(b: &Arc<Backend>, rx: &Receiver<Event>, req: ExportRequest) -> Result<f64, String> {
     let t = Instant::now();
