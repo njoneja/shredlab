@@ -10,6 +10,9 @@
 //! Standard (re-separates) -> back to High (instant, from the cache) ->
 //! "All but guitar" export in P1 mode (checked against original - guitar)
 //! -> the same with click + count-in (unstretched and at 80 %)
+//! -> a loop A-B export with count-in (played once, faded edges) -> the
+//! music start: whole-song count-in export and play from 0 start there
+//! ("Count in to where the music starts"; off = from 0)
 //! -> +6 dB boost export (no clipping) -> WAV/FLAC/MP3 exports. Each step
 //! is logged with its timing; the last line is `AUTOTEST PASS` or
 //! `AUTOTEST FAIL: ...`. The saved settings are restored at the end. Use a
@@ -66,6 +69,7 @@ pub fn maybe_start(backend: Arc<Backend>, app: tauri::AppHandle) {
                 model_id: saved.model_choice,
                 quality: saved.quality_choice,
             });
+            let _ = backend.set_count_in_to_music_start(saved.count_in_to_music_start);
             let code = match result {
                 Ok(()) => {
                     log!("AUTOTEST PASS");
@@ -259,6 +263,8 @@ fn check_click_export(
         overrides: vec![],
         downbeats: grid.downbeats.clone(),
     });
+    // This check compares against the whole song from 0:00.
+    b.set_count_in_to_music_start(false)?;
     b.set_click(ClickState {
         enabled: true,
         count_in_enabled: true,
@@ -277,6 +283,8 @@ fn check_click_export(
         cents: 0.0,
         click,
         count_in: click,
+        start_sec: None,
+        end_sec: None,
     };
     let res = (|| {
         for speed in [100.0, 80.0] {
@@ -371,6 +379,155 @@ fn check_click_export(
         }
         Ok(())
     })();
+    b.set_click(ClickState::default());
+    res
+}
+
+/// Loop A-B export with count-in (8 beats from the first beat after 30 s,
+/// played once): count-in clicks over silence, then exactly the range of
+/// `plain` (the unstretched whole-song export of the same mix), with faded
+/// edges. Then the music start: a whole-song count-in export and `play`
+/// from 0 start at `BeatGrid.music_start` with the setting on, at 0 with
+/// it off.
+fn check_range_export(
+    b: &Arc<Backend>,
+    rx: &Receiver<Event>,
+    out: &Path,
+    plain: &[Vec<f32>; 2],
+) -> Result<(), String> {
+    let grid = b.get_beats()?.ok_or("no beat grid")?;
+    let sr = crate::backend::RATE as f64;
+    b.set_click(ClickState {
+        enabled: false,
+        count_in_enabled: true,
+        count_in_beats: 4,
+        subdivision: 1,
+        beats_per_bar: 4,
+        volume: 0.5,
+    });
+    let cfg = crate::audio::ClickConfig {
+        beats: grid.beats.clone(),
+        count_in_beats: 4,
+        beats_per_bar: 4,
+        ..Default::default()
+    };
+    let req = |file: &Path, start: Option<f64>, end: Option<f64>| ExportRequest {
+        path: file.display().to_string(),
+        format: ExportFormat::Wav,
+        stems: mix_all_but("guitar", None),
+        solo: false,
+        speed_percent: 100.0,
+        semitones: 0.0,
+        cents: 0.0,
+        click: false,
+        count_in: true,
+        start_sec: start,
+        end_sec: end,
+    };
+    let res = (|| {
+        b.set_count_in_to_music_start(true)?;
+        let k = grid.beats.partition_point(|&t| t < 30.0);
+        let (a, z) = match (grid.beats.get(k), grid.beats.get(k + 8)) {
+            (Some(&a), Some(&z)) => (a, z),
+            _ => return Err("song too short for the loop export".into()),
+        };
+        b.set_loop(LoopState {
+            a_sec: Some(a),
+            b_sec: Some(z),
+            enabled: true,
+        });
+        let file = out.join("autotest-loop-count-in.wav");
+        let _ = std::fs::remove_file(&file);
+        let secs = export_wait(b, rx, req(&file, Some(a), Some(z)))?;
+        let got = read_wav(&file)?;
+        let plan = crate::audio::click::plan_count_in(&cfg, a, 1.0).ok_or("no count-in plan")?;
+        let lead = (plan.audio_start() * sr).round() as usize;
+        let (ai, zi) = ((a * sr).round() as usize, (z * sr).round() as usize);
+        let want = lead + zi - ai;
+        let on = onsets(&got[0][..lead.min(got[0].len())], 1e-3, 2000);
+        let fade = (crate::audio::EDGE_FADE_SECS * sr).round() as usize + 2;
+        let n = got[0].len().min(want);
+        let body = |x: &[Vec<f32>; 2], from: usize, len: usize| {
+            [
+                x[0][from..from + len].to_vec(),
+                x[1][from..from + len].to_vec(),
+            ]
+        };
+        let len = n.saturating_sub(lead + 2 * fade);
+        let (snr, k) = snr_db(&body(&got, lead + fade, len), &body(plain, ai + fade, len));
+        let edge_in = got[0][lead].abs().max(got[1][lead].abs());
+        let edge_out = got[0][n - 1].abs().max(got[1][n - 1].abs());
+        log!(
+            "autotest: loop {a:.2}-{z:.2}s count-in export {secs:.1}s: {} samples (want {want}), count-in interval {:.3}s, onsets {on:?}, vs plain range {snr:.1} dB (gain {k:.3}), edges {edge_in:.5} / {edge_out:.5}",
+            got[0].len(),
+            plan.interval
+        );
+        if got[0].len().abs_diff(want) > 1 {
+            return Err(format!(
+                "loop export is {} samples, want {want}",
+                got[0].len()
+            ));
+        }
+        if on.len() != 4 {
+            return Err(format!("loop export count-in clicks {on:?}, want 4"));
+        }
+        if snr < MIX_SNR_MIN {
+            return Err(format!(
+                "loop export music differs from the song ({snr:.1} dB)"
+            ));
+        }
+        if edge_in > 1e-3 || edge_out > 1e-3 {
+            return Err("loop export edges are not faded".into());
+        }
+        b.set_loop(LoopState::default());
+
+        // Whole song with count-in: starts at the music start, if any.
+        let file = out.join("autotest-music-start.wav");
+        let _ = std::fs::remove_file(&file);
+        let secs = export_wait(b, rx, req(&file, None, None))?;
+        let got = read_wav(&file)?;
+        let start = grid.music_start.unwrap_or(0.0);
+        let plan =
+            crate::audio::click::plan_count_in(&cfg, start, 1.0).ok_or("no count-in plan")?;
+        let lead = (plan.audio_start() * sr).round() as usize;
+        let want = lead + plain[0].len() - (start * sr).round() as usize;
+        log!(
+            "autotest: music start {:?}: whole-song count-in export {secs:.1}s, {} samples (want {want}), count-in interval {:.3}s ({:.1} BPM)",
+            grid.music_start,
+            got[0].len(),
+            plan.interval,
+            60.0 / plan.interval
+        );
+        if got[0].len().abs_diff(want) > 1 {
+            return Err(format!(
+                "music-start export is {} samples, want {want}",
+                got[0].len()
+            ));
+        }
+        // Playback from 0 jumps there too (the playhead shows it).
+        b.seek(0.0);
+        b.play()?;
+        let p = b.position().ok_or("no engine")?;
+        b.pause();
+        log!("autotest: play from 0 starts at {:.3}s", p.seconds);
+        if (p.seconds - start).abs() > 1e-3 {
+            return Err(format!(
+                "play from 0 started at {}, want {start}",
+                p.seconds
+            ));
+        }
+        // Setting off: from 0 as before.
+        b.set_count_in_to_music_start(false)?;
+        b.seek(0.0);
+        b.play()?;
+        let p = b.position().ok_or("no engine")?;
+        b.pause();
+        if p.seconds.abs() > 1e-3 {
+            return Err(format!("setting off: play from 0 started at {}", p.seconds));
+        }
+        Ok(())
+    })();
+    b.set_loop(LoopState::default());
     b.set_click(ClickState::default());
     res
 }
@@ -583,6 +740,8 @@ fn run(b: &Arc<Backend>, song: &Path, out: &Path, rx: &Receiver<Event>) -> Resul
             cents: 0.0,
             click: false,
             count_in: false,
+            start_sec: None,
+            end_sec: None,
         },
     )?;
     let got = read_wav(&file)?;
@@ -602,6 +761,7 @@ fn run(b: &Arc<Backend>, song: &Path, out: &Path, rx: &Receiver<Event>) -> Resul
         return Err("all-but-guitar export is not original - guitar".into());
     }
     check_click_export(b, rx, out, &got)?;
+    check_range_export(b, rx, out, &got)?;
 
     // Solo export of vocals, bass and drums: what is heard is the plain sum
     // of the soloed stems, even though 3 of 6 on would be P1 mode without
@@ -628,6 +788,8 @@ fn run(b: &Arc<Backend>, song: &Path, out: &Path, rx: &Receiver<Event>) -> Resul
             cents: 0.0,
             click: false,
             count_in: false,
+            start_sec: None,
+            end_sec: None,
         },
     )?;
     let got = read_wav(&file)?;
@@ -659,6 +821,8 @@ fn run(b: &Arc<Backend>, song: &Path, out: &Path, rx: &Receiver<Event>) -> Resul
             cents: 0.0,
             click: false,
             count_in: false,
+            start_sec: None,
+            end_sec: None,
         },
     )?;
     let got = read_wav(&file)?;
@@ -699,6 +863,8 @@ fn run(b: &Arc<Backend>, song: &Path, out: &Path, rx: &Receiver<Event>) -> Resul
                 cents: 0.0,
                 click: false,
                 count_in: false,
+                start_sec: None,
+                end_sec: None,
             },
         )?;
         let size = std::fs::metadata(&file).map(|m| m.len()).unwrap_or(0);

@@ -24,6 +24,7 @@ use stemx_separation::{
 
 use crate::audio::{self, ClickConfig, Engine, MixMode, Track};
 use crate::log;
+use crate::music_start;
 use crate::settings::{self, AppSettings};
 use crate::types::*;
 
@@ -68,6 +69,8 @@ struct Song {
     /// The cached stem set in `stems`.
     stems_info: Option<StemsInfo>,
     beats: Option<BeatData>,
+    /// Where the music starts after a quiet intro ([`music_start::detect`]).
+    music_start: Option<f64>,
 }
 
 impl Song {
@@ -184,6 +187,18 @@ pub struct Backend {
     beat_model: Mutex<Option<BeatModel>>,
     st: Mutex<State>,
     open_lock: Mutex<()>,
+}
+
+/// [`music_start::detect`] on the original mix, logged.
+fn detect_music_start(song_id: &str, mix: &[Vec<f32>; 2], beats: &[f64]) -> Option<f64> {
+    let t0 = Instant::now();
+    let ms = music_start::detect(mix, RATE, beats);
+    log!(
+        "music start of {song_id}: {} ({:.0} ms)",
+        ms.map_or("none (no quiet intro)".to_string(), |t| format!("{t:.2}s")),
+        t0.elapsed().as_secs_f64() * 1000.0
+    );
+    ms
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -535,6 +550,7 @@ impl Backend {
                 .map_or("CPU", |e| self.predict_device(e))
                 .to_string(),
             theme: saved.theme().to_string(),
+            count_in_to_music_start: saved.count_in_to_music_start(),
         }
     }
 
@@ -549,7 +565,7 @@ impl Backend {
         let new = AppSettings {
             model_id: update.model_id,
             quality: update.quality,
-            theme: lock(&self.app_settings).theme.clone(),
+            ..lock(&self.app_settings).clone()
         };
         new.save(&self.cfg.data_dir)
             .map_err(|e| format!("Cannot save settings: {e}"))?;
@@ -572,6 +588,21 @@ impl Backend {
             .map_err(|e| format!("Cannot save settings: {e}"))?;
         log!("theme saved: {theme}");
         *lock(&self.app_settings) = new;
+        Ok(self.app_settings())
+    }
+
+    /// Saves "Count in to where the music starts" with the app settings and
+    /// applies it to playback at once.
+    pub fn set_count_in_to_music_start(&self, on: bool) -> Result<AppSettingsInfo, String> {
+        let new = AppSettings {
+            count_in_to_music_start: Some(on),
+            ..lock(&self.app_settings).clone()
+        };
+        new.save(&self.cfg.data_dir)
+            .map_err(|e| format!("Cannot save settings: {e}"))?;
+        log!("count in to where the music starts: {on}");
+        *lock(&self.app_settings) = new;
+        self.apply_click(&lock(&self.st));
         Ok(self.app_settings())
     }
 
@@ -658,9 +689,14 @@ impl Backend {
         e.set_mix(gains_for(&st.mix, &names), mode);
     }
 
-    fn click_config(st: &State) -> ClickConfig {
+    fn click_config(&self, st: &State) -> ClickConfig {
         let c = &st.click;
         let grid = st.song.as_ref().and_then(|s| s.beats.as_ref());
+        let music_start = if lock(&self.app_settings).count_in_to_music_start() {
+            st.song.as_ref().and_then(|s| s.music_start)
+        } else {
+            None
+        };
         let beats = grid.map(|g| g.beats.clone()).unwrap_or_default();
         let downbeats = match (&st.downbeats, grid) {
             (Some(d), _) => snap_downbeats(d, &beats),
@@ -683,13 +719,13 @@ impl Backend {
             } else {
                 0.8
             },
-            music_start: None,
+            music_start,
         }
     }
 
     fn apply_click(&self, st: &State) {
         if let Some(e) = &self.engine {
-            e.set_click(Self::click_config(st));
+            e.set_click(self.click_config(st));
         }
     }
 
@@ -868,6 +904,9 @@ impl Backend {
         }
         let beats = m.beats.clone();
         let need_beats = beats.is_none();
+        let music_start = beats
+            .as_ref()
+            .and_then(|b| detect_music_start(&m.song_id, &mix, &b.beats));
         let mut song = Song {
             meta: m,
             mix: mix.clone(),
@@ -876,6 +915,7 @@ impl Backend {
             stems,
             stems_info,
             beats,
+            music_start,
         };
         song.check_alignment();
         let info = song.info();
@@ -1371,6 +1411,7 @@ impl Backend {
                     if let Err(e) = b.library.update(&song_id, |m| m.beats = Some(data.clone())) {
                         log!("cannot save beats: {e}");
                     }
+                    let music_start = detect_music_start(&song_id, &mix, &data.beats);
                     let mut st = lock(&b.st);
                     let current = st.generation == generation
                         && st.song.as_ref().is_some_and(|s| s.meta.song_id == song_id);
@@ -1379,6 +1420,7 @@ impl Backend {
                     }
                     if let Some(s) = st.song.as_mut() {
                         s.beats = Some(data);
+                        s.music_start = music_start;
                     }
                     b.apply_click(&st);
                     drop(st);
@@ -1437,6 +1479,7 @@ impl Backend {
             beats: b.beats.clone(),
             downbeats: b.downbeats.clone(),
             bpm: b.bpm,
+            music_start: song.music_start,
         }))
     }
 
@@ -1560,6 +1603,7 @@ impl Backend {
         }
         let mut st = lock(&self.st);
         let song = st.song.as_ref().ok_or("No song open")?;
+        let song_duration = song.mix[0].len().min(song.mix[1].len()) as f64 / RATE as f64;
         if st.export.is_some() {
             return Err("An export is already running".into());
         }
@@ -1604,16 +1648,13 @@ impl Backend {
         };
         // Click and count-in exactly as in playback (same beats, effective
         // downbeats, subdivision, bar length and volume), if requested.
-        let mut click = Self::click_config(&st);
+        let mut click = self.click_config(&st);
         click.enabled = req.click;
         click.count_in_beats = if req.count_in {
             st.click.count_in_beats.clamp(1, 64)
         } else {
             0
         };
-        let cancel = Arc::new(AtomicBool::new(false));
-        st.export = Some(cancel.clone());
-        drop(st);
         let format = match req.format {
             ExportFormat::Wav => audio::ExportFormat::Wav24,
             ExportFormat::Flac => audio::ExportFormat::Flac,
@@ -1627,11 +1668,16 @@ impl Backend {
             speed: (req.speed_percent / 100.0).clamp(0.25, 4.0),
             semitones: req.semitones.clamp(-24.0, 24.0) + req.cents.clamp(-100.0, 100.0) / 100.0,
             click,
-            start: 0.0,
-            end: None,
+            start: req.start_sec.filter(|s| s.is_finite()).unwrap_or(0.0),
+            end: req.end_sec.filter(|e| e.is_finite()),
         };
+        let range = audio::render_range(&render_req, song_duration)
+            .ok_or("Nothing to export: the range is empty")?;
+        let cancel = Arc::new(AtomicBool::new(false));
+        st.export = Some(cancel.clone());
+        drop(st);
         log!(
-            "export started: {} ({:?}, {} of {} stems, {:?} mode, speed {}, shift {:.2} st, click {}, count-in {})",
+            "export started: {} ({:?}, {} of {} stems, {:?} mode, speed {}, shift {:.2} st, click {}, count-in {}, range {:.2}-{:.2} s)",
             path.display(),
             format,
             render_req.gains.len(),
@@ -1640,7 +1686,9 @@ impl Backend {
             render_req.speed,
             render_req.semitones,
             render_req.click.enabled,
-            render_req.click.count_in_beats
+            render_req.click.count_in_beats,
+            range.0,
+            range.1
         );
         let b = self.clone();
         spawn("stemx-export", move || {
@@ -1944,6 +1992,8 @@ mod tests {
             cents: 0.0,
             click: false,
             count_in: false,
+            start_sec: None,
+            end_sec: None,
         })
         .unwrap();
         let t0 = Instant::now();
@@ -1955,5 +2005,115 @@ mod tests {
         assert!(ev.iter().any(|e| e == "export-done"), "{ev:?}");
         b.close_song();
         assert!(b.get_beats().is_err());
+    }
+
+    fn wait_export(b: &Arc<Backend>) {
+        let t0 = Instant::now();
+        while b.export_running() && t0.elapsed() < Duration::from_secs(30) {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    fn export_req(
+        path: &Path,
+        count_in: bool,
+        start: Option<f64>,
+        end: Option<f64>,
+    ) -> ExportRequest {
+        ExportRequest {
+            path: path.display().to_string(),
+            format: ExportFormat::Wav,
+            stems: vec![],
+            solo: false,
+            speed_percent: 100.0,
+            semitones: 0.0,
+            cents: 0.0,
+            click: false,
+            count_in,
+            start_sec: start,
+            end_sec: end,
+        }
+    }
+
+    #[test]
+    fn music_start_setting_and_export_range() {
+        let (b, _) = test_backend("music-start");
+        std::fs::create_dir_all(b.data_dir()).unwrap();
+        // 4 s of quiet talk, then 8 s of loud tone; 0.5 s beats from 0.25 s.
+        let wav = b.data_dir().join("talk.wav");
+        let n = RATE as usize * 12;
+        let x: Vec<f32> = (0..n)
+            .map(|i| {
+                let a = if i < 4 * RATE as usize { 0.001 } else { 0.5 };
+                a * (i as f32 * 0.05).sin()
+            })
+            .collect();
+        stemx_io::write_wav(&wav, RATE, &[&x, &x], stemx_io::WavFormat::F32).unwrap();
+        b.open_song(wav.to_str().unwrap()).unwrap();
+        let beats: Vec<f64> = (0..24).map(|i| 0.25 + i as f64 * 0.5).collect();
+        {
+            let mut st = lock(&b.st);
+            let song = st.song.as_mut().unwrap();
+            song.music_start = detect_music_start("talk", &song.mix, &beats);
+            song.beats = Some(BeatData {
+                beats: beats.clone(),
+                downbeats: vec![],
+                bpm: Some(120.0),
+                beats_per_bar: Some(4),
+            });
+        }
+        let ms = b.get_beats().unwrap().unwrap().music_start.unwrap();
+        assert!((ms - (4.0 - music_start::PRE_ROLL)).abs() < 0.011, "{ms}");
+        b.set_click(ClickState {
+            enabled: false,
+            count_in_enabled: true,
+            count_in_beats: 4,
+            subdivision: 1,
+            beats_per_bar: 4,
+            volume: 0.5,
+        });
+        // On by default: the playback click config carries it.
+        assert!(b.app_settings().count_in_to_music_start);
+        assert_eq!(b.click_config(&lock(&b.st)).music_start, Some(ms));
+
+        // Whole-song export with count-in starts at the music start: the
+        // count-in leads into the beat at 4.25 s.
+        let out = b.data_dir().join("whole.wav");
+        b.export_mix(export_req(&out, true, None, None)).unwrap();
+        wait_export(&b);
+        let len = |p: &Path| stemx_io::decode_file(p).unwrap().channels[0].len();
+        let lead = 4.0 * 0.5 - (4.25 - ms);
+        let want =
+            ((12.0 - ms) * RATE as f64).round() as usize + (lead * RATE as f64).round() as usize;
+        assert!(len(&out).abs_diff(want) <= 1, "{} vs {want}", len(&out));
+
+        // A range from the middle: exactly its length (no count-in).
+        let out = b.data_dir().join("range.wav");
+        b.export_mix(export_req(&out, false, Some(5.0), Some(7.5)))
+            .unwrap();
+        wait_export(&b);
+        assert_eq!(len(&out), (2.5 * RATE as f64) as usize);
+
+        // Setting off: persisted, and the whole song with count-in starts at 0.
+        assert!(
+            !b.set_count_in_to_music_start(false)
+                .unwrap()
+                .count_in_to_music_start
+        );
+        assert_eq!(
+            AppSettings::load(b.data_dir()).0.count_in_to_music_start,
+            Some(false)
+        );
+        assert_eq!(b.click_config(&lock(&b.st)).music_start, None);
+        let out = b.data_dir().join("off.wav");
+        b.export_mix(export_req(&out, true, None, None)).unwrap();
+        wait_export(&b);
+        let lead = 4.0 * 0.5 - 0.25;
+        let want = 12 * RATE as usize + (lead * RATE as f64).round() as usize;
+        assert!(len(&out).abs_diff(want) <= 1, "{} vs {want}", len(&out));
+        // Empty range: refused.
+        assert!(b
+            .export_mix(export_req(&out, false, Some(3.0), Some(3.0)))
+            .is_err());
     }
 }

@@ -21,6 +21,7 @@ pub mod backend;
 mod commands;
 pub mod log;
 pub mod models;
+pub mod music_start;
 pub mod settings;
 pub mod types;
 #[cfg(windows)]
@@ -138,6 +139,7 @@ pub fn run() {
             commands::get_app_settings,
             commands::set_app_settings,
             commands::set_theme,
+            commands::set_count_in_to_music_start,
         ])
         .run(tauri::generate_context!());
     if let Err(e) = result {

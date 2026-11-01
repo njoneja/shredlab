@@ -205,6 +205,12 @@ pub async fn set_app_settings(b: B<'_>, settings: AppSettingsUpdate) -> R<AppSet
 }
 
 #[tauri::command]
+pub async fn set_count_in_to_music_start(b: B<'_>, on: bool) -> R<AppSettingsInfo> {
+    let b = b.inner().clone();
+    blocking(move || b.set_count_in_to_music_start(on)).await
+}
+
+#[tauri::command]
 pub async fn set_theme(b: B<'_>, theme: String) -> R<AppSettingsInfo> {
     let b = b.inner().clone();
     blocking(move || b.set_theme(&theme)).await

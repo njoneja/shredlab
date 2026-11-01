@@ -1,6 +1,7 @@
 //! App-wide settings persisted as `<data dir>/settings.json`: the chosen
-//! separation model, separation quality and UI theme. `None` means "use
-//! the default" (default model; High on GPU, Standard on CPU; Stage). Env overrides
+//! separation model, separation quality, UI theme and "count in to where
+//! the music starts". `None` means "use the default" (default model; High
+//! on GPU, Standard on CPU; Stage; on). Env overrides
 //! (`STEMX_MODEL`, `STEMX_DEVICE`) still win at runtime for development.
 
 use std::path::{Path, PathBuf};
@@ -60,6 +61,9 @@ pub struct AppSettings {
     /// [`THEMES`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub theme: Option<String>,
+    /// Count-in from the song start skips a quiet intro (`None` = on).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub count_in_to_music_start: Option<bool>,
 }
 
 impl AppSettings {
@@ -70,6 +74,11 @@ impl AppSettings {
             .and_then(|t| THEMES.iter().find(|x| **x == t))
             .copied()
             .unwrap_or(THEMES[0])
+    }
+
+    /// "Count in to where the music starts" (on by default).
+    pub fn count_in_to_music_start(&self) -> bool {
+        self.count_in_to_music_start.unwrap_or(true)
     }
 
     pub fn path(data_dir: &Path) -> PathBuf {
@@ -125,6 +134,7 @@ mod tests {
             model_id: Some("bs-roformer-sw".into()),
             quality: Some(Quality::Standard),
             theme: Some("manuscript".into()),
+            count_in_to_music_start: Some(false),
         };
         s.save(&d).unwrap();
         assert_eq!(AppSettings::load(&d).0, s);
@@ -160,6 +170,7 @@ mod tests {
         let old: AppSettings =
             serde_json::from_str(r#"{"model_id":null,"quality":"high"}"#).unwrap();
         assert_eq!(old.theme, None);
+        assert!(old.count_in_to_music_start());
     }
 
     #[test]

@@ -71,6 +71,8 @@ pub struct AppSettingsInfo {
     pub device_label: String,
     /// UI theme: "stage" (default), "rosewood", "valve" or "manuscript".
     pub theme: String,
+    /// A count-in from the song start skips a quiet intro (default on).
+    pub count_in_to_music_start: bool,
 }
 
 /// `set_app_settings` payload. Null = use the default.
@@ -178,6 +180,9 @@ pub struct BeatGrid {
     pub beats: Vec<f64>,
     pub downbeats: Vec<f64>,
     pub bpm: Option<f64>,
+    /// Where the music starts after a quiet intro (seconds), if the song
+    /// has one; see `music_start.rs`. Independent of the setting.
+    pub music_start: Option<f64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -222,6 +227,12 @@ pub struct ExportRequest {
     /// Start with the count-in (current count-in settings). Missing = false.
     #[serde(default)]
     pub count_in: bool,
+    /// Range start in song seconds. Missing = the song start.
+    #[serde(default)]
+    pub start_sec: Option<f64>,
+    /// Range end in song seconds. Missing = the song end.
+    #[serde(default)]
+    pub end_sec: Option<f64>,
 }
 
 // ------------------------------------------------------------------ events
@@ -297,6 +308,7 @@ mod tests {
         .unwrap();
         assert_eq!(r.format, ExportFormat::Mp3);
         assert!(!r.solo);
+        assert_eq!((r.start_sec, r.end_sec), (None, None));
         let l: LoopState =
             serde_json::from_str(r#"{"a_sec":null,"b_sec":2.0,"enabled":true}"#).unwrap();
         assert_eq!(l.range(), None);
