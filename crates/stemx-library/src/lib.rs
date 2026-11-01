@@ -5,8 +5,15 @@
 //!
 //! ```text
 //! <root>/songs/<song_id>/song.json
-//! <root>/songs/<song_id>/stems/<stem>.wav
+//! <root>/songs/<song_id>/original.wav               copy of the original mix
+//! <root>/songs/<song_id>/stems/<model_id>_s<shifts>/<stem>.wav
+//! <root>/songs/<song_id>/stems/<stem>.wav           (schema 1 entries)
 //! ```
+//!
+//! Stems are cached per (model, shifts), so switching model or separation
+//! quality back is instant. The original mix is cached too (44.1 kHz, same
+//! format as the stems), so the backing track can be built from it even
+//! when the source file has moved.
 //!
 //! Stems are stored as **16-bit PCM WAV with a per-stem gain** (`scale` in
 //! `song.json`): samples are divided by `scale` (= max(peak, 1)) before
@@ -31,8 +38,9 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Crate name, from `Cargo.toml`.
 pub const NAME: &str = env!("CARGO_PKG_NAME");
 
-/// `song.json` schema version.
-pub const SCHEMA: u32 = 1;
+/// `song.json` schema version. 2: `stem_sets` (per model and shifts) and
+/// `original`; schema 1 `stems` is migrated on load.
+pub const SCHEMA: u32 = 2;
 
 /// Bytes hashed from the start and from the end of the file for the song id.
 const HASH_SPAN: u64 = 4 * 1024 * 1024;
@@ -77,6 +85,53 @@ pub struct StemsInfo {
     pub len: usize,
     /// One entry per stem file.
     pub stems: Vec<StemFile>,
+    /// Separation passes (1 = Standard, 2 = High). Schema 1 entries: 1.
+    #[serde(default = "one")]
+    pub shifts: u32,
+    /// Folder of the stem files, relative to the song folder. Schema 1
+    /// entries: `stems`.
+    #[serde(default = "legacy_dir")]
+    pub dir: String,
+}
+
+fn one() -> u32 {
+    1
+}
+
+fn legacy_dir() -> String {
+    "stems".into()
+}
+
+impl StemsInfo {
+    /// True if this set was made by `model_id` with `shifts` passes.
+    pub fn is(&self, model_id: &str, shifts: u32) -> bool {
+        self.model_id == model_id && self.shifts == shifts
+    }
+}
+
+/// Folder (relative to the song folder) for the stems of one model and
+/// pass count: `stems/<model_id>_s<shifts>` (id sanitized).
+pub fn stem_set_dir(model_id: &str, shifts: u32) -> String {
+    let id: String = model_id
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    format!("stems/{id}_s{shifts}")
+}
+
+/// The cached copy of the original mix (`original.wav`, 16-bit stereo,
+/// multiply by `scale`), at `sample_rate`, `len` frames.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OriginalInfo {
+    pub sample_rate: u32,
+    pub len: usize,
+    pub scale: f32,
 }
 
 /// One cached stem: `stems/<name>.wav`, 16-bit stereo, multiply by `scale`.
@@ -108,8 +163,15 @@ pub struct SongMeta {
     /// Of the decoded original.
     pub sample_rate: u32,
     pub channels: u32,
-    #[serde(default)]
+    /// Schema 1 only (a single stem set); moved into `stem_sets` on load.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stems: Option<StemsInfo>,
+    /// Cached stem sets, one per (model, shifts), most recent last.
+    #[serde(default)]
+    pub stem_sets: Vec<StemsInfo>,
+    /// Cached copy of the original mix.
+    #[serde(default)]
+    pub original: Option<OriginalInfo>,
     #[serde(default)]
     pub beats: Option<BeatData>,
     /// Opaque UI settings, stored and returned verbatim.
@@ -135,12 +197,37 @@ impl SongMeta {
             sample_rate: 0,
             channels: 0,
             stems: None,
+            stem_sets: Vec::new(),
+            original: None,
             beats: None,
             settings: None,
             created_ms: now,
             last_opened_ms: now,
             updated_ms: now,
         }
+    }
+
+    /// The cached set for (`model_id`, `shifts`), if any.
+    pub fn stem_set(&self, model_id: &str, shifts: u32) -> Option<&StemsInfo> {
+        self.stem_sets.iter().find(|s| s.is(model_id, shifts))
+    }
+
+    /// Adds or replaces the set for its (model, shifts); it becomes the
+    /// most recent.
+    pub fn put_stem_set(&mut self, info: StemsInfo) {
+        self.stem_sets
+            .retain(|s| !s.is(&info.model_id, info.shifts));
+        self.stem_sets.push(info);
+    }
+
+    /// Moves a schema 1 `stems` entry into `stem_sets`.
+    fn migrate(&mut self) {
+        if let Some(s) = self.stems.take() {
+            if self.stem_set(&s.model_id, s.shifts).is_none() {
+                self.stem_sets.insert(0, s);
+            }
+        }
+        self.schema = SCHEMA;
     }
 }
 
@@ -280,10 +367,16 @@ impl Library {
         self.song_dir(song_id).join("song.json")
     }
 
-    fn stem_path(&self, song_id: &str, stem: &str) -> PathBuf {
-        self.song_dir(song_id)
-            .join("stems")
-            .join(format!("{stem}.wav"))
+    fn stem_path(&self, song_id: &str, dir: &str, stem: &str) -> PathBuf {
+        let mut p = self.song_dir(song_id);
+        for part in dir.split('/').filter(|s| !s.is_empty() && *s != "..") {
+            p.push(part);
+        }
+        p.join(format!("{stem}.wav"))
+    }
+
+    fn original_path(&self, song_id: &str) -> PathBuf {
+        self.song_dir(song_id).join("original.wav")
     }
 
     /// Loads `song.json`, `Ok(None)` if the song is not in the library.
@@ -294,12 +387,12 @@ impl Library {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(e) => return Err(Error::io(&path, e)),
         };
-        serde_json::from_str(&text)
-            .map(Some)
-            .map_err(|e| Error::Json {
-                path: path.display().to_string(),
-                msg: e.to_string(),
-            })
+        let mut meta: SongMeta = serde_json::from_str(&text).map_err(|e| Error::Json {
+            path: path.display().to_string(),
+            msg: e.to_string(),
+        })?;
+        meta.migrate();
+        Ok(Some(meta))
     }
 
     /// Writes `song.json` atomically (temp file + rename) and bumps
@@ -341,7 +434,7 @@ impl Library {
             .filter_map(|e| e.ok())
             .filter_map(|e| self.load(&e.file_name().to_string_lossy()).ok().flatten())
             .map(|m| RecentEntry {
-                stems_cached: m.stems.is_some(),
+                stems_cached: !m.stem_sets.is_empty(),
                 song_id: m.song_id,
                 path: m.source_path,
                 title: m.title,
@@ -355,23 +448,26 @@ impl Library {
         out
     }
 
-    /// Writes stereo stems to the cache and returns their [`StemFile`]
-    /// entries (in the given order). Does not touch `song.json`; set
-    /// `meta.stems` and [`save`](Self::save) afterwards, so a half-written
-    /// cache is never referenced.
+    /// Writes stereo stems to the cache folder `dir` (relative to the song
+    /// folder, see [`stem_set_dir`]) and returns their [`StemFile`] entries
+    /// (in the given order). Does not touch `song.json`; add the set with
+    /// [`SongMeta::put_stem_set`] and [`save`](Self::save) afterwards, so a
+    /// half-written cache is never referenced.
     pub fn write_stems(
         &self,
         song_id: &str,
+        dir: &str,
         sample_rate: u32,
         stems: &[(&str, [&[f32]; 2])],
     ) -> Result<Vec<StemFile>> {
-        let dir = self.song_dir(song_id).join("stems");
-        fs::create_dir_all(&dir).map_err(|e| Error::io(&dir, e))?;
+        let folder = self.stem_path(song_id, dir, "x");
+        let folder = folder.parent().unwrap_or(&folder).to_path_buf();
+        fs::create_dir_all(&folder).map_err(|e| Error::io(&folder, e))?;
         let results: Vec<Result<StemFile>> = std::thread::scope(|s| {
             let handles: Vec<_> = stems
                 .iter()
                 .map(|(name, ch)| {
-                    let path = self.stem_path(song_id, name);
+                    let path = self.stem_path(song_id, dir, name);
                     s.spawn(move || {
                         let scale = write_stem_wav(&path, sample_rate, *ch)?;
                         Ok(StemFile {
@@ -403,7 +499,7 @@ impl Library {
                 .stems
                 .iter()
                 .map(|sf| {
-                    let path = self.stem_path(song_id, &sf.name);
+                    let path = self.stem_path(song_id, &info.dir, &sf.name);
                     s.spawn(move || {
                         let (rate, ch) = read_stem_wav(&path, sf.scale)?;
                         if rate != info.sample_rate {
@@ -431,7 +527,46 @@ impl Library {
     pub fn stems_present(&self, song_id: &str, info: &StemsInfo) -> bool {
         info.stems
             .iter()
-            .all(|s| self.stem_path(song_id, &s.name).is_file())
+            .all(|s| self.stem_path(song_id, &info.dir, &s.name).is_file())
+    }
+
+    /// Writes the cached copy of the original mix (`original.wav`, same
+    /// 16-bit + scale format as the stems). Set `meta.original` and save
+    /// afterwards.
+    pub fn write_original(
+        &self,
+        song_id: &str,
+        sample_rate: u32,
+        ch: [&[f32]; 2],
+    ) -> Result<OriginalInfo> {
+        let dir = self.song_dir(song_id);
+        fs::create_dir_all(&dir).map_err(|e| Error::io(&dir, e))?;
+        let scale = write_stem_wav(&self.original_path(song_id), sample_rate, ch)?;
+        Ok(OriginalInfo {
+            sample_rate,
+            len: ch[0].len(),
+            scale,
+        })
+    }
+
+    /// Reads the cached original, `None` if the file is missing.
+    pub fn read_original(
+        &self,
+        song_id: &str,
+        info: &OriginalInfo,
+    ) -> Result<Option<[Vec<f32>; 2]>> {
+        let path = self.original_path(song_id);
+        if !path.is_file() {
+            return Ok(None);
+        }
+        let (rate, ch) = read_stem_wav(&path, info.scale)?;
+        if rate != info.sample_rate {
+            return Err(Error::Wav {
+                path: path.display().to_string(),
+                msg: format!("sample rate {rate}, expected {}", info.sample_rate),
+            });
+        }
+        Ok(Some(ch))
     }
 
     /// Removes a song folder entirely.
@@ -648,9 +783,12 @@ mod tests {
         let n = 1000;
         let quiet: Vec<f32> = (0..n).map(|i| ((i as f32) * 0.01).sin() * 0.5).collect();
         let loud: Vec<f32> = (0..n).map(|i| ((i as f32) * 0.02).sin() * 1.8).collect();
+        let dir = stem_set_dir("htdemucs_6s", 2);
+        assert_eq!(dir, "stems/htdemucs_6s_s2");
         let files = lib
             .write_stems(
                 "s1",
+                &dir,
                 44100,
                 &[("vocals", [&quiet, &loud]), ("bass", [&loud, &quiet])],
             )
@@ -665,6 +803,8 @@ mod tests {
             sample_rate: 44100,
             len: n,
             stems: files,
+            shifts: 2,
+            dir: dir.clone(),
         };
         assert!(lib.stems_present("s1", &info));
         let back = lib.read_stems("s1", &info).unwrap();
@@ -681,11 +821,93 @@ mod tests {
         assert!(err(&back[0].1[1], &loud) < 2.0 / 32767.0 * 1.8);
         assert!(err(&back[1].1[0], &loud) < 2.0 / 32767.0 * 1.8);
         // Missing file -> not present, read fails.
-        fs::remove_file(lib.stem_path("s1", "bass")).unwrap();
+        fs::remove_file(lib.stem_path("s1", &dir, "bass")).unwrap();
         assert!(!lib.stems_present("s1", &info));
         assert!(lib.read_stems("s1", &info).is_err());
         lib.remove("s1").unwrap();
         assert!(!lib.song_dir("s1").exists());
+    }
+
+    #[test]
+    fn stem_sets_keyed_by_model_and_shifts() {
+        let lib = Library::open(&tmpdir("sets")).unwrap();
+        let mut m = meta("k1", 1);
+        let set = |model: &str, shifts: u32| StemsInfo {
+            model_id: model.into(),
+            model_name: model.into(),
+            device_label: "GPU".into(),
+            sample_rate: 44100,
+            len: 10,
+            stems: vec![],
+            shifts,
+            dir: stem_set_dir(model, shifts),
+        };
+        m.put_stem_set(set("htdemucs_6s", 2));
+        m.put_stem_set(set("htdemucs_6s", 1));
+        m.put_stem_set(set("bs-roformer-sw", 1));
+        let mut again = set("htdemucs_6s", 2);
+        again.device_label = "CPU".into();
+        m.put_stem_set(again);
+        assert_eq!(m.stem_sets.len(), 3);
+        // Replaced entry moved to the end (most recent).
+        assert_eq!(m.stem_sets.last().unwrap().device_label, "CPU");
+        assert!(m.stem_set("htdemucs_6s", 1).is_some());
+        assert!(m.stem_set("bs-roformer-sw", 2).is_none());
+        assert_ne!(
+            m.stem_set("htdemucs_6s", 1).unwrap().dir,
+            m.stem_set("htdemucs_6s", 2).unwrap().dir
+        );
+        lib.save(&mut m).unwrap();
+        assert_eq!(lib.load("k1").unwrap().unwrap().stem_sets.len(), 3);
+        assert!(lib.recent(5)[0].stems_cached);
+    }
+
+    #[test]
+    fn schema1_stems_migrate_to_stem_sets() {
+        let lib = Library::open(&tmpdir("migrate")).unwrap();
+        fs::create_dir_all(lib.song_dir("old1")).unwrap();
+        let v1 = serde_json::json!({
+            "schema": 1, "song_id": "old1", "source_path": "C:/a.mp3",
+            "title": "A", "artist": null, "duration_sec": 1.0,
+            "sample_rate": 44100, "channels": 2,
+            "stems": {"model_id": "htdemucs_6s", "model_name": "Demucs 6-stem",
+                      "device_label": "GPU", "sample_rate": 44100, "len": 5,
+                      "stems": [{"name": "bass", "scale": 1.0}]},
+            "created_ms": 1, "last_opened_ms": 1, "updated_ms": 1
+        });
+        fs::write(lib.manifest_path("old1"), v1.to_string()).unwrap();
+        let m = lib.load("old1").unwrap().unwrap();
+        assert!(m.stems.is_none());
+        assert_eq!(m.schema, SCHEMA);
+        let s = m.stem_set("htdemucs_6s", 1).unwrap();
+        assert_eq!(s.dir, "stems");
+        assert_eq!(
+            lib.stem_path("old1", &s.dir, "bass"),
+            lib.song_dir("old1").join("stems").join("bass.wav")
+        );
+        assert!(m.original.is_none());
+        // Saving writes the new layout only.
+        let mut m = m;
+        lib.save(&mut m).unwrap();
+        let text = fs::read_to_string(lib.manifest_path("old1")).unwrap();
+        assert!(text.contains("stem_sets") && !text.contains("\"stems\": {"));
+    }
+
+    #[test]
+    fn original_roundtrip() {
+        let lib = Library::open(&tmpdir("orig")).unwrap();
+        let a: Vec<f32> = (0..500).map(|i| (i as f32 * 0.1).sin() * 1.2).collect();
+        let b: Vec<f32> = a.iter().map(|x| -x * 0.5).collect();
+        let info = lib.write_original("o1", 44100, [&a, &b]).unwrap();
+        assert_eq!(info.len, 500);
+        assert!((info.scale - 1.2).abs() < 1e-3);
+        let back = lib.read_original("o1", &info).unwrap().unwrap();
+        assert!(back[0]
+            .iter()
+            .zip(&a)
+            .all(|(x, y)| (x - y).abs() < 2.0 * 1.2 / 32767.0));
+        fs::remove_file(lib.original_path("o1")).unwrap();
+        assert!(lib.read_original("o1", &info).unwrap().is_none());
     }
 
     #[test]
