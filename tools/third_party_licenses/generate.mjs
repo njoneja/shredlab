@@ -142,7 +142,7 @@ function otherComponents(crates) {
     },
     {
       name: "Microsoft DirectML (Windows only)",
-      what: "GPU acceleration on Windows. Shipped unmodified as DirectML.dll from the Microsoft.AI.DirectML NuGet package.",
+      what: "GPU acceleration on Windows. Shipped unmodified as DirectML.dll from the Microsoft.AI.DirectML 1.15.4 NuGet package.",
       license: "Microsoft Software License Terms for DirectML (proprietary, redistributable)",
       notes:
         "DirectML.dll is not covered by the GPL; it is distributed alongside ShredLab under Microsoft's own terms " +
@@ -151,7 +151,10 @@ function otherComponents(crates) {
         '(<a href="https://github.com/microsoft/DirectML">github.com/microsoft/DirectML</a>). ' +
         "Copyright (c) Microsoft Corporation.",
       texts: existsSync(join(HERE, "texts", "DirectML-LICENSE.txt"))
-        ? [["DirectML licence", join(HERE, "texts", "DirectML-LICENSE.txt")]]
+        ? [
+            ["DirectML licence", join(HERE, "texts", "DirectML-LICENSE.txt")],
+            ["DirectML third-party notices", join(HERE, "texts", "DirectML-ThirdPartyNotices.txt")],
+          ]
         : [],
     },
     {
