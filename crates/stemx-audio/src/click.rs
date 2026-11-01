@@ -123,14 +123,17 @@ pub fn local_beat_interval(beats: &[f64], t: f64) -> f64 {
 }
 
 /// Beat intervals the count-in tempo is taken from (see [`count_in_interval`]).
-pub const COUNT_IN_TEMPO_BEATS: usize = 4;
+pub const COUNT_IN_TEMPO_BEATS: usize = 8;
 
 /// The count-in spacing (song seconds) for counting into `beats[target]`:
-/// the median of the next [`COUNT_IN_TEMPO_BEATS`] beat intervals starting
-/// at the target beat (fewer near the end of the grid), so the tempo comes
-/// from the section being counted into, never from an intro before it, and
-/// one wobbly beat doesn't skew it. Without an interval after the target,
-/// [`local_beat_interval`] at the target.
+/// the upper median of the next [`COUNT_IN_TEMPO_BEATS`] beat intervals
+/// (about two bars) starting at the target beat, fewer near the end of the
+/// grid. So the tempo comes from the section being counted into, never from
+/// an intro before it, and one wobbly beat doesn't skew it. The upper
+/// median (the larger middle value of an even count) keeps the regular beat
+/// when odd bars shorten some intervals: a 7/8 bar after a 4/4 bar, whether
+/// the tracker puts one half-beat gap in it or spreads it over four beats.
+/// Without an interval after the target, [`local_beat_interval`] at it.
 pub fn count_in_interval(beats: &[f64], target: usize) -> f64 {
     let end = (target + COUNT_IN_TEMPO_BEATS + 1).min(beats.len());
     let mut d: Vec<f64> = beats
@@ -144,12 +147,7 @@ pub fn count_in_interval(beats: &[f64], target: usize) -> f64 {
         return local_beat_interval(beats, beats.get(target).copied().unwrap_or(0.0));
     }
     d.sort_by(f64::total_cmp);
-    let m = d.len();
-    if m % 2 == 1 {
-        d[m / 2]
-    } else {
-        0.5 * (d[m / 2 - 1] + d[m / 2])
-    }
+    d[d.len() / 2]
 }
 
 /// A planned count-in, in wall-clock seconds from the moment `play` starts.
@@ -353,29 +351,86 @@ mod tests {
         assert!((p.audio_start - (2.0 - 0.1)).abs() < 1e-12, "{p:?}");
     }
 
-    #[test]
-    fn count_in_tempo_is_the_median_of_the_next_beats() {
-        // A slow intro (1.0 s beats), then 0.5 s beats with jitter.
-        let mut beats = vec![0.0, 1.0, 2.0, 3.0];
-        let jitter = [0.0, 0.04, -0.03, 0.02, -0.05, 0.01];
-        for (i, j) in jitter.iter().enumerate() {
-            beats.push(3.5 + i as f64 * 0.5 + j);
+    fn grid_from(start: f64, intervals: &[f64]) -> Vec<f64> {
+        let mut b = vec![start];
+        for d in intervals {
+            b.push(b.last().unwrap() + d);
         }
-        // Into the first fast beat (index 4): intervals 0.54 0.43 0.55 0.43
-        // -> median 0.485; not the 1.0 s intro beats, not one noisy pair.
-        let iv = count_in_interval(&beats, 4);
-        assert!((iv - 0.485).abs() < 1e-9, "{iv}");
+        b
+    }
+
+    #[test]
+    fn count_in_tempo_comes_from_the_beats_after_the_target() {
+        // A slow intro (1.0 s beats), then 0.5 s beats with jitter.
+        let fast = [
+            0.53, 0.45, 0.53, 0.46, 0.55, 0.48, 0.49, 0.53, 0.46, 0.53, 0.49,
+        ];
+        let mut beats = vec![0.0, 1.0, 2.0];
+        beats.extend(grid_from(3.0, &fast));
+        // Into the first fast beat (index 3): not the 1.0 s intro beats,
+        // not one noisy pair.
+        let iv = count_in_interval(&beats, 3);
+        assert!((iv - 0.5).abs() < 0.035, "{iv}");
         let mut c = cfg(beats.clone(), vec![], 1);
         c.count_in_beats = 4;
-        let p = plan_count_in(&c, 3.5, 1.0).unwrap();
-        assert!((p.interval - 0.485).abs() < 1e-9, "{p:?}");
-        // Near the end: fewer intervals (last two: 0.43, 0.56 -> 0.495).
+        let p = plan_count_in(&c, 3.0, 1.0).unwrap();
+        assert_eq!(p.interval, iv);
+        // Near the end: fewer intervals (the last three: 0.46, 0.53, 0.49 -> 0.49).
         let n = beats.len();
-        assert!((count_in_interval(&beats, n - 3) - 0.495).abs() < 1e-9);
+        assert!((count_in_interval(&beats, n - 4) - 0.49).abs() < 1e-9);
         // The last beat: the last pair; no grid: the default.
-        assert!((count_in_interval(&beats, n - 1) - 0.56).abs() < 1e-9);
+        assert!((count_in_interval(&beats, n - 1) - 0.49).abs() < 1e-9);
         assert_eq!(count_in_interval(&[1.0], 0), DEFAULT_BEAT_INTERVAL);
         assert_eq!(count_in_interval(&[], 0), DEFAULT_BEAT_INTERVAL);
+    }
+
+    #[test]
+    fn count_in_tempo_ignores_a_half_beat_gap_in_a_seven_eight_bar() {
+        // 4/4 then 7/8 bars, the tracker puts one half-beat gap in the 7/8
+        // bar: [I, I, I, I], [I, I, I, I/2], ...
+        let i = 0.6;
+        let bar: Vec<f64> = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.5]
+            .iter()
+            .map(|k| k * i)
+            .collect();
+        let pattern: Vec<f64> = bar.iter().cycle().take(40).copied().collect();
+        let beats = grid_from(2.0, &pattern);
+        // Whatever beat the count-in leads into: the regular beat.
+        for t in 0..16 {
+            let iv = count_in_interval(&beats, t);
+            assert!((iv - i).abs() < 1e-9, "target {t}: {iv}");
+        }
+        // The same with the odd gap every 4 beats ([I, I, I, I/2] repeating).
+        let pattern: Vec<f64> = [i, i, i, 0.5 * i]
+            .iter()
+            .cycle()
+            .take(40)
+            .copied()
+            .collect();
+        let beats = grid_from(2.0, &pattern);
+        for t in 0..16 {
+            assert!(
+                (count_in_interval(&beats, t) - i).abs() < 1e-9,
+                "target {t}"
+            );
+        }
+    }
+
+    #[test]
+    fn count_in_tempo_ignores_a_seven_eight_bar_spread_over_four_beats() {
+        // 4/4 bar of I, then a 7/8 bar (3.5 I) tracked as 4 beats of 0.875 I.
+        let i = 0.6;
+        let pattern: Vec<f64> = [1.0, 1.0, 1.0, 1.0, 0.875, 0.875, 0.875, 0.875]
+            .iter()
+            .map(|k| k * i)
+            .cycle()
+            .take(40)
+            .collect();
+        let beats = grid_from(2.0, &pattern);
+        for t in 0..16 {
+            let iv = count_in_interval(&beats, t);
+            assert!((iv - i).abs() < 1e-9, "target {t}: {iv}");
+        }
     }
 
     #[test]
