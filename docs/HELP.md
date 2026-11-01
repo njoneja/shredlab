@@ -67,6 +67,21 @@ Where detection goes wrong:
 The meter is shown as beats per bar rather than a time signature, because
 that is what the click actually follows.
 
+## Your songs
+
+ShredLab keeps the stems of every song you open, so opening it again is
+instant. Recent songs are listed under **Open** and on the start screen.
+
+- **Remove from recent.** Hover over a song in the list and click its ✕.
+  The song leaves the list, but its stems are kept: open the same file
+  again and it loads instantly and comes back into the list.
+- **Free up space.** Stems take a few hundred MB per song. **Settings →
+  Manage storage…** lists every song with its size, when you last opened
+  it, and whether the original file is still there. **Delete stems**
+  removes a song's stems and its saved settings (mixer, Refine, beat
+  fixes). Opening it again means splitting it again. The song that is
+  open can't be deleted.
+
 ## Keyboard shortcuts
 
 | Keys | What |
