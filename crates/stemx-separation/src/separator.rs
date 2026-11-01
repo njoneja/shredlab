@@ -13,7 +13,9 @@ use std::time::Instant;
 use crate::adapters::{self, Adapter};
 use crate::manifest::Manifest;
 use crate::registry::ModelEntry;
-use crate::runtime::{build_session, ort_version, DevicePref, Ep, SessionOverrides};
+use crate::runtime::{
+    build_session, coreml_cache_dir, ort_version, DevicePref, Ep, SessionOverrides,
+};
 use crate::selftest::{self, Cache, SelfTestReport};
 use crate::{Error, Result};
 
@@ -140,6 +142,10 @@ impl Separator {
         candidates.push(Ep::Cpu);
         let ort = ort_version();
         let fp = opts.overrides.fingerprint();
+        let coreml_cache = opts
+            .cache_dir
+            .as_deref()
+            .map(|d| coreml_cache_dir(d, &m.id, &m.sha256));
         let mut rejected = Vec::new();
 
         for ep in candidates {
@@ -157,7 +163,13 @@ impl Separator {
                 }
             }
             let t0 = Instant::now();
-            let session = match build_session(&onnx, ep, &m.ep_options(ep.key()), &opts.overrides) {
+            let session = match build_session(
+                &onnx,
+                ep,
+                &m.ep_options(ep.key()),
+                &opts.overrides,
+                coreml_cache.as_deref(),
+            ) {
                 Ok(s) => s,
                 Err(e) if ep.is_gpu() => {
                     log(&format!("{}: unavailable ({e})", ep.label()));
@@ -316,6 +328,7 @@ impl Separator {
                     Ep::Cpu,
                     &m.ep_options("cpu"),
                     &self.opts.overrides,
+                    None,
                 )?;
                 self.adapter = adapters::create(m, session)?;
                 self.ep = Ep::Cpu;
@@ -475,7 +488,14 @@ pub fn run_selftest(
 ) -> Result<SelfTestReport> {
     let m = &entry.manifest;
     let spec = entry.load_selftest()?;
-    let session = build_session(&entry.onnx_path(), ep, &m.ep_options(ep.key()), overrides)?;
+    let coreml_cache = cache_dir.map(|d| coreml_cache_dir(d, &m.id, &m.sha256));
+    let session = build_session(
+        &entry.onnx_path(),
+        ep,
+        &m.ep_options(ep.key()),
+        overrides,
+        coreml_cache.as_deref(),
+    )?;
     let mut adapter = adapters::create(m, session)?;
     let report = run_selftest_on(adapter.as_mut(), m, &spec)?;
     if cache_dir.is_some() {

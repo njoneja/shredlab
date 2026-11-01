@@ -51,7 +51,7 @@ impl BeatModel {
         };
         let mut last_err = None;
         for ep in candidates {
-            match build_session(path, ep, &opts, &ov) {
+            match build_session(path, ep, &opts, &ov, None) {
                 Ok(session) => return Ok(Self { session, ep }),
                 Err(e) => {
                     log(&format!("beat model: {} unavailable ({e})", ep.label()));

@@ -171,6 +171,7 @@ fn demucs_golden() {
         Ep::Cpu,
         &m.ep_options("cpu"),
         &SessionOverrides::default(),
+        None,
     )
     .unwrap();
     let mut a = DemucsHybrid::new(m, session).unwrap();
@@ -219,6 +220,7 @@ fn roformer_golden() {
         Ep::Cpu,
         &m.ep_options("cpu"),
         &SessionOverrides::default(),
+        None,
     )
     .unwrap();
     let mut a = RoformerMask::new(m, session).unwrap();

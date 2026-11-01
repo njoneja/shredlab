@@ -1,6 +1,6 @@
 //! ONNX Runtime environment, execution providers and session construction.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use ort::environment::Environment;
@@ -143,14 +143,43 @@ pub fn default_cpu_threads() -> usize {
     num_cpus::get_physical().clamp(1, 16)
 }
 
+/// Where CoreML keeps its compiled copy of a model (~430 MB for
+/// htdemucs_6s): `coreml/<model id>/<sha256 prefix>`. ORT keys its cache by
+/// model path, so the sha256 folder keeps a rebuilt model from reusing a
+/// stale compile; older builds of the same model are removed on use.
+pub fn coreml_cache_dir(cache_dir: &Path, model_id: &str, model_sha256: &str) -> PathBuf {
+    let key = model_sha256.get(..16).unwrap_or(model_sha256);
+    cache_dir
+        .join("coreml")
+        .join(model_id)
+        .join(key.to_ascii_lowercase())
+}
+
+/// Creates `dir` and removes its siblings (compiles of older model builds).
+/// False if `dir` cannot be created.
+fn prepare_coreml_cache(dir: &Path) -> bool {
+    if std::fs::create_dir_all(dir).is_err() {
+        return false;
+    }
+    let siblings = dir.parent().and_then(|p| std::fs::read_dir(p).ok());
+    for e in siblings.into_iter().flatten().flatten() {
+        if e.path() != dir && e.file_type().is_ok_and(|t| t.is_dir()) {
+            let _ = std::fs::remove_dir_all(e.path());
+        }
+    }
+    true
+}
+
 /// Creates a session for `ep` with the manifest's options for that EP plus
 /// overrides. Registration failure of a GPU EP is an error (no silent CPU
-/// fallback inside ORT).
+/// fallback inside ORT). `coreml_cache` (see [`coreml_cache_dir`]) saves
+/// CoreML's model compile (~25 s for htdemucs_6s) across runs.
 pub fn build_session(
     model: &Path,
     ep: Ep,
     opts: &EpOptions,
     ov: &SessionOverrides,
+    coreml_cache: Option<&Path>,
 ) -> Result<Session> {
     let env = environment()?;
     let rt = |e: ort::Error| Error::Runtime(format!("{} session: {e}", ep.label()));
@@ -185,22 +214,33 @@ pub fn build_session(
             // DML requires these regardless of the manifest.
             b = b.with_memory_pattern(false).map_err(rtb)?;
             b = b.with_parallel_execution(false).map_err(rtb)?;
-            b = register_gpu(b, ep)?;
+            b = register_gpu(b, ep, None)?;
         }
         Ep::CoreMl | Ep::Cuda => {
-            b = register_gpu(b, ep)?;
+            b = register_gpu(b, ep, coreml_cache)?;
         }
     }
     b.commit_from_file(model).map_err(rt)
 }
 
 #[allow(unreachable_code, unused_variables)]
-fn register_gpu(b: SessionBuilder, ep: Ep) -> Result<SessionBuilder> {
+fn register_gpu(b: SessionBuilder, ep: Ep, coreml_cache: Option<&Path>) -> Result<SessionBuilder> {
     let dispatch = match ep {
         #[cfg(windows)]
         Ep::DirectMl => ort::ep::DirectML::default().build(),
         #[cfg(target_os = "macos")]
-        Ep::CoreMl => ort::ep::CoreML::default().build(),
+        // The default NeuralNetwork format runs on the Neural Engine in fp16,
+        // which silently ruins htdemucs_6s (~6 dB SNR). MLProgram keeps fp32
+        // on the GPU and matches the CPU to ~96 dB.
+        Ep::CoreMl => {
+            let mut coreml = ort::ep::CoreML::default()
+                .with_model_format(ort::ep::coreml::ModelFormat::MLProgram);
+            // Without a usable folder CoreML just compiles every time.
+            if let Some(dir) = coreml_cache.filter(|d| prepare_coreml_cache(d)) {
+                coreml = coreml.with_model_cache_dir(dir.display());
+            }
+            coreml.build()
+        }
         #[cfg(feature = "cuda")]
         Ep::Cuda => ort::ep::CUDA::default().build(),
         _ => {
