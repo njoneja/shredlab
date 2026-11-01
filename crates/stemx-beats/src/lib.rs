@@ -18,6 +18,15 @@
 //! `FnMut(&[f32], [usize; 3]) -> Result<(Vec<f32>, Vec<f32>), E>` that the
 //! caller backs with an ORT session (see `examples/beat_e2e.rs`).
 //!
+//! ## Validation
+//!
+//! `tests/reference.rs` (log-mel vs NumPy: max abs diff ~1e-5; postprocessing
+//! bit-identical to upstream on four songs) and `examples/beat_e2e.rs`
+//! (full pipeline with ORT CPU vs the PyTorch reference on four songs: same
+//! beat counts, 100% of beats within ±20 ms, one borderline downbeat
+//! missing out of 591). Differences come from rubato vs soxr and symphonia
+//! vs libsndfile MP3 decoding (spectrogram SNR ~56 dB).
+//!
 //! ## Workspace note (temporary)
 //!
 //! `Cargo.toml` carries an empty `[workspace]` table so the crate builds
