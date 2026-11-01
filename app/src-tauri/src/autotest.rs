@@ -263,5 +263,27 @@ fn run(
     }
     let lib = b.library();
     log!("autotest: library has {} entries", lib.len());
+
+    // Cancel: re-separate, cancel after a second, expect cancelled error
+    // and the cached stems still in use.
+    b.start_separation()?;
+    std::thread::sleep(Duration::from_secs(1));
+    b.cancel_separation();
+    wait_for(rx, Duration::from_secs(10), |name, v| match name {
+        "separation-error" if v["cancelled"] == true => Some(Ok(())),
+        "separation-error" | "separation-done" => {
+            Some(Err(format!("expected a cancel, got {name} {v}")))
+        }
+        _ => None,
+    })?;
+    std::thread::sleep(Duration::from_secs(3));
+    if b.separation_running() {
+        return Err("separation still running after cancel".into());
+    }
+    if b.start_separation().is_ok() {
+        // The cancelled thread has released the job slot; cancel again.
+        b.cancel_separation();
+    }
+    log!("autotest: cancel ok");
     Ok(())
 }
