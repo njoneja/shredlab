@@ -1,59 +1,158 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { hello, type Hello } from "./lib/api";
+  import { api } from "./lib/api";
+  import { app } from "./lib/store.svelte";
+  import { STEMS } from "./lib/types";
+  import Header from "./lib/Header.svelte";
+  import EmptyState from "./lib/EmptyState.svelte";
+  import SeparationBanner from "./lib/SeparationBanner.svelte";
+  import Waveform from "./lib/Waveform.svelte";
+  import Mixer from "./lib/Mixer.svelte";
+  import Transport from "./lib/Transport.svelte";
+  import ExportDialog from "./lib/ExportDialog.svelte";
+  import ShortcutsHelp from "./lib/ShortcutsHelp.svelte";
 
-  let info = $state<Hello | null>(null);
-  let error = $state<string | null>(null);
+  let helpOpen = $state(false);
 
-  onMount(async () => {
-    try {
-      info = await hello();
-    } catch (e) {
-      error = String(e);
-    }
+  onMount(() => {
+    app.init();
   });
+
+  function isTyping(t: EventTarget | null) {
+    if (!(t instanceof HTMLElement)) return false;
+    if (t.isContentEditable || t instanceof HTMLTextAreaElement || t instanceof HTMLSelectElement) return true;
+    return t instanceof HTMLInputElement && !["range", "checkbox", "radio", "button"].includes(t.type);
+  }
+
+  // Keyboard shortcuts per docs/UI.md. Uses e.code for digits so Shift+1
+  // works regardless of keyboard layout ("!" etc.).
+  function onKeydown(e: KeyboardEvent) {
+    if (!app.song || app.exportOpen || helpOpen || isTyping(e.target)) return;
+    if (e.ctrlKey || e.metaKey) return;
+    const digit = /^Digit([1-6])$/.exec(e.code) ?? /^Numpad([1-6])$/.exec(e.code);
+    let handled = true;
+    if (digit) {
+      const stem = STEMS[Number(digit[1]) - 1];
+      if (e.altKey) app.allButThis(stem);
+      else if (e.shiftKey) app.onlyThis(stem);
+      else app.toggleStem(stem);
+    } else if (e.altKey) {
+      handled = false;
+    } else if (e.code === "Space") {
+      app.togglePlay();
+    } else if (e.code === "KeyL") {
+      app.toggleLoop();
+    } else if (e.code === "BracketLeft") {
+      app.setAAtPlayhead();
+    } else if (e.code === "BracketRight") {
+      app.setBAtPlayhead();
+    } else if (e.code === "ArrowLeft") {
+      app.seekBy(-5);
+    } else if (e.code === "ArrowRight") {
+      app.seekBy(5);
+    } else if (e.code === "ArrowUp") {
+      if (e.shiftKey) app.setPitch(app.semitones + 1, app.cents);
+      else app.setSpeed(app.speed + 5);
+    } else if (e.code === "ArrowDown") {
+      if (e.shiftKey) app.setPitch(app.semitones - 1, app.cents);
+      else app.setSpeed(app.speed - 5);
+    } else if (e.code === "KeyC") {
+      if (app.grid) app.toggleClick();
+    } else {
+      handled = false;
+    }
+    if (handled) e.preventDefault();
+  }
+
+  // A focused button would also "click" on Space keyup; swallow it.
+  function onKeyup(e: KeyboardEvent) {
+    if (e.code === "Space" && app.song && !isTyping(e.target) && !app.exportOpen && !helpOpen) e.preventDefault();
+  }
 </script>
 
-<main>
-  <h1>Stem Extractor</h1>
+<svelte:window onkeydown={onKeydown} onkeyup={onKeyup} />
 
-  {#if info}
-    <p class="hello" data-testid="hello">{info.message}</p>
-    <p class="muted">App version {info.app_version}</p>
-    <ul class="muted">
-      {#each info.crates as c (c.name)}
-        <li>{c.name} {c.version}</li>
-      {/each}
-    </ul>
-  {:else if error}
-    <p class="error">Could not reach the Rust core: {error}</p>
-  {:else}
-    <p class="muted">Connecting to the Rust core…</p>
+<div class="shell">
+  <Header onhelp={() => (helpOpen = true)} />
+
+  {#if app.error}
+    <div class="error" role="alert">
+      <span>{app.error}</span>
+      <button class="btn ghost small" onclick={() => (app.error = null)}>Dismiss</button>
+    </div>
   {/if}
-</main>
+
+  {#if app.song}
+    <main>
+      <SeparationBanner />
+      <Waveform />
+      <div class="mixer-scroll"><Mixer /></div>
+      <Transport />
+    </main>
+  {:else}
+    <EmptyState />
+  {/if}
+
+  {#if api.isMock}
+    <div class="mock-badge" title="Running in a browser without Tauri: the backend is simulated">Mock backend</div>
+  {/if}
+</div>
+
+{#if app.exportOpen}<ExportDialog />{/if}
+{#if helpOpen}<ShortcutsHelp onclose={() => (helpOpen = false)} />{/if}
+{#if app.toast}<div class="toast" role="status">{app.toast}</div>{/if}
 
 <style>
-  main {
-    max-width: 40rem;
+  .shell {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: var(--gap);
+    padding: 14px 18px;
+    max-width: 1400px;
     margin: 0 auto;
-    padding: 3rem 1.5rem;
+    position: relative;
   }
-  h1 {
-    margin: 0 0 1rem;
-    font-size: 2rem;
+  main {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--gap);
   }
-  .hello {
-    font-size: 1.25rem;
-  }
-  .muted {
-    color: var(--muted);
-  }
-  ul {
-    padding-left: 1.25rem;
-    font-family: ui-monospace, monospace;
-    font-size: 0.875rem;
+  .mixer-scroll {
+    flex: 0 1 auto;
+    min-height: 120px;
+    overflow: auto;
   }
   .error {
-    color: var(--error);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 6px 12px;
+    border: 1px solid var(--danger);
+    color: var(--danger);
+    border-radius: var(--radius-sm);
+    background: rgba(255, 107, 91, 0.08);
+  }
+  .mock-badge {
+    position: fixed;
+    left: 8px;
+    bottom: 6px;
+    font-size: 10.5px;
+    color: var(--faint);
+    pointer-events: auto;
+  }
+  .toast {
+    position: fixed;
+    left: 50%;
+    bottom: 24px;
+    transform: translateX(-50%);
+    background: var(--surface-3);
+    border: 1px solid var(--border);
+    padding: 8px 16px;
+    border-radius: 20px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+    z-index: 70;
   }
 </style>

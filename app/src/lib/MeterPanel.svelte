@@ -1,0 +1,215 @@
+<script lang="ts">
+  import Icon from "./Icon.svelte";
+  import { app } from "./store.svelte";
+  import { barAt, formatTime } from "./meter";
+  import type { Subdivision } from "./types";
+
+  let { onclose }: { onclose: () => void } = $props();
+
+  let panel: HTMLDivElement;
+  const currentBar = $derived(Math.max(1, barAt(app.downbeats, app.position)));
+  // Initialised from the playhead once, when the panel opens.
+  let fromBar = $state(Math.max(1, barAt(app.downbeats, app.position)));
+  let bpb = $state(app.beatsPerBar);
+  let showHelp = $state(false);
+
+  const SUBDIVS: { v: Subdivision; label: string }[] = [
+    { v: 1, label: "None" },
+    { v: 2, label: "2" },
+    { v: 3, label: "3" },
+  ];
+
+  function describe(i: number) {
+    const o = app.overrides[i];
+    const t = app.grid?.beats[o.beat_index] ?? 0;
+    if (o.kind === "beat_one") return `Beat 1 at ${formatTime(t, true)}`;
+    return `${o.beats_per_bar} beats per bar from ${formatTime(t, true)}`;
+  }
+
+  function onWindowDown(e: PointerEvent) {
+    const target = e.target as Node;
+    if (panel && !panel.contains(target) && !(target as Element).closest?.(".meter-anchor")) onclose();
+  }
+</script>
+
+<svelte:window onpointerdown={onWindowDown} onkeydown={(e) => e.key === "Escape" && onclose()} />
+
+<div class="panel" bind:this={panel} role="dialog" aria-label="Beat grid">
+  <div class="head">
+    <strong>Beat grid</strong>
+    <span class="muted">
+      {app.grid?.bpm ? `${Math.round(app.grid.bpm)} BPM · ` : ""}{app.beatsPerBar} beats per bar · bar {currentBar}
+    </span>
+    <button class="btn ghost small icon-only" onclick={onclose} aria-label="Close"><Icon name="close" size={14} /></button>
+  </div>
+
+  <div class="sect">
+    <button class="btn" onclick={() => app.beatOneHere()} title="Make the beat nearest the playhead the first beat of a bar">
+      This is beat 1
+    </button>
+    <span class="muted small">Moves the downbeat to the beat at the playhead ({formatTime(app.position, true)}).</span>
+  </div>
+
+  <div class="sect row">
+    <label>
+      <input class="num" type="number" min="1" max="16" bind:value={bpb} />
+      beats per bar from bar
+    </label>
+    <input class="num" type="number" min="1" max={app.downbeats.length || 1} bind:value={fromBar} />
+    <button class="btn small" onclick={() => app.beatsPerBarFrom(fromBar, bpb)}>Apply</button>
+  </div>
+
+  <div class="sect row">
+    <span>Click subdivision</span>
+    <div class="seg" role="radiogroup" aria-label="Click subdivision">
+      {#each SUBDIVS as s (s.v)}
+        <button role="radio" aria-checked={app.click.subdivision === s.v} onclick={() => app.setSubdivision(s.v)}>{s.label}</button>
+      {/each}
+    </div>
+  </div>
+
+  {#if app.overrides.length}
+    <div class="sect">
+      <div class="row between">
+        <span class="muted small">Overrides for this song</span>
+        <button class="btn ghost small" onclick={() => app.clearOverrides()}>Reset all</button>
+      </div>
+      <ul>
+        {#each app.overrides as _, i (i)}
+          <li>
+            <span>{describe(i)}</span>
+            <button class="btn ghost small icon-only" onclick={() => app.removeOverride(i)} aria-label="Remove override"><Icon name="close" size={12} /></button>
+          </li>
+        {/each}
+      </ul>
+    </div>
+  {/if}
+
+  <button class="link small" onclick={() => (showHelp = !showHelp)}>
+    <Icon name="help" size={14} /> When is detection wrong?
+  </button>
+  {#if showHelp}
+    <div class="help small muted">
+      <p>The click follows the detected beats, so tempo and meter changes work. Detection is good but not perfect:</p>
+      <ul>
+        <li>Odd meters (5/4, 7/4) usually get the right beats but misplaced downbeats. Use “This is beat 1” and set the beats per bar.</li>
+        <li>Additive meters (7/8 = 2+2+3) may track as an even pulse.</li>
+        <li>3/4 vs 6/8 can’t be told apart; 6/8 usually shows as 2 beats per bar. Use subdivision 3 for the 6/8 feel.</li>
+      </ul>
+    </div>
+  {/if}
+</div>
+
+<style>
+  .panel {
+    position: absolute;
+    bottom: calc(100% + 8px);
+    left: 0;
+    z-index: 40;
+    width: 360px;
+    max-width: calc(100vw - 40px);
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    background: var(--surface-3);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+  }
+  .head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .head .muted {
+    font-size: 12px;
+    flex: 1;
+  }
+  .sect {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    align-items: flex-start;
+  }
+  .row {
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .between {
+    justify-content: space-between;
+    width: 100%;
+  }
+  .small {
+    font-size: 12px;
+  }
+  .num {
+    width: 52px;
+    height: 26px;
+    background: var(--surface-2);
+    color: var(--fg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 0 6px;
+    font: inherit;
+  }
+  .seg {
+    display: inline-flex;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+  }
+  .seg button {
+    border: 0;
+    background: var(--surface-2);
+    padding: 3px 12px;
+    font-size: 12px;
+  }
+  .seg button + button {
+    border-left: 1px solid var(--border);
+  }
+  .seg button[aria-checked="true"] {
+    background: var(--accent);
+    color: var(--accent-fg);
+    font-weight: 600;
+  }
+  ul {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    width: 100%;
+  }
+  li {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 12.5px;
+    padding: 2px 0;
+  }
+  .link {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: none;
+    border: 0;
+    padding: 0;
+    color: var(--muted);
+    align-self: flex-start;
+  }
+  .link:hover {
+    color: var(--fg);
+  }
+  .help p {
+    margin: 0 0 4px;
+  }
+  .help ul {
+    list-style: disc;
+    padding-left: 18px;
+  }
+  .help li {
+    display: list-item;
+    font-size: 12px;
+  }
+</style>

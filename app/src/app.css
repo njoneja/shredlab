@@ -1,25 +1,144 @@
+/* Theme tokens. Restyle the app by changing these. */
 :root {
-  --bg: #f6f6f7;
-  --fg: #1d1d1f;
-  --muted: #6b6b70;
-  --error: #c0392b;
-  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  line-height: 1.5;
-  color-scheme: light dark;
+  --bg: #121418;
+  --surface: #1a1d23;
+  --surface-2: #22262e;
+  --surface-3: #2b3039;
+  --border: #2f343e;
+  --fg: #e8eaee;
+  --muted: #959cab;
+  --faint: #626a79;
+  --accent: #f0a83a; /* warm amber */
+  --accent-fg: #1a1205;
+  --accent-soft: rgba(240, 168, 58, 0.16);
+  --loop: #4fb3d9;
+  --loop-soft: rgba(79, 179, 217, 0.16);
+  --solo: #e6c229;
+  --danger: #ff6b5b;
+  --ok: #5fcf8a;
+  --wave: #5b6475;
+  --wave-played: #b9c0cc;
+  --playhead: #ffffff;
+
+  --stem-vocals: #ef7aa3;
+  --stem-guitar: #f0a83a;
+  --stem-bass: #8f83f2;
+  --stem-drums: #5fcf8a;
+  --stem-piano: #4fb3d9;
+  --stem-other: #a7adb9;
+
+  --radius: 8px;
+  --radius-sm: 5px;
+  --gap: 12px;
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: ui-monospace, "Cascadia Mono", "SF Mono", Consolas, monospace;
+
+  font-family: var(--font);
+  font-size: 14px;
+  line-height: 1.45;
+  color-scheme: dark;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #1c1c1e;
-    --fg: #f2f2f7;
-    --muted: #9a9aa0;
-    --error: #ff6b5b;
-  }
+* {
+  box-sizing: border-box;
 }
 
 html,
 body {
   margin: 0;
+  height: 100%;
   background: var(--bg);
   color: var(--fg);
+  overflow: hidden;
+}
+
+#app {
+  height: 100%;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  white-space: nowrap;
+}
+.btn:hover:not(:disabled) {
+  background: var(--surface-3);
+}
+.btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-fg);
+  font-weight: 600;
+}
+.btn.primary:hover:not(:disabled) {
+  filter: brightness(1.08);
+  background: var(--accent);
+}
+.btn.ghost {
+  background: transparent;
+  border-color: transparent;
+}
+.btn.ghost:hover:not(:disabled) {
+  background: var(--surface-2);
+}
+.btn.small {
+  height: 26px;
+  padding: 0 8px;
+  font-size: 12px;
+}
+.btn.icon-only {
+  padding: 0;
+  width: 32px;
+  justify-content: center;
+}
+.btn.toggle[aria-pressed="true"] {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+input[type="range"] {
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.muted {
+  color: var(--muted);
+}
+.mono {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+kbd {
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 1px 5px;
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: var(--surface-2);
+  color: var(--muted);
 }
