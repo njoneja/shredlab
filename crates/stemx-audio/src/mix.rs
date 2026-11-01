@@ -1,5 +1,25 @@
 //! Summing gained tracks into a stereo mix, with click-free gain ramps and a
 //! crossfade when the track set is replaced.
+//!
+//! # Backing track from the original (P1)
+//!
+//! A track set may carry the original mix next to the stems (same length,
+//! sample-aligned: both come from the same 44.1 kHz decode). The output is
+//! then a blend controlled by a weight `w` in 0..=1:
+//!
+//! ```text
+//! out = w * original + Σ_i (gain_i - w) * stem_i
+//! ```
+//!
+//! - `w = 1` ([`MixMode::Original`]): `original + Σ (gain_i - 1) * stem_i`.
+//!   All stems at unity gives exactly the original (bit for bit); an off
+//!   stem (gain 0) is subtracted.
+//! - `w = 0` ([`MixMode::Stems`]): the plain sum `Σ gain_i * stem_i`.
+//!
+//! A mode change ramps `w` linearly over [`MODE_XFADE`] samples, which is a
+//! linear crossfade between the two formulas (no discontinuity). Gain ramps
+//! run at the same time. [`choose_mode`] is the rule shared by playback and
+//! export.
 
 use crate::Track;
 
@@ -7,6 +27,31 @@ use crate::Track;
 pub const GAIN_RAMP: usize = 512;
 /// Samples over which an old track set fades out after [`Mixer::load`] (~46 ms).
 pub const LOAD_XFADE: usize = 2048;
+/// Samples over which a [`MixMode`] change crossfades (30 ms at 44.1 kHz).
+pub const MODE_XFADE: usize = 1323;
+
+/// How the stems are combined when the original mix is available.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MixMode {
+    /// Plain sum of the gained stems.
+    #[default]
+    Stems,
+    /// `original + Σ (gain_i - 1) * stem_i`. Without an original track this
+    /// behaves like [`MixMode::Stems`].
+    Original,
+}
+
+/// The P1 rule, shared by playback and export: with any stem soloed, the
+/// plain sum (of the soloed stems); otherwise the original-based mix when at
+/// least half of the stems are on (`2 * n_on >= n_stems`), else the plain
+/// sum. "On" ignores solo and volume (an on stem at volume 0 still counts).
+pub fn choose_mode(n_stems: usize, n_on: usize, any_solo: bool) -> MixMode {
+    if any_solo || n_stems == 0 || 2 * n_on < n_stems {
+        MixMode::Stems
+    } else {
+        MixMode::Original
+    }
+}
 
 /// Linear gain for every track, by name. A track whose name is not in `gains`
 /// gets 0; if a name appears twice the last value wins. Negative or non-finite
@@ -41,8 +86,26 @@ impl Gain {
     }
 
     fn set(&mut self, g: f32) {
+        self.set_over(g, GAIN_RAMP);
+    }
+
+    fn set_over(&mut self, g: f32, len: usize) {
         self.target = g;
-        self.step = (g - self.cur) / GAIN_RAMP as f32;
+        self.step = (g - self.cur) / len.max(1) as f32;
+    }
+
+    fn steady(&self) -> bool {
+        self.cur == self.target
+    }
+
+    /// Advances the ramp by `n` samples.
+    fn skip(&mut self, n: usize) {
+        for _ in 0..n {
+            if self.steady() {
+                break;
+            }
+            self.next();
+        }
     }
 
     #[inline]
@@ -63,15 +126,44 @@ impl Gain {
 struct TrackSet {
     tracks: Vec<Track>,
     gains: Vec<Gain>,
+    original: Option<Track>,
+    /// Weight of the original (see the module docs); stays 0 without one.
+    w: Gain,
 }
 
 impl TrackSet {
-    fn new(tracks: Vec<Track>, names: &[(String, f32)]) -> Self {
+    fn new(
+        tracks: Vec<Track>,
+        original: Option<Track>,
+        names: &[(String, f32)],
+        mode: MixMode,
+    ) -> Self {
         let gains = gains_for(&tracks, names)
             .into_iter()
             .map(Gain::fixed)
             .collect();
-        Self { tracks, gains }
+        let w = Gain::fixed(Self::weight(original.is_some(), mode));
+        Self {
+            tracks,
+            gains,
+            original,
+            w,
+        }
+    }
+
+    fn weight(has_original: bool, mode: MixMode) -> f32 {
+        if has_original && mode == MixMode::Original {
+            1.0
+        } else {
+            0.0
+        }
+    }
+
+    fn set_mode(&mut self, mode: MixMode) {
+        let w = Self::weight(self.original.is_some(), mode);
+        if w != self.w.target {
+            self.w.set_over(w, MODE_XFADE);
+        }
     }
 
     /// Adds `fade(i) * mix` of `[pos, pos+n)` into the outputs.
@@ -84,29 +176,58 @@ impl TrackSet {
         fade: impl Fn(usize) -> f32,
     ) {
         let n = l.len();
+        let has_orig = self.original.is_some();
+        if let Some(o) = &self.original {
+            let mut w = self.w;
+            if !(w.cur == 0.0 && w.steady()) {
+                add_track(o, pos, l, r, |i| w.next() * fade(i));
+            }
+        }
         for (t, g) in self.tracks.iter().zip(self.gains.iter_mut()) {
-            let len = t.channels[0].len().min(t.channels[1].len()) as i64;
             let mut gain = *g;
-            // Fast path: steady gain 0 contributes nothing (but still advance ramps).
-            if gain.cur == 0.0 && gain.target == 0.0 {
+            let mut w = self.w;
+            let w_cur = if has_orig { w.cur } else { 0.0 };
+            // Fast path: a steady zero coefficient contributes nothing
+            // (this also keeps "all stems at unity" bit-exact).
+            if gain.steady() && (!has_orig || w.steady()) && gain.cur - w_cur == 0.0 {
                 continue;
             }
-            let (cl, cr) = (&t.channels[0], &t.channels[1]);
-            for i in 0..n {
+            add_track(t, pos, l, r, |i| {
                 let gi = gain.next();
-                let p = pos + i as i64;
-                if p < 0 || p >= len {
-                    continue;
-                }
-                let p = p as usize;
-                let f = gi * fade(i);
-                l[i] += cl[p] * f;
-                r[i] += cr[p] * f;
-            }
+                let wi = if has_orig { w.next() } else { 0.0 };
+                (gi - wi) * fade(i)
+            });
             if advance {
                 *g = gain;
             }
         }
+        if advance {
+            self.w.skip(n);
+        }
+    }
+}
+
+/// `l[i] += ch[pos + i] * coef(i)` for every `i`. `coef` is called for
+/// every `i` in order (also outside the track), so ramps advance.
+#[inline]
+fn add_track(
+    t: &Track,
+    pos: i64,
+    l: &mut [f32],
+    r: &mut [f32],
+    mut coef: impl FnMut(usize) -> f32,
+) {
+    let len = t.channels[0].len().min(t.channels[1].len()) as i64;
+    let (cl, cr) = (&t.channels[0], &t.channels[1]);
+    for i in 0..l.len() {
+        let f = coef(i);
+        let p = pos + i as i64;
+        if p < 0 || p >= len {
+            continue;
+        }
+        let p = p as usize;
+        l[i] += cl[p] * f;
+        r[i] += cr[p] * f;
     }
 }
 
@@ -115,17 +236,19 @@ pub struct Mixer {
     cur: TrackSet,
     prev: Option<(TrackSet, usize)>,
     names: Vec<(String, f32)>,
+    mode: MixMode,
     len: usize,
     sample_rate: u32,
 }
 
 impl Mixer {
     pub fn new(tracks: Vec<Track>, gains: &[(String, f32)]) -> Self {
-        let (len, sample_rate) = dims(&tracks);
+        let (len, sample_rate) = dims(&tracks, None);
         Self {
-            cur: TrackSet::new(tracks, gains),
+            cur: TrackSet::new(tracks, None, gains, MixMode::Stems),
             prev: None,
             names: gains.to_vec(),
+            mode: MixMode::Stems,
             len,
             sample_rate,
         }
@@ -147,10 +270,23 @@ impl Mixer {
     /// Replaces the tracks; the old set fades out over [`LOAD_XFADE`] samples
     /// while the new one fades in. With `crossfade == false` the switch is immediate.
     pub fn load(&mut self, tracks: Vec<Track>, crossfade: bool) {
-        let (len, sr) = dims(&tracks);
-        let new = TrackSet::new(tracks, &self.names);
+        self.load_with_original(tracks, None, crossfade);
+    }
+
+    /// Like [`load`](Self::load), plus the original mix as the backing-track
+    /// source for [`MixMode::Original`]. It must be sample-aligned with the
+    /// stems; the length is that of the shortest track.
+    pub fn load_with_original(
+        &mut self,
+        tracks: Vec<Track>,
+        original: Option<Track>,
+        crossfade: bool,
+    ) {
+        let (len, sr) = dims(&tracks, original.as_ref());
+        let new = TrackSet::new(tracks, original, &self.names, self.mode);
         let old = std::mem::replace(&mut self.cur, new);
-        self.prev = (crossfade && !old.tracks.is_empty()).then_some((old, 0));
+        let old_audible = !old.tracks.is_empty() || old.original.is_some();
+        self.prev = (crossfade && old_audible).then_some((old, 0));
         self.len = len;
         self.sample_rate = sr;
     }
@@ -171,6 +307,24 @@ impl Mixer {
             }
         }
         self.names = gains;
+    }
+
+    /// Sets the mode; a change crossfades over [`MODE_XFADE`] samples.
+    pub fn set_mode(&mut self, mode: MixMode) {
+        self.mode = mode;
+        self.cur.set_mode(mode);
+        if let Some((p, _)) = &mut self.prev {
+            p.set_mode(mode);
+        }
+    }
+
+    pub fn mode(&self) -> MixMode {
+        self.mode
+    }
+
+    /// True when the current track set carries the original mix.
+    pub fn has_original(&self) -> bool {
+        self.cur.original.is_some()
     }
 
     /// Writes the mix of `[pos, pos + l.len())` into `l`/`r` (overwrites).
@@ -199,17 +353,22 @@ impl Mixer {
     }
 }
 
-fn dims(tracks: &[Track]) -> (usize, u32) {
+fn dims(tracks: &[Track], original: Option<&Track>) -> (usize, u32) {
     let len = tracks
         .iter()
+        .chain(original)
         .map(|t| t.channels[0].len().min(t.channels[1].len()))
         .min()
         .unwrap_or(0);
-    let sr = tracks.first().map_or(44_100, |t| t.sample_rate);
+    let sr = tracks
+        .first()
+        .or(original)
+        .map_or(44_100, |t| t.sample_rate);
     (len, sr)
 }
 
 #[cfg(test)]
+#[allow(clippy::needless_range_loop)]
 mod tests {
     use super::*;
     use std::sync::Arc;
@@ -303,5 +462,205 @@ mod tests {
         assert!((l[LOAD_XFADE / 2] - 0.5).abs() < 1e-3);
         assert_eq!(l[LOAD_XFADE + 5], 0.0);
         assert!(l.windows(2).all(|w| w[1] <= w[0] + 1e-7));
+    }
+
+    // ---------------------------------------------------------- P1 tests
+
+    fn sig(name: &str, seed: f32, len: usize) -> Track {
+        let a: Vec<f32> = (0..len)
+            .map(|i| (i as f32 * 0.013 * seed).sin() * 0.3 + (i as f32 * 0.0007).cos() * 0.1)
+            .collect();
+        let b: Vec<f32> = a.iter().map(|x| -0.7 * x + 0.01 * seed).collect();
+        Track {
+            name: name.into(),
+            channels: [Arc::new(a), Arc::new(b)],
+            sample_rate: 44_100,
+        }
+    }
+
+    /// Stems plus an "original" that is NOT their sum (a residual is added),
+    /// like a real separation.
+    fn p1_set(len: usize) -> (Vec<Track>, Track) {
+        let stems: Vec<Track> = ["vocals", "guitar", "bass", "drums", "piano", "other"]
+            .iter()
+            .enumerate()
+            .map(|(i, n)| sig(n, 1.0 + i as f32, len))
+            .collect();
+        let mut o = [vec![0.0f32; len], vec![0.0f32; len]];
+        for (c, oc) in o.iter_mut().enumerate() {
+            for (i, v) in oc.iter_mut().enumerate() {
+                *v = stems.iter().map(|t| t.channels[c][i]).sum::<f32>()
+                    + 0.05 * (i as f32 * 0.31).sin();
+            }
+        }
+        let [a, b] = o;
+        let orig = Track {
+            name: "original".into(),
+            channels: [Arc::new(a), Arc::new(b)],
+            sample_rate: 44_100,
+        };
+        (stems, orig)
+    }
+
+    fn all(v: f32) -> Vec<(String, f32)> {
+        ["vocals", "guitar", "bass", "drums", "piano", "other"]
+            .iter()
+            .map(|n| (n.to_string(), v))
+            .collect()
+    }
+
+    fn render(m: &mut Mixer, pos: i64, n: usize) -> [Vec<f32>; 2] {
+        let (mut l, mut r) = (vec![0.0; n], vec![0.0; n]);
+        m.mix(pos, &mut l, &mut r, true);
+        [l, r]
+    }
+
+    #[test]
+    fn choose_mode_rule() {
+        assert_eq!(choose_mode(6, 6, false), MixMode::Original);
+        assert_eq!(choose_mode(6, 3, false), MixMode::Original);
+        assert_eq!(choose_mode(6, 2, false), MixMode::Stems);
+        assert_eq!(choose_mode(6, 6, true), MixMode::Stems);
+        assert_eq!(choose_mode(4, 2, false), MixMode::Original);
+        assert_eq!(choose_mode(4, 1, false), MixMode::Stems);
+        assert_eq!(choose_mode(0, 0, false), MixMode::Stems);
+    }
+
+    #[test]
+    fn p1_all_on_unity_is_original_bit_for_bit() {
+        let n = 5000;
+        let (stems, orig) = p1_set(n);
+        let mut m = Mixer::new(vec![], &all(1.0));
+        m.set_mode(MixMode::Original);
+        m.load_with_original(stems, Some(orig.clone()), false);
+        let out = render(&mut m, 0, n);
+        for c in 0..2 {
+            assert!(out[c]
+                .iter()
+                .zip(orig.channels[c].iter())
+                .all(|(a, b)| a.to_bits() == b.to_bits()));
+        }
+    }
+
+    #[test]
+    fn p1_one_stem_off_is_original_minus_stem() {
+        let n = 3000;
+        let (stems, orig) = p1_set(n);
+        let guitar = stems[1].clone();
+        let mut gains = all(1.0);
+        gains[1].1 = 0.0;
+        let mut m = Mixer::new(vec![], &gains);
+        m.set_mode(MixMode::Original);
+        m.load_with_original(stems, Some(orig.clone()), false);
+        let out = render(&mut m, 0, n);
+        for c in 0..2 {
+            for i in 0..n {
+                assert_eq!(out[c][i], orig.channels[c][i] - guitar.channels[c][i]);
+            }
+        }
+    }
+
+    #[test]
+    fn p1_isolation_and_solo_are_plain_sum() {
+        let n = 3000;
+        let (stems, orig) = p1_set(n);
+        // "Only bass" at 0.8 (stems mode): exactly 0.8 * bass, no residual.
+        let mut gains = all(0.0);
+        gains[2].1 = 0.8;
+        let mut m = Mixer::new(vec![], &gains);
+        m.set_mode(choose_mode(6, 1, false));
+        m.load_with_original(stems.clone(), Some(orig), false);
+        let out = render(&mut m, 0, n);
+        for c in 0..2 {
+            for i in 0..n {
+                assert_eq!(out[c][i], stems[2].channels[c][i] * 0.8);
+            }
+        }
+        // Volume boost in original mode: original + (g - 1) * stem.
+        let mut m2 = Mixer::new(vec![], &all(1.0));
+        let (stems, orig) = p1_set(n);
+        m2.set_mode(MixMode::Original);
+        m2.load_with_original(stems.clone(), Some(orig.clone()), false);
+        let mut boosted = all(1.0);
+        boosted[3].1 = 2.0;
+        m2.set_gains(boosted);
+        let out = render(&mut m2, 0, GAIN_RAMP + 100);
+        let i = GAIN_RAMP + 50;
+        let want = orig.channels[0][i] + stems[3].channels[0][i];
+        assert!((out[0][i] - want).abs() < 1e-6);
+    }
+
+    #[test]
+    fn p1_mode_crossfade_is_continuous() {
+        let n = 20_000;
+        let (stems, orig) = p1_set(n);
+        // Guitar off: original mode = orig - guitar; stems mode = sum of the others.
+        let mut gains = all(1.0);
+        gains[1].1 = 0.0;
+        let mut m = Mixer::new(vec![], &gains);
+        m.set_mode(MixMode::Original);
+        m.load_with_original(stems.clone(), Some(orig.clone()), false);
+        let a = render(&mut m, 0, 1000);
+        m.set_mode(MixMode::Stems);
+        let b = render(&mut m, 1000, MODE_XFADE + 1000);
+        let mut out = a[0].clone();
+        out.extend_from_slice(&b[0]);
+        // The two targets differ by the residual (0.05 sin); max per-sample
+        // jump must stay at the signal's own slope plus the ramp share.
+        let max_jump = out
+            .windows(2)
+            .map(|w| (w[1] - w[0]).abs())
+            .fold(0.0f32, f32::max);
+        let sig_jump = (1..out.len())
+            .map(|i| {
+                let s = |k: usize| -> f32 {
+                    stems
+                        .iter()
+                        .enumerate()
+                        .filter(|(j, _)| *j != 1)
+                        .map(|(_, t)| t.channels[0][k])
+                        .sum()
+                };
+                (s(i) - s(i - 1)).abs()
+            })
+            .fold(0.0f32, f32::max);
+        assert!(
+            max_jump < sig_jump + 0.06 + 0.1 / MODE_XFADE as f32,
+            "{max_jump} vs {sig_jump}"
+        );
+        // Before: orig - guitar; after the crossfade: plain sum.
+        let k = 500;
+        assert_eq!(out[k], orig.channels[0][k] - stems[1].channels[0][k]);
+        let k = 1000 + MODE_XFADE + 500;
+        let sum: f32 = stems
+            .iter()
+            .enumerate()
+            .filter(|(j, _)| *j != 1)
+            .map(|(_, t)| t.channels[0][k])
+            .sum();
+        assert!((out[k] - sum).abs() < 1e-5);
+        // Halfway through the crossfade it is the average of the two.
+        let k = 1000 + MODE_XFADE / 2;
+        let s: f32 = stems
+            .iter()
+            .enumerate()
+            .filter(|(j, _)| *j != 1)
+            .map(|(_, t)| t.channels[0][k])
+            .sum();
+        let o = orig.channels[0][k] - stems[1].channels[0][k];
+        assert!((out[k] - 0.5 * (s + o)).abs() < 2e-3, "{} {}", out[k], s);
+    }
+
+    #[test]
+    fn p1_without_original_falls_back_to_sum() {
+        let n = 1000;
+        let (stems, _) = p1_set(n);
+        let mut m = Mixer::new(vec![], &all(1.0));
+        m.set_mode(MixMode::Original);
+        m.load_with_original(stems.clone(), None, false);
+        assert!(!m.has_original());
+        let out = render(&mut m, 0, n);
+        let sum: f32 = stems.iter().map(|t| t.channels[0][10]).sum();
+        assert!((out[0][10] - sum).abs() < 1e-6);
     }
 }

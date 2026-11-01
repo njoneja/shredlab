@@ -17,12 +17,16 @@
 //! heard within roughly the ring latency plus the device buffer (< 60 ms).
 //!
 //! Speed 1.0 with pitch 0 bypasses the stretcher (bit-transparent at unity
-//! gain). The gained tracks are mixed first and the stereo mix is stretched
+//! gain). Playback runs the music through a soft-knee look-ahead safety
+//! limiter ([`limiter`], transparent below -1 dBFS) before the click is
+//! added; export uses its own whole-file limiter instead. The mixer can
+//! build the backing track from the original mix ([`mix`], P1). The gained tracks are mixed first and the stereo mix is stretched
 //! once. Seeks, loop wraps, pause and stretch on/off are crossfaded (~10 ms).
 
 pub mod click;
 mod encode;
 mod engine;
+pub mod limiter;
 pub mod mix;
 pub mod pipeline;
 mod render;
@@ -32,6 +36,7 @@ use std::sync::Arc;
 
 pub use encode::{encode, limiter_gain, peak, ExportFormat};
 pub use engine::{Engine, EngineStats};
+pub use mix::{choose_mode, MixMode};
 pub use render::{render, RenderRequest};
 
 /// Version of this crate, from `Cargo.toml`.

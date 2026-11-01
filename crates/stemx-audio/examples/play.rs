@@ -156,6 +156,8 @@ fn main() {
         let in_len = tracks[0].channels[0].len();
         let req = RenderRequest {
             tracks: tracks.clone(),
+            original: None,
+            mode: stemx_audio::MixMode::Stems,
             gains: gains.clone(),
             speed: args.speed,
             semitones: args.pitch,

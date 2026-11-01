@@ -5,7 +5,8 @@
 //! settings change, but steady-state rendering does not allocate.
 
 use crate::click::{self, ClickBank, ClickKind, CountInPlan};
-use crate::mix::Mixer;
+use crate::limiter::Limiter;
+use crate::mix::{MixMode, Mixer};
 use crate::stretch::Stretcher;
 use crate::{ClickConfig, Position, Track};
 
@@ -202,6 +203,8 @@ pub struct Pipeline {
     gen: u16,
     pending_flags: u32,
     fade_on_start: bool,
+    /// Playback safety limiter on the music (before the clicks), if enabled.
+    limiter: Option<Limiter>,
 }
 
 impl Pipeline {
@@ -231,7 +234,16 @@ impl Pipeline {
             gen: 0,
             pending_flags: 0,
             fade_on_start: realtime,
+            limiter: None,
         }
+    }
+
+    /// Enables the playback safety limiter ([`crate::limiter`]) on the music.
+    /// Clicks and count-in are mixed after it (delayed by the limiter's
+    /// latency so they stay in sync). Off by default and never used by the
+    /// offline render, which has its own limiter at encode time.
+    pub fn set_limiter(&mut self, on: bool) {
+        self.limiter = on.then(|| Limiter::new(self.sr));
     }
 
     pub fn sample_rate(&self) -> u32 {
@@ -282,11 +294,23 @@ impl Pipeline {
 
     /// Replaces the tracks, keeping the position (crossfaded when playing).
     pub fn load(&mut self, tracks: Vec<Track>) {
-        let sr = tracks.first().map_or(self.sr, |t| t.sample_rate);
+        self.load_with_original(tracks, None);
+    }
+
+    /// Like [`load`](Self::load), with the original mix for
+    /// [`MixMode::Original`] (see [`crate::mix`]).
+    pub fn load_with_original(&mut self, tracks: Vec<Track>, original: Option<Track>) {
+        let sr = tracks
+            .first()
+            .or(original.as_ref())
+            .map_or(self.sr, |t| t.sample_rate);
         if sr != self.sr {
             // Different rate: rebuild everything rate-dependent and stop.
             let pos = self.position().seconds;
-            self.mixer.load(tracks, false);
+            self.mixer.load_with_original(tracks, original, false);
+            if self.limiter.is_some() {
+                self.limiter = Some(Limiter::new(sr));
+            }
             self.sr = sr;
             self.voice = Voice::new(sr);
             self.bank = ClickBank::new(sr);
@@ -297,7 +321,7 @@ impl Pipeline {
             return;
         }
         let playing = self.is_playing();
-        self.mixer.load(tracks, playing);
+        self.mixer.load_with_original(tracks, original, playing);
         let dur = self.duration();
         if self.paused_pos > dur {
             self.paused_pos = dur;
@@ -306,6 +330,12 @@ impl Pipeline {
 
     pub fn set_gains(&mut self, gains: Vec<(String, f32)>) {
         self.mixer.set_gains(gains);
+    }
+
+    /// Gains and mix mode together (one control message, no glitch between).
+    pub fn set_mix(&mut self, gains: Vec<(String, f32)>, mode: MixMode) {
+        self.mixer.set_gains(gains);
+        self.mixer.set_mode(mode);
     }
 
     pub fn set_click(&mut self, cfg: ClickConfig) {
@@ -483,10 +513,15 @@ impl Pipeline {
         if gain <= 0.0 {
             return;
         }
+        let lat = if self.limiter.is_some() {
+            Limiter::latency()
+        } else {
+            0
+        };
         let c = ActiveClick {
             kind,
             gain,
-            delay,
+            delay: delay + lat,
             idx: 0,
         };
         // Free slot, else replace the oldest (largest idx).
@@ -695,6 +730,9 @@ impl Pipeline {
                     }
                 }
             }
+        }
+        if let Some(lim) = &mut self.limiter {
+            lim.process(l, r);
         }
         self.mix_clicks(l, r);
     }

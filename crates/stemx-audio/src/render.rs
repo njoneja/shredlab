@@ -3,6 +3,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use crate::mix::MixMode;
 use crate::pipeline::{Meta, Pipeline};
 use crate::{AudioError, Track};
 
@@ -10,7 +11,12 @@ use crate::{AudioError, Track};
 #[derive(Debug, Clone)]
 pub struct RenderRequest {
     pub tracks: Vec<Track>,
-    /// Linear gain per track name; missing names are silent.
+    /// The original mix, sample-aligned with `tracks`, for
+    /// [`MixMode::Original`] (same rule and code as playback).
+    pub original: Option<Track>,
+    pub mode: MixMode,
+    /// Linear gain per track name; missing names are silent (and, in
+    /// [`MixMode::Original`], subtracted from the original).
     pub gains: Vec<(String, f32)>,
     /// Tempo ratio, 0.5..=1.5 (clamped).
     pub speed: f64,
@@ -28,10 +34,12 @@ pub fn render(
     progress: &mut dyn FnMut(f32),
     cancel: &AtomicBool,
 ) -> Result<[Vec<f32>; 2], AudioError> {
-    if req.tracks.is_empty() {
+    if req.tracks.is_empty() && req.original.is_none() {
         return Err(AudioError::Invalid("no tracks to render".into()));
     }
-    let mut p = Pipeline::new(req.tracks.clone(), &req.gains, false);
+    let mut p = Pipeline::new(Vec::new(), &req.gains, false);
+    p.set_mix(req.gains.clone(), req.mode);
+    p.load_with_original(req.tracks.clone(), req.original.clone());
     p.set_speed(req.speed);
     p.set_pitch(req.semitones);
     let duration = p.duration();
@@ -72,6 +80,7 @@ pub fn render(
 }
 
 #[cfg(test)]
+#[allow(clippy::needless_range_loop)]
 mod tests {
     use super::*;
     use std::sync::Arc;
@@ -98,6 +107,8 @@ mod tests {
         let b = sine_track("drums", 1000.0, 1.0);
         let req = RenderRequest {
             tracks: vec![a.clone(), b],
+            original: None,
+            mode: MixMode::Stems,
             gains: vec![("bass".into(), 1.0)],
             speed: 1.0,
             semitones: 0.0,
@@ -115,6 +126,8 @@ mod tests {
         for (speed, semis) in [(0.8, 0.0), (1.25, -2.0), (1.0, 3.0)] {
             let req = RenderRequest {
                 tracks: vec![a.clone()],
+                original: None,
+                mode: MixMode::Stems,
                 gains: vec![("mix".into(), 1.0)],
                 speed,
                 semitones: semis,
@@ -133,9 +146,40 @@ mod tests {
     }
 
     #[test]
+    fn original_mode_render_matches_rule() {
+        // "All but drums" in original mode = original - drums, bit-exact
+        // when unstretched.
+        let bass = sine_track("bass", 110.0, 1.0);
+        let drums = sine_track("drums", 1000.0, 1.0);
+        let n = bass.channels[0].len();
+        let o: Vec<f32> = (0..n)
+            .map(|i| bass.channels[0][i] + drums.channels[0][i] + 0.01)
+            .collect();
+        let orig = Track {
+            name: "original".into(),
+            channels: [Arc::new(o.clone()), Arc::new(o.clone())],
+            sample_rate: 44_100,
+        };
+        let req = RenderRequest {
+            tracks: vec![bass.clone(), drums.clone()],
+            original: Some(orig),
+            mode: crate::mix::choose_mode(2, 1, false),
+            gains: vec![("bass".into(), 1.0)],
+            speed: 1.0,
+            semitones: 0.0,
+        };
+        let out = render(&req, &mut |_| {}, &AtomicBool::new(false)).unwrap();
+        for i in 0..n {
+            assert_eq!(out[0][i], o[i] - drums.channels[0][i]);
+        }
+    }
+
+    #[test]
     fn cancel_stops_render() {
         let req = RenderRequest {
             tracks: vec![sine_track("mix", 220.0, 1.0)],
+            original: None,
+            mode: MixMode::Stems,
             gains: vec![],
             speed: 0.9,
             semitones: 0.0,

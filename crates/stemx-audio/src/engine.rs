@@ -13,6 +13,7 @@ use rubato::{
     Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
 };
 
+use crate::mix::MixMode;
 use crate::pipeline::{Meta, Pipeline, F_END, F_WRAP};
 use crate::{AudioError, ClickConfig, Position, Track};
 
@@ -73,7 +74,8 @@ pub struct EngineStats {
 type Callback = Arc<Mutex<Option<Box<dyn Fn() + Send + Sync>>>>;
 
 enum Cmd {
-    Load(Vec<Track>),
+    Load(Vec<Track>, Option<Track>),
+    Mix(Vec<(String, f32)>, MixMode),
     Play(u16, Sender<Position>),
     Pause(u16, Sender<Position>),
     Seek(u16, f64, Sender<Position>),
@@ -156,17 +158,27 @@ impl Engine {
     /// Replaces the tracks and keeps the position (crossfaded while playing),
     /// e.g. to switch from the original mix to stems seamlessly.
     pub fn load(&self, tracks: Vec<Track>) {
+        self.load_with_original(tracks, None);
+    }
+
+    /// Like [`load`](Self::load), plus the original mix (sample-aligned with
+    /// the stems) for the backing-track mode [`MixMode::Original`].
+    pub fn load_with_original(&self, tracks: Vec<Track>, original: Option<Track>) {
         let len = tracks
             .iter()
+            .chain(original.as_ref())
             .map(|t| t.channels[0].len().min(t.channels[1].len()))
             .min()
             .unwrap_or(0);
-        let sr = tracks.first().map_or(44_100, |t| t.sample_rate.max(1));
+        let sr = tracks
+            .first()
+            .or(original.as_ref())
+            .map_or(44_100, |t| t.sample_rate.max(1));
         let dur = len as f64 / sr as f64;
         self.shared
             .duration_bits
             .store(dur.to_bits(), Ordering::Relaxed);
-        self.send(Cmd::Load(tracks));
+        self.send(Cmd::Load(tracks, original));
     }
 
     /// Starts playback: at or past the end restarts from 0; with a loop, a
@@ -188,6 +200,12 @@ impl Engine {
     /// Linear gain per track name; 0 = silent; names not listed are silent.
     pub fn set_gains(&self, gains: Vec<(String, f32)>) {
         self.send(Cmd::Gains(gains));
+    }
+
+    /// Gains and [`MixMode`] at once (applied atomically; a mode change
+    /// crossfades over [`crate::mix::MODE_XFADE`] samples).
+    pub fn set_mix(&self, gains: Vec<(String, f32)>, mode: MixMode) {
+        self.send(Cmd::Mix(gains, mode));
     }
 
     /// Tempo ratio 0.5..=1.5, pitch preserved.
@@ -555,6 +573,7 @@ fn producer_thread(
     let _ = ready.send(Ok(()));
     let watcher = spawn_device_watcher(shared.clone(), out.as_ref().map(|o| o.device_name.clone()));
     let mut pipe = Pipeline::new(Vec::new(), &[], true);
+    pipe.set_limiter(true);
     let mut bufs = Bufs {
         l: vec![0.0; BLOCK],
         r: vec![0.0; BLOCK],
@@ -579,7 +598,8 @@ fn producer_thread(
         while let Ok(cmd) = rx.try_recv() {
             match cmd {
                 Cmd::Quit => break 'main,
-                Cmd::Load(t) => pipe.load(t),
+                Cmd::Load(t, o) => pipe.load_with_original(t, o),
+                Cmd::Mix(g, m) => pipe.set_mix(g, m),
                 Cmd::Play(g, tx) => {
                     pipe.set_gen(g);
                     let _ = tx.send(pipe.play());
