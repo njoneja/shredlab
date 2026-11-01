@@ -101,7 +101,7 @@
         <section>
           <h3>Your songs</h3>
           <ul>
-            <li><b>✕</b> on a recent song removes it from the list. Its stems are kept: open the file again and it's back, instantly.</li>
+            <li><b>✕</b> on a recent song removes it from the list, after asking. Its stems are kept unless you tick <b>Also delete its stems and settings</b>: open the file again and it's back, instantly.</li>
             <li><b>Settings → Manage storage…</b> shows how much space each song's stems take. <b>Delete stems</b> frees it; opening the song again means separating it again. The open song can't be deleted.</li>
           </ul>
         </section>

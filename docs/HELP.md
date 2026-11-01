@@ -72,9 +72,12 @@ that is what the click actually follows.
 ShredLab keeps the stems of every song you open, so opening it again is
 instant. Recent songs are listed under **Open** and on the start screen.
 
-- **Remove from recent.** Hover over a song in the list and click its ✕.
-  The song leaves the list, but its stems are kept: open the same file
-  again and it loads instantly and comes back into the list.
+- **Remove from recent.** Hover over a song in the list and click its ✕,
+  then **Remove**. The song leaves the list, but its stems are kept: open
+  the same file again and it loads instantly and comes back into the list.
+  To free its space as well, tick **Also delete its stems and settings**
+  first (the box shows how much it frees; not possible for the song that
+  is open).
 - **Free up space.** Stems take a few hundred MB per song. **Settings →
   Manage storage…** lists every song with its size, when you last opened
   it, and whether the original file is still there. **Delete stems**
