@@ -125,15 +125,22 @@ pub fn local_beat_interval(beats: &[f64], t: f64) -> f64 {
 /// Beat intervals the count-in tempo is taken from (see [`count_in_interval`]).
 pub const COUNT_IN_TEMPO_BEATS: usize = 8;
 
-/// The count-in spacing (song seconds) for counting into `beats[target]`:
-/// the upper median of the next [`COUNT_IN_TEMPO_BEATS`] beat intervals
-/// (about two bars) starting at the target beat, fewer near the end of the
-/// grid. So the tempo comes from the section being counted into, never from
-/// an intro before it, and one wobbly beat doesn't skew it. The upper
-/// median (the larger middle value of an even count) keeps the regular beat
-/// when odd bars shorten some intervals: a 7/8 bar after a 4/4 bar, whether
-/// the tracker puts one half-beat gap in it or spreads it over four beats.
-/// Without an interval after the target, [`local_beat_interval`] at it.
+/// Intervals within this fraction of each other count as the same pulse.
+const PULSE_TOLERANCE: f64 = 0.1;
+
+/// The count-in spacing (song seconds) for counting into `beats[target]`,
+/// from the next [`COUNT_IN_TEMPO_BEATS`] beat intervals (about two bars)
+/// starting at the target beat, fewer near the end of the grid. So the
+/// tempo comes from the section being counted into, never from an intro
+/// before it.
+///
+/// The beat is the slowest well-supported pulse: the longest interval that
+/// at least 3 of them (all of them, if fewer) agree with within
+/// [`PULSE_TOLERANCE`]; the result is the upper median of that group. This
+/// ignores short intervals where the tracker splits beats (a 7/8 bar with a
+/// half-beat gap or spread over four beats, a busy intro tracked in half
+/// beats) and a lone long gap (a missed beat). Without an interval after
+/// the target, [`local_beat_interval`] at it.
 pub fn count_in_interval(beats: &[f64], target: usize) -> f64 {
     let end = (target + COUNT_IN_TEMPO_BEATS + 1).min(beats.len());
     let mut d: Vec<f64> = beats
@@ -147,6 +154,17 @@ pub fn count_in_interval(beats: &[f64], target: usize) -> f64 {
         return local_beat_interval(beats, beats.get(target).copied().unwrap_or(0.0));
     }
     d.sort_by(f64::total_cmp);
+    let need = d.len().min(3);
+    for &v in d.iter().rev() {
+        let group: Vec<f64> = d
+            .iter()
+            .copied()
+            .filter(|x| (x - v).abs() <= PULSE_TOLERANCE * v)
+            .collect();
+        if group.len() >= need {
+            return group[group.len() / 2];
+        }
+    }
     d[d.len() / 2]
 }
 
@@ -414,6 +432,19 @@ mod tests {
                 "target {t}"
             );
         }
+    }
+
+    #[test]
+    fn count_in_tempo_ignores_half_beats_and_a_missed_beat() {
+        // Houses Of The Holy's first bars as tracked: half beats in a busy intro.
+        let beats = grid_from(
+            0.36,
+            &[0.48, 0.50, 0.26, 0.24, 0.50, 0.24, 0.26, 0.22, 0.30],
+        );
+        assert!((count_in_interval(&beats, 0) - 0.50).abs() < 1e-9);
+        // One missed beat (a double-length gap) doesn't slow it down.
+        let beats = grid_from(1.0, &[0.5, 0.5, 1.0, 0.5, 0.5, 0.5, 0.5, 0.5]);
+        assert!((count_in_interval(&beats, 0) - 0.5).abs() < 1e-9);
     }
 
     #[test]
