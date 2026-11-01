@@ -22,15 +22,19 @@ fn have_fixtures() -> bool {
 
 fn f32s(name: &str) -> Vec<f32> {
     let b = std::fs::read(dir().join(format!("{name}.float32"))).unwrap();
-    b.chunks_exact(4)
-        .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+    b.as_chunks::<4>()
+        .0
+        .iter()
+        .map(|c| f32::from_le_bytes(*c))
         .collect()
 }
 
 fn f64s(name: &str) -> Vec<f64> {
     let b = std::fs::read(dir().join(format!("{name}.float64"))).unwrap();
-    b.chunks_exact(8)
-        .map(|c| f64::from_le_bytes(c.try_into().unwrap()))
+    b.as_chunks::<8>()
+        .0
+        .iter()
+        .map(|c| f64::from_le_bytes(*c))
         .collect()
 }
 

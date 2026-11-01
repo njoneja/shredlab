@@ -125,11 +125,7 @@ fn fixture_key(stem: &str) -> String {
 
 fn read<T, const N: usize>(p: &Path, f: fn([u8; N]) -> T) -> Option<Vec<T>> {
     let b = std::fs::read(p).ok()?;
-    Some(
-        b.chunks_exact(N)
-            .map(|c| f(c.try_into().unwrap()))
-            .collect(),
-    )
+    Some(b.as_chunks::<N>().0.iter().map(|c| f(*c)).collect())
 }
 
 fn compare(stem: &str, spect: &[f32], grid: &BeatGrid) {

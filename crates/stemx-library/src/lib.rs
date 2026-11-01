@@ -350,7 +350,7 @@ impl Library {
                 last_opened_ms: m.last_opened_ms,
             })
             .collect();
-        out.sort_by(|a, b| b.last_opened_ms.cmp(&a.last_opened_ms));
+        out.sort_by_key(|e| std::cmp::Reverse(e.last_opened_ms));
         out.truncate(limit);
         out
     }
@@ -540,7 +540,7 @@ fn read_stem_wav(path: &Path, scale: f32) -> Result<(u32, [Vec<f32>; 2])> {
             let k = scale / 32767.0;
             let mut l = Vec::with_capacity(n);
             let mut r = Vec::with_capacity(n);
-            for fr in data.chunks_exact(4) {
+            for fr in data.as_chunks::<4>().0 {
                 l.push(i16::from_le_bytes([fr[0], fr[1]]) as f32 * k);
                 r.push(i16::from_le_bytes([fr[2], fr[3]]) as f32 * k);
             }
