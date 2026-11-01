@@ -32,6 +32,8 @@
   /** The row's on switch; the stereo window does the opposite of it. */
   const sw = $derived(app.mix[stem].on);
   const side = $derived(exceptionSide(pan));
+  /** Switch off, no exception (and not soloed): the row plays nothing, so the EQ does nothing. */
+  const silent = $derived(!sw && !pan.enabled && !app.mix[stem].solo);
   /** How much of the stem at `v` (pan) is heard: what the field display lights. */
   const heard = (v: number) => (!pan.enabled && app.mix[stem].solo ? 1 : heardGain(pan, sw, v));
 
@@ -316,6 +318,7 @@
     }
     if (!best) return;
     eqDrag = best.key;
+    tab = best.key;
     eqCanvas!.setPointerCapture(e.pointerId);
     eqMove(e);
   }
@@ -379,10 +382,167 @@
     }
   }
 
-  const ENDS = [
-    { which: "low", title: "Low end", key: "low_cut" },
-    { which: "high", title: "High end", key: "high_cut" },
-  ] as const;
+  // ---- EQ controls: one tab per node, each value as a slider plus a number ----
+  type Key = Node["key"];
+  const TABS: { key: Key; glyph: string; short: string; title: string }[] = [
+    { key: "low", glyph: "L", short: "Low", title: "Low end" },
+    { key: 0, glyph: "1", short: "Band 1", title: "Band 1" },
+    { key: 1, glyph: "2", short: "Band 2", title: "Band 2" },
+    { key: 2, glyph: "3", short: "Band 3", title: "Band 3" },
+    { key: "high", glyph: "H", short: "High", title: "High end" },
+  ];
+  let tab = $state<Key>(0);
+  const tabIdx = $derived(TABS.findIndex((t) => t.key === tab));
+  const tabOn = (k: Key) => (k === "low" ? eq.low_cut.enabled : k === "high" ? eq.high_cut.enabled : eq.bands[k].enabled);
+
+  /** Slider law and keyboard steps. Log specs step in octaves (×2^step). */
+  interface Spec {
+    min: number;
+    max: number;
+    log: boolean;
+    small: number;
+    big: number;
+    round: (v: number) => number;
+  }
+  const POS = 1000;
+  const FREQ: Spec = { min: F_MIN, max: F_MAX, log: true, small: 1 / 24, big: 1 / 3, round: Math.round };
+  const QS: Spec = { min: 0.3, max: 8, log: true, small: 1 / 12, big: 1 / 2, round: (v) => Math.round(v * 100) / 100 };
+  const gainSpec = (m: number): Spec => ({ min: -m, max: m, log: false, small: 0.5, big: 3, round: (v) => Math.round(v * 2) / 2 });
+  const toPos = (sp: Spec, v: number) =>
+    Math.round(sp.log ? (POS * Math.log(v / sp.min)) / Math.log(sp.max / sp.min) : (POS * (v - sp.min)) / (sp.max - sp.min));
+  const fromPos = (sp: Spec, p: number) =>
+    sp.round(sp.log ? sp.min * (sp.max / sp.min) ** (p / POS) : sp.min + ((sp.max - sp.min) * p) / POS);
+  function stepBy(sp: Spec, v: number, dir: number, big: boolean) {
+    const d = big ? sp.big : sp.small;
+    let n = sp.round(sp.log ? v * 2 ** (dir * d) : v + dir * d);
+    if (n === v) n = sp.round(v + dir * (sp.log ? 1 : d)); // always move
+    return clamp(n, sp.min, sp.max);
+  }
+  /** Arrows (Shift: bigger), Page Up/Down (bigger), Home/End on a slider or number. */
+  function stepKeys(e: KeyboardEvent, sp: Spec, v: number, set: (v: number) => void) {
+    const dir = { ArrowUp: 1, ArrowRight: 1, PageUp: 1, ArrowDown: -1, ArrowLeft: -1, PageDown: -1 }[e.key];
+    const isNum = (e.currentTarget as HTMLInputElement).type === "number";
+    if (isNum && (e.key === "ArrowLeft" || e.key === "ArrowRight")) return; // caret
+    if (dir) set(stepBy(sp, v, dir, e.shiftKey || e.key.startsWith("Page")));
+    else if (e.key === "Home" && !isNum) set(sp.min);
+    else if (e.key === "End" && !isNum) set(sp.max);
+    else return;
+    e.preventDefault();
+    e.stopPropagation();
+  }
+
+  /** Frequency in the number field: Hz below 1 kHz, kHz above. */
+  const kHz = (f: number) => f >= 1000;
+  const freqField = (f: number) => (kHz(f) ? String(Math.round(f / 10) / 100) : String(Math.round(f)));
+  /** Typed frequency: small numbers are kHz (20 Hz is the minimum anyway). */
+  const parseFreq = (n: number, wasKHz: boolean) => (n < 20 || (wasKHz && n <= 20) ? n * 1000 : n);
+  const fmtDb = (v: number) => `${v > 0 ? "+" : v < 0 ? "−" : ""}${Math.abs(v)} dB`;
+
+  interface Row {
+    name: "Frequency" | "Gain" | "Q";
+    sp: Spec;
+    v: number;
+    /** Number-field text, step and unit. */
+    field: string;
+    step: string;
+    unit: string;
+    aria: string;
+    text: string;
+    parse: (n: number) => number;
+    set: (v: number) => void;
+  }
+  const rows = $derived.by((): Row[] => {
+    const k = tab;
+    const end = k === "low" || k === "high";
+    const title = TABS[tabIdx].title.toLowerCase();
+    const who = `${label} ${title}`;
+    const f = end ? (k === "low" ? eq.low_cut : eq.high_cut).freq : eq.bands[k].freq;
+    const setF = (v: number) =>
+      end
+        ? setEnd(k, (x) => ((x.enabled = true), (x.freq = v)))
+        : setBand(k, (x) => ((x.enabled = true), (x.freq = v)));
+    const out: Row[] = [
+      {
+        name: "Frequency",
+        sp: FREQ,
+        v: f,
+        field: freqField(f),
+        step: kHz(f) ? "0.01" : "1",
+        unit: kHz(f) ? "kHz" : "Hz",
+        aria: `${who} frequency`,
+        text: formatHz(f),
+        parse: (n) => parseFreq(n, kHz(f)),
+        set: setF,
+      },
+    ];
+    if (end) {
+      const e = k === "low" ? eq.low_cut : eq.high_cut;
+      if (e.mode === "shelf") {
+        out.push({
+          name: "Gain",
+          sp: gainSpec(SHELF_MAX_DB),
+          v: e.gain_db,
+          field: String(e.gain_db),
+          step: "0.5",
+          unit: "dB",
+          aria: `${who} shelf gain`,
+          text: fmtDb(e.gain_db),
+          parse: (n) => n,
+          set: (v) => setEnd(k, (x) => ((x.enabled = true), (x.gain_db = v))),
+        });
+      }
+    } else {
+      const b = eq.bands[k];
+      out.push(
+        {
+          name: "Gain",
+          sp: gainSpec(BAND_MAX_DB),
+          v: b.gain_db,
+          field: String(b.gain_db),
+          step: "0.5",
+          unit: "dB",
+          aria: `${who} gain`,
+          text: fmtDb(b.gain_db),
+          parse: (n) => n,
+          set: (v) => setBand(k, (x) => ((x.enabled = true), (x.gain_db = v))),
+        },
+        {
+          name: "Q",
+          sp: QS,
+          v: b.q,
+          field: String(b.q),
+          step: "0.01",
+          unit: "",
+          aria: `${who} width (Q)`,
+          text: `Q ${b.q}${b.q < 1 ? ", broad" : b.q > 3 ? ", narrow" : ""}`,
+          parse: (n) => n,
+          set: (v) => setBand(k, (x) => (x.q = v)),
+        },
+      );
+    }
+    return out;
+  });
+  /** Commits a typed number (clamped, rounded) and shows the stored value. */
+  function commit(r: Row, el: HTMLInputElement) {
+    const n = parseFloat(el.value);
+    if (Number.isFinite(n)) r.set(clamp(r.sp.round(r.parse(n)), r.sp.min, r.sp.max));
+    queueMicrotask(() => {
+      const cur = rows.find((x) => x.name === r.name);
+      if (cur) el.value = cur.field;
+    });
+  }
+  function tabKeys(e: KeyboardEvent) {
+    const d = { ArrowRight: 1, ArrowLeft: -1 }[e.key];
+    let i = tabIdx;
+    if (d) i = (tabIdx + d + TABS.length) % TABS.length;
+    else if (e.key === "Home") i = 0;
+    else if (e.key === "End") i = TABS.length - 1;
+    else return;
+    e.preventDefault();
+    e.stopPropagation();
+    tab = TABS[i].key;
+    document.getElementById(`${id}-tab-${i}`)?.focus();
+  }
 </script>
 
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
@@ -468,56 +628,90 @@
       </div>
     </div>
 
-    <div class="col">
-      <div class="eq-wrap" bind:clientWidth={eqW}>
-        <canvas
-          bind:this={eqCanvas}
-          class="eq"
-          style:height="{EQ_H}px"
-          aria-hidden="true"
-          onpointerdown={eqDown}
-          onpointermove={eqMove}
-          onpointerup={eqUp}
-          onpointercancel={eqUp}
-        ></canvas>
-      </div>
-      <div class="eq-grid">
-        {#each ENDS.slice(0, 1) as end (end.which)}
-          {@render endCol(end.which, end.title, eq[end.key])}
-        {/each}
-        {#each eq.bands as b, i (i)}
-          <fieldset class="grp">
-            <legend>
-              <label class="check"><input type="checkbox" checked={b.enabled} onchange={(e) => setBand(i, (x) => (x.enabled = e.currentTarget.checked))} aria-label="{label} EQ band {i + 1} on" />Band {i + 1}</label>
-            </legend>
-            <input class="n" type="number" min="20" max="20000" step="1" value={Math.round(b.freq)} aria-label="{label} band {i + 1} frequency, Hz" title="Frequency (Hz)" onchange={(e) => setBand(i, (x) => ((x.enabled = true), (x.freq = clamp(num(e.currentTarget.value, x.freq), 20, 20000))))} />
-            <input class="n" type="number" min={-BAND_MAX_DB} max={BAND_MAX_DB} step="0.5" value={b.gain_db} aria-label="{label} band {i + 1} gain, dB" title="Gain (dB)" onchange={(e) => setBand(i, (x) => ((x.enabled = true), (x.gain_db = clamp(num(e.currentTarget.value, 0), -BAND_MAX_DB, BAND_MAX_DB))))} />
-            <input class="n" type="number" min="0.3" max="8" step="0.1" value={b.q} aria-label="{label} band {i + 1} width (Q)" title="Q: 0.7 broad … 4 narrow" onchange={(e) => setBand(i, (x) => (x.q = clamp(num(e.currentTarget.value, 1), 0.3, 8)))} />
-          </fieldset>
-        {/each}
-        {#each ENDS.slice(1) as end (end.which)}
-          {@render endCol(end.which, end.title, eq[end.key])}
-        {/each}
+    <div class="col eq-col" class:silent>
+      {#if silent}
+        <p class="silent-note">Turn {label} on, or except part of it, to hear the EQ.</p>
+      {/if}
+      <div class="eq-body">
+        <div class="eq-wrap" bind:clientWidth={eqW}>
+          <canvas
+            bind:this={eqCanvas}
+            class="eq"
+            style:height="{EQ_H}px"
+            aria-hidden="true"
+            onpointerdown={eqDown}
+            onpointermove={eqMove}
+            onpointerup={eqUp}
+            onpointercancel={eqUp}
+          ></canvas>
+        </div>
+        <div class="tabs" role="tablist" aria-label="{label} EQ sections" tabindex="-1" onkeydown={tabKeys}>
+          {#each TABS as t, i (t.key)}
+            <button
+              id="{id}-tab-{i}"
+              role="tab"
+              aria-selected={tab === t.key}
+              aria-controls="{id}-tabpanel"
+              tabindex={tab === t.key ? 0 : -1}
+              title="{t.title}: {tabOn(t.key) ? 'on' : 'off'}"
+              aria-label="{t.title}, {tabOn(t.key) ? 'on' : 'off'}"
+              onclick={() => (tab = t.key)}
+            >
+              <span class="glyph" class:on={tabOn(t.key)} aria-hidden="true">{t.glyph}</span>{t.short}
+            </button>
+          {/each}
+        </div>
+        <div class="tabpanel" id="{id}-tabpanel" role="tabpanel" aria-labelledby="{id}-tab-{tabIdx}">
+          <div class="tp-head">
+            {#if tab === "low" || tab === "high"}
+              {@const which = tab}
+              {@const e = which === "low" ? eq.low_cut : eq.high_cut}
+              {@const title = TABS[tabIdx].title}
+              <label class="check"><input type="checkbox" checked={e.enabled} onchange={(ev) => setEnd(which, (x) => (x.enabled = ev.currentTarget.checked))} aria-label="{label} EQ {title.toLowerCase()} on" />{title}</label>
+              <div class="seg tiny" role="radiogroup" aria-label="{label} {title.toLowerCase()}: cut or shelf">
+                <button role="radio" aria-checked={e.mode === "cut"} title={which === "low" ? "Low cut: removes everything below (24 dB/oct)" : "High cut: removes everything above (24 dB/oct)"} onclick={() => endMode(which, "cut")}>Cut</button>
+                <button role="radio" aria-checked={e.mode === "shelf"} title={which === "low" ? "Low shelf: turns everything below up or down" : "High shelf: turns everything above up or down"} onclick={() => endMode(which, "shelf")}>Shelf</button>
+              </div>
+            {:else}
+              {@const i = tab}
+              {@const b = eq.bands[i]}
+              <label class="check"><input type="checkbox" checked={b.enabled} onchange={(ev) => setBand(i, (x) => (x.enabled = ev.currentTarget.checked))} aria-label="{label} EQ band {i + 1} on" />Band {i + 1}</label>
+              <span class="faint small">Q: 0.7 broad … 4 narrow</span>
+            {/if}
+          </div>
+          {#each rows as r (r.name)}
+            <div class="ctl">
+              <label for="{id}-n-{r.name}">{r.name}</label>
+              <input
+                class="sl"
+                type="range"
+                min="0"
+                max={POS}
+                step="1"
+                value={toPos(r.sp, r.v)}
+                aria-label={r.aria}
+                aria-valuetext={r.text}
+                oninput={(e) => r.set(fromPos(r.sp, Number(e.currentTarget.value)))}
+                onkeydown={(e) => stepKeys(e, r.sp, r.v, r.set)}
+              />
+              <input
+                id="{id}-n-{r.name}"
+                class="n"
+                type="number"
+                step={r.step}
+                value={r.field}
+                aria-label="{r.aria}{r.unit ? `, ${r.unit}` : ''}"
+                onchange={(e) => commit(r, e.currentTarget)}
+                onkeydown={(e) => stepKeys(e, r.sp, r.v, r.set)}
+              />
+              <span class="unit">{r.unit}</span>
+            </div>
+          {/each}
+        </div>
       </div>
     </div>
   </div>
 </section>
-
-{#snippet endCol(which: "low" | "high", title: string, e: EndParams)}
-  <fieldset class="grp">
-    <legend>
-      <label class="check"><input type="checkbox" checked={e.enabled} onchange={(ev) => setEnd(which, (x) => (x.enabled = ev.currentTarget.checked))} aria-label="{label} EQ {title.toLowerCase()} on" />{title}</label>
-    </legend>
-    <div class="seg tiny" role="radiogroup" aria-label="{label} {title.toLowerCase()}: cut or shelf">
-      <button role="radio" aria-checked={e.mode === "cut"} title={which === "low" ? "Low cut: removes everything below (24 dB/oct)" : "High cut: removes everything above (24 dB/oct)"} onclick={() => endMode(which, "cut")}>Cut</button>
-      <button role="radio" aria-checked={e.mode === "shelf"} title={which === "low" ? "Low shelf: turns everything below up or down" : "High shelf: turns everything above up or down"} onclick={() => endMode(which, "shelf")}>Shelf</button>
-    </div>
-    <input class="n" type="number" min="20" max="20000" step="1" value={Math.round(e.freq)} aria-label="{label} {title.toLowerCase()} frequency, Hz" title="{formatHz(e.freq)}" onchange={(ev) => setEnd(which, (x) => ((x.enabled = true), (x.freq = clamp(num(ev.currentTarget.value, x.freq), 20, 20000))))} />
-    {#if e.mode === "shelf"}
-      <input class="n" type="number" min={-SHELF_MAX_DB} max={SHELF_MAX_DB} step="0.5" value={e.gain_db} aria-label="{label} {title.toLowerCase()} shelf gain, dB" title="Shelf gain (dB)" onchange={(ev) => setEnd(which, (x) => ((x.enabled = true), (x.gain_db = clamp(num(ev.currentTarget.value, 0), -SHELF_MAX_DB, SHELF_MAX_DB))))} />
-    {/if}
-  </fieldset>
-{/snippet}
 
 <style>
   .panel {
@@ -683,23 +877,110 @@
   .faint {
     color: var(--faint);
   }
-  .eq-grid {
-    display: grid;
-    grid-template-columns: repeat(5, minmax(0, 1fr));
+  .small {
+    font-size: 11px;
+  }
+  .eq-body {
+    display: flex;
+    flex-direction: column;
     gap: 6px;
   }
-  .grp {
+  .eq-col.silent .eq-body {
+    opacity: 0.45;
+  }
+  .silent-note {
     margin: 0;
-    padding: 2px 6px 6px;
+    font-size: 11.5px;
+    color: var(--muted);
+  }
+  .tabs {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
     border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
+    border-radius: 5px;
+    overflow: hidden;
+  }
+  .tabs button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    min-width: 0;
+    height: 24px;
+    padding: 0 4px;
+    border: 0;
+    background: var(--surface);
+    font-size: 11.5px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .tabs button + button {
+    border-left: 1px solid var(--border);
+  }
+  .tabs button:hover:not([aria-selected="true"]) {
+    background: var(--surface-3);
+  }
+  .tabs button[aria-selected="true"] {
+    background: var(--surface-2);
+    box-shadow: inset 0 -2px 0 var(--stem-color);
+    font-weight: 600;
+  }
+  .tabs button:focus-visible {
+    outline-offset: -2px;
+  }
+  /* Like the curve's nodes: filled when on, hollow when off. */
+  .glyph {
+    flex: none;
+    display: inline-grid;
+    place-items: center;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    border: 1.5px solid var(--muted);
+    font-size: 8px;
+    font-weight: 700;
+    color: var(--muted);
+  }
+  .glyph.on {
+    background: var(--stem-color);
+    border-color: var(--fg);
+    color: var(--bg);
+  }
+  .tabpanel {
     display: flex;
     flex-direction: column;
     gap: 4px;
-    min-width: 0;
+    padding: 6px 8px 8px;
+    border: 1px solid var(--border);
+    border-top: 0;
+    border-radius: 0 0 var(--radius-sm) var(--radius-sm);
+    margin-top: -6px;
   }
-  legend {
-    padding: 0 2px;
+  .tp-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 22px;
+  }
+  .ctl {
+    display: grid;
+    grid-template-columns: 64px minmax(60px, 1fr) 72px 28px;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+  }
+  .ctl label {
+    color: var(--muted);
+  }
+  .sl {
+    width: 100%;
+    min-width: 0;
+    accent-color: var(--stem-color);
+  }
+  .unit {
+    font-size: 11.5px;
+    color: var(--muted);
   }
   .n {
     width: 100%;
