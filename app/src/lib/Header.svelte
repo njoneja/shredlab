@@ -1,5 +1,6 @@
 <script lang="ts">
   import Icon from "./Icon.svelte";
+  import OpenMenu from "./OpenMenu.svelte";
   import SettingsPopover from "./SettingsPopover.svelte";
   import Wordmark from "./Wordmark.svelte";
   import { app, QUALITY_TEXT } from "./store.svelte";
@@ -64,9 +65,7 @@
     <button class="btn ghost icon-only" onclick={onhelp} title="Keyboard shortcuts" aria-label="Keyboard shortcuts">
       <Icon name="keyboard" />
     </button>
-    <button class="btn" onclick={() => app.pickAndOpen()} disabled={app.opening}>
-      <Icon name="open" /> Open
-    </button>
+    <OpenMenu />
     {#if app.song}
       <div class="export">
         <button class="btn primary" onclick={() => app.openExport()} disabled={!canExport} title={app.stemsReady ? app.exportSummary : "Available when stems are ready"}>

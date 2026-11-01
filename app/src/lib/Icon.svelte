@@ -9,6 +9,7 @@
     countin: '<circle cx="5" cy="12" r="1.6" fill="currentColor"/><circle cx="10" cy="12" r="1.6" fill="currentColor"/><circle cx="15" cy="12" r="1.6" fill="currentColor"/><path d="M19 7v10"/>',
     open: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
     export: '<path d="M12 3v12"/><path d="M7 8l5-5 5 5"/><path d="M5 15v4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4"/>',
+    chevron: '<path d="M6 9l6 6 6-6"/>',
     close: '<path d="M6 6l12 12M18 6L6 18"/>',
     minus: '<path d="M5 12h14"/>',
     plus: '<path d="M12 5v14M5 12h14"/>',
