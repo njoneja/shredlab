@@ -125,18 +125,18 @@
   .settings {
     position: relative;
   }
-  /* Fixed width so the summary changing (stems on/off, solo, click) never
-     shifts Open and the icons beside it. */
+  /* The summary hangs under the button, out of the flow, so its changing
+     length (stems on/off, solo, click) never shifts Open and the icons. */
   .export {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-end;
-    gap: 3px;
-    width: 280px;
+    position: relative;
   }
   .summary {
+    position: absolute;
+    top: calc(100% + 3px);
+    right: 0;
+    text-align: right;
     font-size: 11.5px;
-    max-width: 100%;
+    max-width: 320px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
