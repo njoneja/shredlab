@@ -113,8 +113,6 @@
     flex-direction: column;
     gap: var(--gap);
     padding: 14px 18px;
-    max-width: 1400px;
-    margin: 0 auto;
     position: relative;
   }
   main {
