@@ -922,7 +922,7 @@ mod tests {
         let expect = (0.5 / 0.8 * SR as f64) as usize;
         let err_ms = imax.abs_diff(expect) as f64 * 1000.0 / SR as f64;
         assert!(
-            err_ms < 15.0,
+            err_ms < 5.0,
             "peak at {imax}, expected {expect} ({err_ms} ms)"
         );
         assert!((m[imax].pos - 1.0).abs() < 0.02, "{}", m[imax].pos);
@@ -944,6 +944,35 @@ mod tests {
         assert!(m.iter().all(|x| !x.playing()));
         // Resume continues where it paused.
         assert!((p.play().seconds - pos.seconds).abs() < 1e-12);
+    }
+
+    #[test]
+    fn load_switches_tracks_seamlessly_keeping_position() {
+        let len = 3 * SR;
+        let orig = ramp_track(len);
+        let mut p = Pipeline::new(vec![orig.clone()], &unity(), true);
+        p.set_gains(vec![
+            ("mix".into(), 1.0),
+            ("a".into(), 1.0),
+            ("b".into(), 1.0),
+        ]);
+        p.play();
+        let _ = run(&mut p, SR, 512);
+        // Two "stems" that sum to the original.
+        let half: Vec<f32> = orig.channels[0].iter().map(|x| x * 0.5).collect();
+        let stem = |n: &str| Track {
+            name: n.into(),
+            channels: [Arc::new(half.clone()), Arc::new(half.clone())],
+            sample_rate: SR as u32,
+        };
+        p.load(vec![stem("a"), stem("b")]);
+        let (l, _, m) = run(&mut p, SR, 512);
+        assert!((m[0].pos - 1.0).abs() < 1e-9);
+        assert!(m.iter().all(|x| x.playing()));
+        for (i, &x) in l.iter().enumerate().step_by(97) {
+            let want = orig.channels[0][SR + i];
+            assert!((x - want).abs() < 1e-5, "at {i}: {x} vs {want}");
+        }
     }
 
     #[test]

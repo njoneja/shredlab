@@ -233,14 +233,15 @@ impl Engine {
         f64::from_bits(self.shared.duration_bits.load(Ordering::Relaxed))
     }
 
-    /// Called (on the engine thread) when playback reaches the end of the song and stops.
+    /// Called (on an engine events thread) when playback reaches the end of the
+    /// song and stops, as heard. May call back into the engine.
     pub fn set_on_end(&self, f: Box<dyn Fn() + Send + Sync>) {
         if let Ok(mut c) = self.on_end.lock() {
             *c = Some(f);
         }
     }
 
-    /// Interface addition: called (on the engine thread) when the A–B loop
+    /// Interface addition: called (on the engine events thread) when the A–B loop
     /// wraps from b to a, as heard. Useful for the "playback-position after
     /// loop wrap" event.
     pub fn set_on_loop_wrap(&self, f: Box<dyn Fn() + Send + Sync>) {
@@ -559,6 +560,19 @@ fn producer_thread(
         r: vec![0.0; BLOCK],
         meta: vec![Meta::default(); BLOCK],
     };
+    let (ev_tx, ev_rx) = mpsc::channel::<Callback>();
+    let events = std::thread::Builder::new()
+        .name("stemx-audio-events".into())
+        .spawn(move || {
+            for cb in ev_rx {
+                if let Ok(cb) = cb.lock() {
+                    if let Some(f) = cb.as_ref() {
+                        f();
+                    }
+                }
+            }
+        })
+        .ok();
     let (mut ends, mut wraps) = (0u64, 0u64);
     let mut last_reopen = Instant::now();
     'main: loop {
@@ -585,23 +599,16 @@ fn producer_thread(
                 Cmd::Click(c) => pipe.set_click(c),
             }
         }
+        // User callbacks run on their own thread, so they may call back into the Engine.
         let e = shared.end_count.load(Ordering::Relaxed);
         if e != ends {
             ends = e;
-            if let Ok(cb) = on_end.lock() {
-                if let Some(f) = cb.as_ref() {
-                    f();
-                }
-            }
+            let _ = ev_tx.send(on_end.clone());
         }
         let w = shared.wrap_count.load(Ordering::Relaxed);
         if w != wraps {
             wraps = w;
-            if let Ok(cb) = on_wrap.lock() {
-                if let Some(f) = cb.as_ref() {
-                    f();
-                }
-            }
+            let _ = ev_tx.send(on_wrap.clone());
         }
         // Device lost or default device changed: reopen (at most every 500 ms).
         let lost = shared.stream_error.load(Ordering::Relaxed) || out.is_none();
@@ -618,6 +625,9 @@ fn producer_thread(
     }
     shared.quit.store(true, Ordering::Relaxed);
     drop(out);
+    // The events thread ends when the channel closes; not joined (a callback may own the Engine).
+    drop(ev_tx);
+    drop(events);
     if let Some(w) = watcher {
         let _ = w.join();
     }

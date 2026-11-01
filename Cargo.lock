@@ -3604,9 +3604,9 @@ checksum = "ff7589a1859b09232522bb9edf076ca7fcf14ded96685d3fa629db73023ffbb7"
 name = "stem-extractor"
 version = "0.1.0"
 dependencies = [
- "hound",
  "serde",
  "serde_json",
+ "stemx-audio",
  "stemx-beats",
  "stemx-io",
  "stemx-library",
@@ -3614,7 +3614,6 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
- "thiserror 2.0.21",
 ]
 
 [[package]]
