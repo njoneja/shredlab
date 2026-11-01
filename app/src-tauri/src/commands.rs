@@ -113,8 +113,7 @@ pub async fn cancel_separation(b: B<'_>) -> R<()> {
 
 #[tauri::command]
 pub async fn play(b: B<'_>) -> R<()> {
-    b.play();
-    Ok(())
+    b.play()
 }
 
 #[tauri::command]

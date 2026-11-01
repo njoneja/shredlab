@@ -130,7 +130,7 @@ fn run(
             started.model_name,
             started.device_label
         );
-        b.play();
+        b.play()?;
         wait_for(rx, Duration::from_secs(1800), |name, v| match name {
             "separation-done" => Some(Ok(())),
             "separation-error" => Some(Err(format!("separation failed: {v}"))),
@@ -190,7 +190,7 @@ fn run(
             .collect(),
     );
     b.seek(30.0);
-    b.play();
+    b.play()?;
     for _ in 0..8 {
         std::thread::sleep(Duration::from_millis(500));
         if let Some(p) = b.position() {

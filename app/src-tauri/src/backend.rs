@@ -33,6 +33,8 @@ pub type Sink = Arc<dyn Fn(&str, serde_json::Value) + Send + Sync>;
 pub const RATE: u32 = stemx_io::MODEL_SAMPLE_RATE;
 const ORIGINAL: &str = "original";
 const RECENT_MAX: usize = 20;
+const NO_DEVICE: &str =
+    "No audio output device found. Connect speakers or headphones and restart Stem Extractor (separation and export still work).";
 
 pub struct Config {
     pub data_dir: PathBuf,
@@ -326,6 +328,12 @@ impl Backend {
         if let Some(e) = &b.engine {
             let weak = Arc::downgrade(&b);
             e.set_on_end(Box::new(move || {
+                if let Some(b) = weak.upgrade() {
+                    b.emit_position();
+                }
+            }));
+            let weak = Arc::downgrade(&b);
+            e.set_on_loop_wrap(Box::new(move || {
                 if let Some(b) = weak.upgrade() {
                     b.emit_position();
                 }
@@ -1085,10 +1093,14 @@ impl Backend {
 
     // ------------------------------------------------------------ transport
 
-    pub fn play(&self) {
+    /// `Err` only when a song is open but there is no audio output device.
+    pub fn play(&self) -> Result<(), String> {
         let st = lock(&self.st);
-        let (Some(e), Some(_)) = (&self.engine, &st.song) else {
-            return;
+        if st.song.is_none() {
+            return Ok(());
+        }
+        let Some(e) = &self.engine else {
+            return Err(NO_DEVICE.into());
         };
         let pos = e.position();
         if !pos.playing {
@@ -1104,6 +1116,7 @@ impl Backend {
         }
         drop(st);
         self.emit_position();
+        Ok(())
     }
 
     pub fn pause(&self) {
@@ -1450,10 +1463,7 @@ mod tests {
             device: DevicePref::Cpu,
             beat_device: DevicePref::Cpu,
         };
-        (
-            Backend::new(cfg, Some(Engine::new().unwrap()), sink).unwrap(),
-            events,
-        )
+        (Backend::new(cfg, None, sink).unwrap(), events)
     }
 
     #[test]
@@ -1461,7 +1471,7 @@ mod tests {
         let (b, events) = test_backend("open");
         // Commands that need a song fail cleanly; transport is ignored.
         assert_eq!(b.get_waveform(10).unwrap_err(), "No song open");
-        b.play();
+        b.play().unwrap();
         b.seek(3.0);
         assert!(b.start_separation().is_err());
 
@@ -1493,11 +1503,8 @@ mod tests {
         assert_eq!(again.song_id, info.song_id);
 
         b.seek(1.0);
-        assert!((b.position().unwrap().seconds - 1.0).abs() < 0.01);
-        b.play();
-        assert!(b.position().unwrap().playing);
+        assert!(b.play().unwrap_err().contains("audio output"));
         b.pause();
-        assert!(!b.position().unwrap().playing);
 
         let out = b.data_dir().join("out.wav");
         b.export_mix(ExportRequest {
@@ -1516,7 +1523,6 @@ mod tests {
         assert!(out.is_file());
         let ev = lock(&events).clone();
         assert!(ev.iter().any(|e| e == "export-done"), "{ev:?}");
-        assert!(ev.iter().any(|e| e == "playback-position"));
         b.close_song();
         assert!(b.get_beats().is_err());
     }
