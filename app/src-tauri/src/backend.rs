@@ -254,9 +254,21 @@ fn device_label(ep: Ep) -> &'static str {
     }
 }
 
+/// True when `stem` has a stereo exception (an enabled stereo window): the
+/// window does the opposite of the row's on switch.
+fn has_exception(refine: &BTreeMap<String, RefineParams>, stem: &str) -> bool {
+    refine.get(stem).is_some_and(|p| p.pan.enabled)
+}
+
 /// Engine gains for `names` under the audibility rule: if any stem is
-/// soloed only soloed stems play, else stems that are on.
-pub fn gains_for(mix: &[StemMixState], names: &[String]) -> Vec<(String, f32)> {
+/// soloed only soloed stems play, else stems that are on, plus stems that
+/// are off but have a stereo exception (they play the window, at their
+/// volume). Which part of a stem is heard is set by [`engine_refine`].
+pub fn gains_for(
+    mix: &[StemMixState],
+    refine: &BTreeMap<String, RefineParams>,
+    names: &[String],
+) -> Vec<(String, f32)> {
     let any_solo = mix.iter().any(|m| m.solo);
     names
         .iter()
@@ -266,7 +278,11 @@ pub fn gains_for(mix: &[StemMixState], names: &[String]) -> Vec<(String, f32)> {
             }
             let g = match mix.iter().find(|m| &m.stem == n) {
                 Some(m) => {
-                    let audible = if any_solo { m.solo } else { m.on };
+                    let audible = if any_solo {
+                        m.solo
+                    } else {
+                        m.on || has_exception(refine, n)
+                    };
                     if audible && m.volume.is_finite() {
                         m.volume.clamp(0.0, 2.0)
                     } else {
@@ -277,6 +293,24 @@ pub fn gains_for(mix: &[StemMixState], names: &[String]) -> Vec<(String, f32)> {
                 None => 1.0,
             };
             (n.clone(), g)
+        })
+        .collect()
+}
+
+/// Refine parameters as the engine needs them: the saved ones with the
+/// stereo window inverted on rows whose switch is on (the window is the
+/// exception: on = the stem minus the window, off = the window alone). A
+/// stem missing from `mix` counts as on.
+pub fn engine_refine(
+    refine: &BTreeMap<String, RefineParams>,
+    is_on: impl Fn(&str) -> bool,
+) -> Vec<(String, RefineParams)> {
+    refine
+        .iter()
+        .map(|(k, v)| {
+            let mut p = *v;
+            p.pan.invert = is_on(k);
+            (k.clone(), p)
         })
         .collect()
 }
@@ -735,13 +769,16 @@ impl Backend {
         }
     }
 
+    /// Sends gains, mix mode and the refine parameters (which follow the
+    /// on switches) to the engine.
     fn apply_gains(&self, st: &State) {
         let (Some(e), Some(song)) = (&self.engine, &st.song) else {
             return;
         };
         let names: Vec<String> = song.tracks().iter().map(|t| t.name.clone()).collect();
         let mode = mix_mode(&st.mix, &names, song.backing_from_original());
-        e.set_mix(gains_for(&st.mix, &names), mode);
+        e.set_refine_all(Self::refine_list(st));
+        e.set_mix(gains_for(&st.mix, &st.refine, &names), mode);
     }
 
     fn click_config(&self, st: &State) -> ClickConfig {
@@ -784,8 +821,14 @@ impl Backend {
         }
     }
 
+    /// The refine parameters for the engine (see [`engine_refine`]).
     fn refine_list(st: &State) -> Vec<(String, RefineParams)> {
-        st.refine.iter().map(|(k, v)| (k.clone(), *v)).collect()
+        engine_refine(&st.refine, |stem| Self::switch_on(st, stem))
+    }
+
+    /// The row's on switch (a stem missing from the mix state counts as on).
+    fn switch_on(st: &State, stem: &str) -> bool {
+        st.mix.iter().find(|m| m.stem == stem).is_none_or(|m| m.on)
     }
 
     fn apply_all(&self, st: &State) {
@@ -1692,6 +1735,7 @@ impl Backend {
         // Same rule and mixer as playback: all stems are passed (stems not
         // in the request have gain 0, so in original mode they are
         // subtracted from the original).
+        let mut switches: Vec<(String, bool)> = Vec::new();
         let (tracks, original, mode, gains) = match &song.stems {
             Some(stems) => {
                 let mut gains: Vec<(String, f32)> = Vec::new();
@@ -1708,13 +1752,16 @@ impl Backend {
                         1.0
                     };
                     gains.push((s.stem.clone(), v));
+                    switches.push((s.stem.clone(), s.on));
                 }
                 if gains.is_empty() {
                     return Err("Nothing to export: no stems selected".into());
                 }
-                // Soloed stems are always the plain sum (like playback).
+                // Soloed stems are always the plain sum (like playback);
+                // like playback, only switched-on rows count as on.
+                let n_on = switches.iter().filter(|(_, on)| *on).count();
                 let mode = if song.backing_from_original() {
-                    audio::choose_mode(stems.len(), gains.len(), req.solo)
+                    audio::choose_mode(stems.len(), n_on, req.solo)
                 } else {
                     MixMode::Stems
                 };
@@ -1752,9 +1799,15 @@ impl Backend {
             click,
             start: req.start_sec.filter(|s| s.is_finite()).unwrap_or(0.0),
             end: req.end_sec.filter(|e| e.is_finite()),
-            // "What you hear": the refined parts as in playback.
+            // "What you hear": the refined parts as in playback, each
+            // stereo exception following the exported row's switch.
             refine: if song.stems.is_some() {
-                Self::refine_list(&st)
+                engine_refine(&st.refine, |stem| {
+                    switches
+                        .iter()
+                        .find(|(n, _)| n == stem)
+                        .is_none_or(|(_, on)| *on)
+                })
             } else {
                 Vec::new()
             },
@@ -1911,9 +1964,9 @@ impl Backend {
         } else {
             st.refine.insert(stem.to_string(), params);
         }
-        if let Some(e) = &self.engine {
-            e.set_refine(stem, params);
-        }
+        // Refine (with the exception following the switch) and gains: an
+        // exception on an off row makes it audible, and back.
+        self.apply_gains(&st);
         st.refine_dirty = Some((song_id, Instant::now()));
         Ok(())
     }
@@ -2192,28 +2245,31 @@ impl Backend {
         self.engine.as_ref().map(|e| e.stats())
     }
 
-    /// Autotest helper, unstretched: the refined backing mix for the stems
-    /// `on` (gain 1, others off) in P1 mode, computed offline:
-    /// `original + Σ_on (r_i − p_i) − Σ_off p_i`.
+    /// Autotest helper, unstretched: the refined backing mix in P1 mode,
+    /// computed offline. `rows` are the heard rows (gain 1) with their on
+    /// switch; every other stem is silent:
+    /// `original + Σ_rows refine(stem, switch) − Σ_all stem`.
     #[cfg(debug_assertions)]
-    pub fn debug_refine_reference(&self, on: &[&str]) -> Option<[Vec<f32>; 2]> {
-        use stemx_dsp::refine::{pan_offline, refine_offline};
+    pub fn debug_refine_reference(&self, rows: &[(&str, bool)]) -> Option<[Vec<f32>; 2]> {
+        use stemx_dsp::refine::refine_offline;
         let st = lock(&self.st);
         let song = st.song.as_ref()?;
         let o = song.original.as_ref()?;
         let mut out = [o.channels[0].to_vec(), o.channels[1].to_vec()];
         for t in song.stems.as_ref()? {
-            let p = st.refine.get(&t.name).copied().unwrap_or_default();
-            let sel = pan_offline(&p.pan, RATE, &t.channels[0], &t.channels[1]);
-            let is_on = on.contains(&t.name.as_str());
-            let r = is_on.then(|| refine_offline(&p, RATE, &t.channels[0], &t.channels[1]));
+            let row = rows.iter().find(|(n, _)| *n == t.name);
+            let r = row.map(|&(_, on)| {
+                let mut p = st.refine.get(&t.name).copied().unwrap_or_default();
+                p.pan.invert = on;
+                refine_offline(&p, RATE, &t.channels[0], &t.channels[1])
+            });
             for c in 0..2 {
                 for (i, v) in out[c].iter_mut().enumerate() {
-                    let pv = sel[c].get(i).copied().unwrap_or(0.0);
+                    let sv = t.channels[c].get(i).copied().unwrap_or(0.0);
                     let rv = r
                         .as_ref()
                         .map_or(0.0, |r| r[c].get(i).copied().unwrap_or(0.0));
-                    *v += rv - pv;
+                    *v += rv - sv;
                 }
             }
         }
@@ -2251,20 +2307,39 @@ mod tests {
             ms("bass", false, 1.0, false),
             ms("drums", true, 0.8, false),
         ];
-        let g = gains_for(&mix, &names);
+        let none = BTreeMap::new();
+        let g = gains_for(&mix, &none, &names);
         assert_eq!(g[0], ("vocals".into(), 0.5));
         assert_eq!(g[1].1, 0.0);
         assert_eq!(g[2].1, 0.8);
+        // An off row with a stereo exception plays (the window) at its
+        // volume; an EQ alone doesn't make it audible.
+        let mut refine = BTreeMap::new();
+        let mut p = RefineParams::default();
+        p.eq.low_cut.enabled = true;
+        refine.insert("bass".to_string(), p);
+        assert_eq!(gains_for(&mix, &refine, &names)[1].1, 0.0);
+        p.pan = stemx_dsp::refine::PanParams::left();
+        refine.insert("bass".to_string(), p);
+        assert_eq!(gains_for(&mix, &refine, &names)[1].1, 1.0);
+        // The engine gets the window inverted on rows that are on.
+        let er = engine_refine(&refine, |s| s != "bass");
+        assert!(!er[0].1.pan.invert);
+        let er = engine_refine(&refine, |_| true);
+        assert!(er[0].1.pan.invert && er[0].1.pan.center == -1.0);
         // Solo wins over on/off, even for a stem that is off.
         let mix = vec![
             ms("vocals", true, 0.5, false),
             ms("bass", false, 0.7, true),
             ms("drums", true, 0.8, false),
         ];
-        let g = gains_for(&mix, &names);
+        let g = gains_for(&mix, &none, &names);
         assert_eq!(g.iter().map(|x| x.1).collect::<Vec<_>>(), [0.0, 0.7, 0.0]);
+        // With a solo, an exception doesn't make an unsoloed row audible.
+        let g = gains_for(&mix, &refine, &["vocals".into(), "drums".into()]);
+        assert_eq!(g.iter().map(|x| x.1).collect::<Vec<_>>(), [0.0, 0.0]);
         // Original track is always unity.
-        assert_eq!(gains_for(&mix, &["original".into()])[0].1, 1.0);
+        assert_eq!(gains_for(&mix, &none, &["original".into()])[0].1, 1.0);
     }
 
     #[test]
@@ -2590,7 +2665,8 @@ mod tests {
         assert!(info.stems_cached && info.original_available);
         assert!(info.refine.is_empty() && info.strength_job == 0);
 
-        // Refine: unknown stem refused; keep-left guitar saved with the song.
+        // Refine: unknown stem refused; the guitar's exception "left" is
+        // saved with the song (without any switch-derived inversion).
         let left = RefineParams {
             pan: PanParams::left(),
             ..RefineParams::default()
@@ -2603,48 +2679,69 @@ mod tests {
         assert_eq!(again.refine.len(), 1);
         assert_eq!(again.refine["guitar"], left);
 
-        // Export "All but guitar": the original minus the LEFT guitar only.
+        // Export "All but guitar": the guitar row is off with the exception
+        // "left", so only the left guitar plays: original minus the RIGHT
+        // guitar.
         let (stems, orig) = {
             let st = lock(&b.st);
             let s = st.song.as_ref().unwrap();
             (s.stems.clone().unwrap(), s.original.clone().unwrap())
         };
-        let out = b.data_dir().join("allbut.wav");
-        let mut req = export_req(&out, false, None, None);
-        req.stems = vec![
-            ExportStem {
-                stem: "bass".into(),
-                volume: 1.0,
-            },
-            ExportStem {
-                stem: "drums".into(),
-                volume: 1.0,
-            },
-        ];
-        b.export_mix(req).unwrap();
-        wait_export(&b);
-        let got = stemx_io::decode_file(&out).unwrap();
         let g = stems.iter().find(|t| t.name == "guitar").unwrap();
         let sel = pan_offline(&left.pan, RATE, &g.channels[0], &g.channels[1]);
+        let row = |stem: &str, on: bool| ExportStem {
+            stem: stem.into(),
+            volume: 1.0,
+            on,
+        };
+        let export = |name: &str, stems: Vec<ExportStem>| {
+            let out = b.data_dir().join(name);
+            let mut req = export_req(&out, false, None, None);
+            req.stems = stems;
+            b.export_mix(req).unwrap();
+            wait_export(&b);
+            stemx_io::decode_file(&out).unwrap()
+        };
+        let got = export(
+            "allbut.wav",
+            vec![row("guitar", false), row("bass", true), row("drums", true)],
+        );
         for c in 0..2 {
             let err = (0..got.channels[c].len())
-                .map(|i| (got.channels[c][i] - (orig.channels[c][i] - sel[c][i])).abs())
+                .map(|i| {
+                    let want = orig.channels[c][i] - g.channels[c][i] + sel[c][i];
+                    (got.channels[c][i] - want).abs()
+                })
                 .fold(0.0f32, f32::max);
             // 24-bit file.
             assert!(err < 1e-4, "ch {c}: {err}");
         }
-        // The right guitar is still in the export (right channel within
-        // -40 dB of the original; the mask leaks a little).
-        let rr: f32 = got.channels[1]
-            .iter()
-            .zip(orig.channels[1].iter())
-            .map(|(a, o)| (a - o).powi(2))
-            .sum();
-        assert!(
-            rr / (got.channels[1].len() as f32) < 3e-6,
-            "{}",
-            rr / (got.channels[1].len() as f32)
+        let ms_err = |x: &[f32], y: &dyn Fn(usize) -> f32| {
+            x.iter()
+                .enumerate()
+                .map(|(i, a)| (a - y(i)).powi(2))
+                .sum::<f32>()
+                / x.len() as f32
+        };
+        // The left guitar is still there (left channel ~ the original, the
+        // mask leaks a little: within -36 dB), the right guitar is gone.
+        let e = ms_err(&got.channels[0], &|i| orig.channels[0][i]);
+        assert!(e < 1e-5, "{e}");
+        let e = ms_err(&got.channels[1], &|i| {
+            orig.channels[1][i] - g.channels[1][i]
+        });
+        assert!(e < 1e-5, "{e}");
+        // All on (guitar ON except left): the original minus the left guitar.
+        let got = export(
+            "allon.wav",
+            vec![row("guitar", true), row("bass", true), row("drums", true)],
         );
+        let e = ms_err(&got.channels[0], &|i| {
+            orig.channels[0][i] - g.channels[0][i]
+        });
+        assert!(e < 1e-5, "{e}");
+        let e = ms_err(&got.channels[1], &|i| orig.channels[1][i]);
+        assert!(e < 1e-5, "{e}");
 
         // Strength: derived stems sum to the original, saved, re-applied on open.
         let job = b

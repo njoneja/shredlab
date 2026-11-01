@@ -13,8 +13,10 @@
 //! -> a loop A-B export with count-in (played once, faded edges) -> the
 //! music start: whole-song count-in export and play from 0 start there
 //! ("Count in to where the music starts"; off = from 0)
-//! -> Refine (guitar keep-left + EQ, bass EQ): "All but guitar" export vs
-//! the refine reference, stretched refined export -> strength (exact and
+//! -> Refine (guitar with the stereo exception "left" + EQ, bass EQ): all on
+//! = guitar ON except left, and "All but guitar" = guitar OFF except left
+//! (only the left guitar plays), exports vs the offline refine reference,
+//! stretched refined export -> strength (exact and
 //! Smooth: plain sum of all stems vs the original)
 //! -> +6 dB boost export (no clipping) -> WAV/FLAC/MP3 exports. Each step
 //! is logged with its timing; the last line is `AUTOTEST PASS` or
@@ -179,6 +181,7 @@ fn mix_all_but(without: &str, boost: Option<(&str, f32)>) -> Vec<ExportStem> {
                 Some((n, v)) if n == *s => v,
                 _ => 1.0,
             },
+            on: true,
         })
         .collect()
 }
@@ -637,39 +640,70 @@ fn check_refine_strength(
     b.set_refine_analysis(Some("guitar".into()));
     measure_load(
         b,
-        "refined (guitar keep-left + EQ, bass EQ, field analysis)",
+        "refined (guitar off except left + EQ, bass EQ, field analysis)",
     );
     b.set_speed(80);
     measure_load(b, "refined, 80% speed");
     b.set_speed(100);
-    let file = out.join("autotest-refine-all-but-guitar.wav");
-    let _ = std::fs::remove_file(&file);
-    let secs = export_wait(
-        b,
-        rx,
-        plain_req(&file, mix_all_but("guitar", None), false, 100.0),
-    )?;
-    let got = read_wav(&file)?;
-    let others: Vec<&str> = STEMS.iter().copied().filter(|s| *s != "guitar").collect();
-    let want = b
-        .debug_refine_reference(&others)
-        .ok_or("no refine reference")?;
-    let (snr, k) = snr_db(&got, &want);
-    let (snr_plain, _) = snr_db(&got, plain);
-    log!(
-        "autotest: refined all-but-guitar export {secs:.1}s: vs refine reference {snr:.1} dB (gain {k:.3}), vs unrefined export {snr_plain:.1} dB"
-    );
-    if snr < MIX_SNR_MIN || snr_plain > snr - 3.0 {
-        return Err("refined export does not match original - left guitar + EQ'd bass".into());
+    // The export carries each row's switch: guitar on or off, everything
+    // else on. Reference rows: every stem heard, guitar per its switch.
+    let rows = |guitar_on: bool| -> Vec<(&'static str, bool)> {
+        STEMS
+            .iter()
+            .map(|s| (*s, *s != "guitar" || guitar_on))
+            .collect()
+    };
+    let stems_with = |guitar_on: bool| -> Vec<ExportStem> {
+        STEMS
+            .iter()
+            .map(|s| ExportStem {
+                stem: s.to_string(),
+                volume: 1.0,
+                on: *s != "guitar" || guitar_on,
+            })
+            .collect()
+    };
+    let mut got_off = None;
+    for guitar_on in [true, false] {
+        let what = if guitar_on {
+            "guitar ON except left"
+        } else {
+            "guitar OFF except left"
+        };
+        let file = out.join(format!(
+            "autotest-refine-guitar-{}-except-left.wav",
+            if guitar_on { "on" } else { "off" }
+        ));
+        let _ = std::fs::remove_file(&file);
+        let secs = export_wait(b, rx, plain_req(&file, stems_with(guitar_on), false, 100.0))?;
+        let got = read_wav(&file)?;
+        let want = b
+            .debug_refine_reference(&rows(guitar_on))
+            .ok_or("no refine reference")?;
+        // The same exception with the switch the other way must not match.
+        let flipped = b
+            .debug_refine_reference(&rows(!guitar_on))
+            .ok_or("no refine reference")?;
+        let (snr, k) = snr_db(&got, &want);
+        let (snr_flip, _) = snr_db(&got, &flipped);
+        let (snr_plain, _) = snr_db(&got, plain);
+        log!(
+            "autotest: refined export, {what} {secs:.1}s: vs refine reference {snr:.1} dB (gain {k:.3}), vs switch flipped {snr_flip:.1} dB, vs unrefined all-but-guitar {snr_plain:.1} dB"
+        );
+        if snr < MIX_SNR_MIN || snr_flip > snr - 3.0 || snr_plain > snr - 3.0 {
+            return Err(format!(
+                "refined export ({what}) does not match the reference"
+            ));
+        }
+        if !guitar_on {
+            got_off = Some(got);
+        }
     }
+    let got = got_off.ok_or("no export")?;
     // Stretched, refined: right length, no clipping.
     let file = out.join("autotest-refine-80.wav");
     let _ = std::fs::remove_file(&file);
-    let secs = export_wait(
-        b,
-        rx,
-        plain_req(&file, mix_all_but("guitar", None), false, 80.0),
-    )?;
+    let secs = export_wait(b, rx, plain_req(&file, stems_with(false), false, 80.0))?;
     let st = read_wav(&file)?;
     let peak = st
         .iter()
@@ -983,6 +1017,7 @@ fn run(b: &Arc<Backend>, song: &Path, out: &Path, rx: &Receiver<Event>) -> Resul
                 .map(|s| ExportStem {
                     stem: s.to_string(),
                     volume: 1.0,
+                    on: true,
                 })
                 .collect(),
             solo: true,
@@ -1058,6 +1093,7 @@ fn run(b: &Arc<Backend>, song: &Path, out: &Path, rx: &Receiver<Event>) -> Resul
                     .map(|s| ExportStem {
                         stem: s.to_string(),
                         volume: 0.8,
+                        on: true,
                     })
                     .collect(),
                 solo: false,

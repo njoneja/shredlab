@@ -219,6 +219,15 @@ impl ExportFormat {
 pub struct ExportStem {
     pub stem: String,
     pub volume: f32,
+    /// The row's on switch. Decides which part a stem with a stereo
+    /// exception plays (on = all but the window, off = the window alone).
+    /// Missing = true.
+    #[serde(default = "yes")]
+    pub on: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -371,6 +380,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(r.format, ExportFormat::Mp3);
+        assert!(r.stems[0].on);
         assert!(!r.solo);
         assert_eq!((r.start_sec, r.end_sec), (None, None));
         let l: LoopState =
@@ -381,12 +391,13 @@ mod tests {
         )
         .unwrap();
         assert_eq!(c.count_in_beats, 7);
-        // Refine: older params (no shelf fields) and partial objects load.
+        // Refine: older params (no shelf fields, the removed pan `mode`) and
+        // partial objects load.
         let u: RefineUpdate = serde_json::from_str(
             r#"{"stem":"guitar","params":{"pan":{"enabled":true,"center":-1,"width":1.34,"mode":"keep"},"eq":{"low_cut":{"enabled":true,"freq":120}}}}"#,
         )
         .unwrap();
-        assert!(u.params.pan.enabled && u.params.eq.low_cut.cut_on());
+        assert!(u.params.pan.enabled && !u.params.pan.invert && u.params.eq.low_cut.cut_on());
         assert_eq!(u.params.eq.bands, EqParams::default().bands);
     }
 }
