@@ -125,15 +125,18 @@
   .settings {
     position: relative;
   }
+  /* Fixed width so the summary changing (stems on/off, solo, click) never
+     shifts Open and the icons beside it. */
   .export {
     display: flex;
     flex-direction: column;
     align-items: flex-end;
     gap: 3px;
+    width: 280px;
   }
   .summary {
     font-size: 11.5px;
-    max-width: 320px;
+    max-width: 100%;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
