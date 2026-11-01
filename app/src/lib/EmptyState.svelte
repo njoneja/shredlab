@@ -3,18 +3,9 @@
   import { app } from "./store.svelte";
   import { formatTime } from "./meter";
   import Wordmark from "./Wordmark.svelte";
+  import { ago, recentStatus } from "./recent";
 
   let dragOver = $state(false);
-
-  function ago(ms: number) {
-    const d = Date.now() - ms;
-    const day = 86400000;
-    if (d < 60000) return "just now";
-    if (d < 3600000) return `${Math.floor(d / 60000)} min ago`;
-    if (d < day) return `${Math.floor(d / 3600000)} h ago`;
-    if (d < 2 * day) return "yesterday";
-    return `${Math.floor(d / day)} days ago`;
-  }
 </script>
 
 <div class="empty">
@@ -46,7 +37,7 @@
             <button onclick={() => app.openPath(e.path)} title={e.path} disabled={app.opening}>
               <span class="t">{e.title}</span>
               <span class="muted a">{e.artist ?? ""}</span>
-              <span class="badge" class:ready={e.stems_cached}>{e.stems_cached ? "Stems ready" : "Not separated"}</span>
+              <span class="badge" class:ready={e.stems_cached}>{recentStatus(e)}</span>
               <span class="muted mono d">{formatTime(e.duration_sec)}</span>
               <span class="muted w">{ago(e.last_opened_ms)}</span>
             </button>
