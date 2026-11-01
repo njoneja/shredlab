@@ -19,7 +19,7 @@ from fontTools.ttLib import TTFont
 SIZE = 1024
 RADIUS = 224  # rounded square corner
 BG = "#0B0C10"
-TREBLE_COLOR = "#FF3D7F"
+TREBLE_COLOR = "#4D8DFF"
 BASS_COLOR = "#EEF0F6"
 HEIGHT_FRACTION = 0.62  # treble clef height / tile height
 GAP_EM = 0.08  # space between the clefs, in em
