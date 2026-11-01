@@ -90,10 +90,7 @@ enum Command {
         rt: RuntimeArgs,
     },
     /// Decode an audio file to a 44.1 kHz stereo float WAV (decoder check).
-    Decode {
-        input: PathBuf,
-        output: PathBuf,
-    },
+    Decode { input: PathBuf, output: PathBuf },
     /// Separate a song into stems (<out>/<stem>.wav).
     Separate {
         /// Input audio file (MP3, FLAC, WAV, OGG, M4A).
@@ -297,8 +294,14 @@ fn cmd_selftest(
 
 fn cmd_decode(input: &Path, output: &Path) -> Result<()> {
     let t0 = Instant::now();
-    let audio = stemx_io::load_for_separation(input).with_context(|| format!("decoding {}", input.display()))?;
-    stemx_io::write_wav(output, audio.sample_rate, &audio.as_slices(), WavFormat::F32)?;
+    let audio = stemx_io::load_for_separation(input)
+        .with_context(|| format!("decoding {}", input.display()))?;
+    stemx_io::write_wav(
+        output,
+        audio.sample_rate,
+        &audio.as_slices(),
+        WavFormat::F32,
+    )?;
     println!(
         "{} -> {} ({:.2}s audio, {} samples, {:.2}s)",
         input.display(),
