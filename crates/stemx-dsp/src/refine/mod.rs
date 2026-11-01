@@ -13,7 +13,7 @@ pub mod presets;
 
 use serde::{Deserialize, Serialize};
 
-pub use eq::{log_freqs, response_db, BandParams, CutParams, Eq, EqParams};
+pub use eq::{log_freqs, response_db, BandParams, CutParams, EndMode, Eq, EqParams, SHELF_MAX_DB};
 pub use pan::{
     pan_offline, PanMask, PanMode, PanParams, FIELD_BANDS, FIELD_BAND_EDGES_HZ, FIELD_BINS,
     FIELD_LEN, PAN_HOP, PAN_LATENCY, PAN_N_FFT,

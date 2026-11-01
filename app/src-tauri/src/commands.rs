@@ -215,3 +215,25 @@ pub async fn set_theme(b: B<'_>, theme: String) -> R<AppSettingsInfo> {
     let b = b.inner().clone();
     blocking(move || b.set_theme(&theme)).await
 }
+
+#[tauri::command]
+pub async fn get_refine_presets(b: B<'_>) -> R<Vec<RefinePresetInfo>> {
+    Ok(b.refine_presets())
+}
+
+#[tauri::command]
+pub async fn set_refine(b: B<'_>, update: RefineUpdate) -> R<()> {
+    b.set_refine(&update.stem, update.params)
+}
+
+#[tauri::command]
+pub async fn set_refine_analysis(b: B<'_>, stem: Option<String>) -> R<()> {
+    b.set_refine_analysis(stem);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn set_strength(b: B<'_>, strength: StrengthSetting) -> R<StrengthStarted> {
+    let b = b.inner().clone();
+    blocking(move || b.set_strength(strength).map(|job| StrengthStarted { job })).await
+}

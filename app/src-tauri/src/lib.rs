@@ -140,6 +140,10 @@ pub fn run() {
             commands::set_app_settings,
             commands::set_theme,
             commands::set_count_in_to_music_start,
+            commands::get_refine_presets,
+            commands::set_refine,
+            commands::set_refine_analysis,
+            commands::set_strength,
         ])
         .run(tauri::generate_context!());
     if let Err(e) = result {

@@ -27,3 +27,4 @@ stemx-separation.workspace = true
 stemx-beats.workspace = true
 stemx-library.workspace = true
 stemx-audio.workspace = true
+stemx-dsp.workspace = true

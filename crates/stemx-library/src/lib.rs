@@ -24,6 +24,7 @@
 //!
 //! This crate has no Tauri dependency; the app passes the root directory.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -31,6 +32,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+pub use stemx_dsp::refine::RefineParams;
 
 /// Version of this crate, from `Cargo.toml`.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -150,6 +152,17 @@ pub struct BeatData {
     pub beats_per_bar: Option<u32>,
 }
 
+/// Separation strength of a song (SPEC §5.4 P4): `level` 0 = Natural (the
+/// cached stems), 1..=4 = mask exponents 1.5, 2, 3, 4 ("Tight").
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct StrengthSetting {
+    pub level: u8,
+    /// Blend from the model's stems (gentler first steps; the stems no
+    /// longer add up exactly to the original).
+    pub smooth: bool,
+}
+
 /// Contents of `song.json`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SongMeta {
@@ -177,6 +190,12 @@ pub struct SongMeta {
     /// Opaque UI settings, stored and returned verbatim.
     #[serde(default)]
     pub settings: Option<serde_json::Value>,
+    /// Refine panel settings per stem name (only refined stems).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub refine: BTreeMap<String, RefineParams>,
+    /// Separation strength.
+    #[serde(default)]
+    pub strength: StrengthSetting,
     pub created_ms: u64,
     pub last_opened_ms: u64,
     pub updated_ms: u64,
@@ -201,6 +220,8 @@ impl SongMeta {
             original: None,
             beats: None,
             settings: None,
+            refine: BTreeMap::new(),
+            strength: StrengthSetting::default(),
             created_ms: now,
             last_opened_ms: now,
             updated_ms: now,
@@ -744,6 +765,21 @@ mod tests {
         let mut m = meta("abc", 5);
         assert_eq!(m.title, "My Song");
         m.settings = Some(serde_json::json!({"version": 1, "loop": {"enabled": false}}));
+        let mut gtr = RefineParams {
+            pan: stemx_dsp::refine::PanParams::left(),
+            ..RefineParams::default()
+        };
+        gtr.eq.low_cut = stemx_dsp::refine::CutParams {
+            enabled: true,
+            freq: 150.0,
+            mode: stemx_dsp::refine::EndMode::Shelf,
+            gain_db: -4.5,
+        };
+        m.refine.insert("guitar".into(), gtr);
+        m.strength = StrengthSetting {
+            level: 3,
+            smooth: true,
+        };
         m.beats = Some(BeatData {
             beats: vec![0.5, 1.0, 1.5],
             downbeats: vec![0.5],

@@ -1,9 +1,13 @@
 //! Serde types of the UI <-> backend contract (`app/src/lib/API.md`).
 //! Field names are the exact snake_case JSON names.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 pub use crate::settings::Quality;
+pub use stemx_dsp::refine::{EqParams, RefineParams};
+pub use stemx_library::StrengthSetting;
 
 pub const STEMS: [&str; 6] = ["vocals", "guitar", "bass", "drums", "piano", "other"];
 
@@ -35,6 +39,14 @@ pub struct SongInfo {
     /// can be built from it (P1). False before separation or when an old
     /// cache entry has no original and the source file is gone.
     pub original_available: bool,
+    /// Refine panel settings of the refined stems (others are unrefined).
+    pub refine: BTreeMap<String, RefineParams>,
+    /// Saved separation strength of this song.
+    pub strength: StrengthSetting,
+    /// Id of a strength job the backend started while opening (applying a
+    /// saved strength), 0 when none; its `strength-done`/`-error` event
+    /// carries the same id.
+    pub strength_job: u64,
 }
 
 /// One separation model from the registry.
@@ -273,6 +285,58 @@ pub struct SongIdPayload {
     pub song_id: String,
 }
 
+/// `set_refine` payload.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RefineUpdate {
+    pub stem: String,
+    pub params: RefineParams,
+}
+
+/// One EQ preset of the Refine panel.
+#[derive(Debug, Clone, Serialize)]
+pub struct RefinePresetInfo {
+    pub id: String,
+    pub name: String,
+    pub eq: EqParams,
+}
+
+/// `refine-field` event: stereo field of the stem whose panel is open.
+#[derive(Debug, Clone, Serialize)]
+pub struct RefineField {
+    pub stem: String,
+    /// 3 bands (low < 250 Hz <= mid < 2.5 kHz <= high) x 41 pan bins from
+    /// hard left to hard right, band-major; power per hop, linear.
+    pub bins: Vec<f32>,
+}
+
+/// `set_strength` result: the job id (0 = nothing to compute).
+#[derive(Debug, Clone, Serialize)]
+pub struct StrengthStarted {
+    pub job: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct StrengthProgress {
+    pub song_id: String,
+    pub job: u64,
+    pub fraction: f32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct StrengthDone {
+    pub song_id: String,
+    pub job: u64,
+    pub strength: StrengthSetting,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct StrengthError {
+    pub song_id: String,
+    pub job: u64,
+    pub message: String,
+    pub cancelled: bool,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ExportProgress {
     pub fraction: f32,
@@ -317,5 +381,12 @@ mod tests {
         )
         .unwrap();
         assert_eq!(c.count_in_beats, 7);
+        // Refine: older params (no shelf fields) and partial objects load.
+        let u: RefineUpdate = serde_json::from_str(
+            r#"{"stem":"guitar","params":{"pan":{"enabled":true,"center":-1,"width":1.34,"mode":"keep"},"eq":{"low_cut":{"enabled":true,"freq":120}}}}"#,
+        )
+        .unwrap();
+        assert!(u.params.pan.enabled && u.params.eq.low_cut.cut_on());
+        assert_eq!(u.params.eq.bands, EqParams::default().bands);
     }
 }

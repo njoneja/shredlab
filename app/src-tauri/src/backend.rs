@@ -8,8 +8,12 @@
 //!   `AtomicBool`. The loaded `Separator` is kept between runs.
 //! - beat tracking: one background thread per song (Beat This! on ORT CPU).
 //! - export: one background thread per export.
-//! - position: a 30 Hz emitter thread.
+//! - strength: one background thread per re-derivation (cancelled when a
+//!   newer one starts or the song changes).
+//! - position: a 30 Hz emitter thread (also the stereo-field events of the
+//!   open Refine panel and the debounced save of refine settings).
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -27,6 +31,7 @@ use crate::log;
 use crate::music_start;
 use crate::settings::{self, AppSettings};
 use crate::types::*;
+use stemx_dsp::strength::{apply_strength, StrengthOptions};
 
 /// Event sink: `(event name, JSON payload)`.
 pub type Sink = Arc<dyn Fn(&str, serde_json::Value) + Send + Sync>;
@@ -35,6 +40,10 @@ pub type Sink = Arc<dyn Fn(&str, serde_json::Value) + Send + Sync>;
 pub const RATE: u32 = stemx_io::MODEL_SAMPLE_RATE;
 const ORIGINAL: &str = "original";
 const RECENT_MAX: usize = 20;
+/// Mask exponent per strength level (0 = Natural: the cached stems).
+pub const STRENGTH_P: [f32; 5] = [1.0, 1.5, 2.0, 3.0, 4.0];
+/// Refine settings are saved this long after the last change.
+const REFINE_SAVE_DELAY: Duration = Duration::from_millis(600);
 const NO_DEVICE: &str =
     "No audio output device found. Connect speakers or headphones and restart ShredLab (separation and export still work).";
 
@@ -71,6 +80,9 @@ struct Song {
     beats: Option<BeatData>,
     /// Where the music starts after a quiet intro ([`music_start::detect`]).
     music_start: Option<f64>,
+    /// Strength the in-memory `stems` were derived with (default: the
+    /// cached set itself).
+    loaded_strength: StrengthSetting,
 }
 
 impl Song {
@@ -132,6 +144,9 @@ impl Song {
             bpm: self.beats.as_ref().and_then(|b| b.bpm),
             settings: m.settings.clone(),
             original_available: self.backing_from_original(),
+            refine: m.refine.clone(),
+            strength: m.strength,
+            strength_job: 0,
         }
     }
 }
@@ -158,6 +173,16 @@ struct Job {
     cancel: Arc<AtomicBool>,
 }
 
+struct StrengthJob {
+    id: u64,
+    cancel: Arc<AtomicBool>,
+}
+
+/// Same strength for playback purposes (smooth is irrelevant at Natural).
+fn same_strength(a: StrengthSetting, b: StrengthSetting) -> bool {
+    a.level == b.level && (a.level == 0 || a.smooth == b.smooth)
+}
+
 struct State {
     song: Option<Song>,
     /// Bumped on every open/close; background results for an older
@@ -174,6 +199,14 @@ struct State {
     separation: Option<Job>,
     export: Option<Arc<AtomicBool>>,
     last_separation_error: Option<String>,
+    /// Refine settings of the open song, by stem (only refined stems).
+    refine: BTreeMap<String, RefineParams>,
+    /// Unsaved refine change: (song id, time of the last change).
+    refine_dirty: Option<(String, Instant)>,
+    /// Stem whose Refine panel is open (stereo-field analysis).
+    analysis: Option<String>,
+    strength_job: Option<StrengthJob>,
+    next_strength_job: u64,
 }
 
 pub struct Backend {
@@ -423,6 +456,11 @@ impl Backend {
                 separation: None,
                 export: None,
                 last_separation_error: None,
+                refine: BTreeMap::new(),
+                refine_dirty: None,
+                analysis: None,
+                strength_job: None,
+                next_strength_job: 0,
             }),
             open_lock: Mutex::new(()),
         });
@@ -461,13 +499,30 @@ impl Backend {
         let weak = Arc::downgrade(self);
         spawn("stemx-position", move || {
             let mut was_active = false;
+            let mut field = [0.0f32; audio::FIELD_LEN];
             loop {
                 std::thread::sleep(Duration::from_millis(33));
                 let Some(b) = weak.upgrade() else { break };
+                b.flush_refine_save(false);
                 let Some(e) = &b.engine else { break };
-                if lock(&b.st).song.is_none() {
-                    was_active = false;
-                    continue;
+                let analysis = {
+                    let st = lock(&b.st);
+                    if st.song.is_none() {
+                        was_active = false;
+                        continue;
+                    }
+                    st.analysis.clone()
+                };
+                if let Some(stem) = analysis {
+                    if e.take_field(&mut field) {
+                        b.emit(
+                            "refine-field",
+                            &RefineField {
+                                stem,
+                                bins: field.to_vec(),
+                            },
+                        );
+                    }
                 }
                 let p = e.position();
                 let active = p.playing || p.count_in_beats_left > 0;
@@ -729,8 +784,14 @@ impl Backend {
         }
     }
 
+    fn refine_list(st: &State) -> Vec<(String, RefineParams)> {
+        st.refine.iter().map(|(k, v)| (k.clone(), *v)).collect()
+    }
+
     fn apply_all(&self, st: &State) {
         let Some(e) = &self.engine else { return };
+        e.set_refine_all(Self::refine_list(st));
+        e.set_analysis(st.analysis.as_deref());
         self.apply_gains(st);
         e.set_speed(st.speed_percent as f64 / 100.0);
         e.set_pitch(st.semitones as f64 + st.cents as f64 / 100.0);
@@ -773,9 +834,11 @@ impl Backend {
                 .ok_or_else(|| format!("File not found: {path}"))?
         };
         // Stop what was going on.
+        self.flush_refine_save(true);
         {
             let mut st = lock(&self.st);
             self.cancel_separation_locked(&mut st);
+            self.cancel_strength_locked(&mut st);
             st.generation += 1;
             if let Some(e) = &self.engine {
                 e.pause();
@@ -916,13 +979,24 @@ impl Backend {
             stems_info,
             beats,
             music_start,
+            loaded_strength: StrengthSetting::default(),
         };
         song.check_alignment();
-        let info = song.info();
+        let mut info = song.info();
         let generation = {
             let mut st = lock(&self.st);
+            st.refine = song
+                .meta
+                .refine
+                .iter()
+                .filter(|(_, p)| !p.is_identity())
+                .map(|(k, p)| (k.clone(), *p))
+                .collect();
+            st.analysis = None;
             if let Some(e) = &self.engine {
                 e.pause();
+                // Refine first, so the new track set starts with it.
+                e.set_refine_all(Self::refine_list(&st));
                 song.load_into(e);
                 e.seek(0.0);
             }
@@ -931,6 +1005,7 @@ impl Backend {
             st.downbeats = None;
             st.last_separation_error = None;
             self.apply_all(&st);
+            info.strength_job = self.start_strength_locked(&mut st);
             st.generation
         };
         self.emit_position();
@@ -1001,8 +1076,11 @@ impl Backend {
     }
 
     pub fn close_song(&self) {
+        self.flush_refine_save(true);
         let mut st = lock(&self.st);
         self.cancel_separation_locked(&mut st);
+        self.cancel_strength_locked(&mut st);
+        st.analysis = None;
         st.generation += 1;
         if let Some(e) = &self.engine {
             e.pause();
@@ -1166,6 +1244,7 @@ impl Backend {
                     }
                     song.stems = Some(tracks);
                     song.stems_info = Some(info);
+                    song.loaded_strength = StrengthSetting::default();
                     if song.original.is_none() && song.mix_is_original {
                         song.original = Some(original_track(&song.mix));
                     }
@@ -1176,6 +1255,9 @@ impl Backend {
                     }
                 }
                 self.apply_gains(&st);
+                // The new set is the plain model output: apply the song's
+                // strength to it (no-op at Natural).
+                self.start_strength_locked(&mut st);
                 drop(st);
                 self.emit(
                     "separation-done",
@@ -1670,6 +1752,12 @@ impl Backend {
             click,
             start: req.start_sec.filter(|s| s.is_finite()).unwrap_or(0.0),
             end: req.end_sec.filter(|e| e.is_finite()),
+            // "What you hear": the refined parts as in playback.
+            refine: if song.stems.is_some() {
+                Self::refine_list(&st)
+            } else {
+                Vec::new()
+            },
         };
         let range = audio::render_range(&render_req, song_duration)
             .ok_or("Nothing to export: the range is empty")?;
@@ -1677,7 +1765,7 @@ impl Backend {
         st.export = Some(cancel.clone());
         drop(st);
         log!(
-            "export started: {} ({:?}, {} of {} stems, {:?} mode, speed {}, shift {:.2} st, click {}, count-in {}, range {:.2}-{:.2} s)",
+            "export started: {} ({:?}, {} of {} stems, {:?} mode, speed {}, shift {:.2} st, click {}, count-in {}, range {:.2}-{:.2} s, refined [{}])",
             path.display(),
             format,
             render_req.gains.len(),
@@ -1688,7 +1776,13 @@ impl Backend {
             render_req.click.enabled,
             render_req.click.count_in_beats,
             range.0,
-            range.1
+            range.1,
+            render_req
+                .refine
+                .iter()
+                .map(|(n, _)| n.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
         );
         let b = self.clone();
         spawn("stemx-export", move || {
@@ -1788,6 +1882,276 @@ impl Backend {
 
     pub fn data_dir(&self) -> &Path {
         &self.cfg.data_dir
+    }
+
+    // ------------------------------------------------------------ refine
+
+    /// The Refine panel's EQ presets.
+    pub fn refine_presets(&self) -> Vec<RefinePresetInfo> {
+        stemx_dsp::refine::EQ_PRESETS
+            .iter()
+            .map(|p| RefinePresetInfo {
+                id: p.id.into(),
+                name: p.name.into(),
+                eq: p.eq,
+            })
+            .collect()
+    }
+
+    /// Sets one stem's refine parameters: heard at once (smoothed), saved
+    /// with the song shortly after the last change.
+    pub fn set_refine(&self, stem: &str, params: RefineParams) -> Result<(), String> {
+        if !STEMS.contains(&stem) {
+            return Err(format!("Unknown stem {stem}"));
+        }
+        let mut st = lock(&self.st);
+        let song_id = st.song.as_ref().ok_or("No song open")?.meta.song_id.clone();
+        if params.is_identity() {
+            st.refine.remove(stem);
+        } else {
+            st.refine.insert(stem.to_string(), params);
+        }
+        if let Some(e) = &self.engine {
+            e.set_refine(stem, params);
+        }
+        st.refine_dirty = Some((song_id, Instant::now()));
+        Ok(())
+    }
+
+    /// Stereo-field analysis for the stem whose Refine panel is open, or off.
+    pub fn set_refine_analysis(&self, stem: Option<String>) {
+        let mut st = lock(&self.st);
+        st.analysis = stem.filter(|s| STEMS.contains(&s.as_str()));
+        if let Some(e) = &self.engine {
+            e.set_analysis(st.analysis.as_deref());
+        }
+    }
+
+    /// Writes pending refine settings to `song.json` (after
+    /// [`REFINE_SAVE_DELAY`] of no changes, or now with `force`).
+    fn flush_refine_save(&self, force: bool) {
+        let (song_id, refine) = {
+            let mut st = lock(&self.st);
+            match &st.refine_dirty {
+                Some((_, t)) if force || t.elapsed() >= REFINE_SAVE_DELAY => {}
+                _ => return,
+            }
+            let Some((id, _)) = st.refine_dirty.take() else {
+                return;
+            };
+            let refine = st.refine.clone();
+            if let Some(s) = st.song.as_mut().filter(|s| s.meta.song_id == id) {
+                s.meta.refine = refine.clone();
+            }
+            (id, refine)
+        };
+        if let Err(e) = self.library.update(&song_id, |m| m.refine = refine) {
+            log!("cannot save refine settings of {song_id}: {e}");
+        }
+    }
+
+    // ------------------------------------------------------------ strength
+
+    /// Sets the song's separation strength (saved at once) and re-derives
+    /// the stems in the background if needed. Returns the job id (0 when
+    /// nothing has to be computed, e.g. not separated yet).
+    pub fn set_strength(self: &Arc<Self>, strength: StrengthSetting) -> Result<u64, String> {
+        let s = StrengthSetting {
+            level: strength.level.min(STRENGTH_P.len() as u8 - 1),
+            smooth: strength.smooth,
+        };
+        let mut st = lock(&self.st);
+        let song = st.song.as_mut().ok_or("No song open")?;
+        song.meta.strength = s;
+        let song_id = song.meta.song_id.clone();
+        let job = self.start_strength_locked(&mut st);
+        drop(st);
+        self.library
+            .update(&song_id, |m| m.strength = s)
+            .map_err(|e| e.to_string())?;
+        Ok(job)
+    }
+
+    fn cancel_strength_locked(&self, st: &mut State) {
+        if let Some(j) = st.strength_job.take() {
+            j.cancel.store(true, Ordering::Relaxed);
+        }
+    }
+
+    /// Starts deriving the open song's stems for its saved strength, unless
+    /// the loaded set already has it. Cancels a running derivation. Returns
+    /// the job id, or 0 when there is nothing to do.
+    fn start_strength_locked(self: &Arc<Self>, st: &mut State) -> u64 {
+        self.cancel_strength_locked(st);
+        let Some(song) = st.song.as_ref() else {
+            return 0;
+        };
+        let want = song.meta.strength;
+        let (Some(info), Some(_)) = (song.stems_info.clone(), song.stems.as_ref()) else {
+            return 0;
+        };
+        if same_strength(want, song.loaded_strength) {
+            return 0;
+        }
+        st.next_strength_job += 1;
+        let id = st.next_strength_job;
+        let cancel = Arc::new(AtomicBool::new(false));
+        st.strength_job = Some(StrengthJob {
+            id,
+            cancel: cancel.clone(),
+        });
+        let song_id = song.meta.song_id.clone();
+        let original = song.original.clone();
+        let generation = st.generation;
+        log!(
+            "strength of {song_id}: level {} (p {}{}) started, job {id}",
+            want.level,
+            STRENGTH_P[want.level as usize],
+            if want.smooth && want.level > 0 {
+                ", smooth"
+            } else {
+                ""
+            }
+        );
+        let b = self.clone();
+        spawn("stemx-strength", move || {
+            b.run_strength(id, song_id, info, original, want, generation, cancel);
+        });
+        id
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn run_strength(
+        self: &Arc<Self>,
+        job: u64,
+        song_id: String,
+        info: StemsInfo,
+        original: Option<Track>,
+        want: StrengthSetting,
+        generation: u64,
+        cancel: Arc<AtomicBool>,
+    ) {
+        let t0 = Instant::now();
+        let mut th = Throttle::new();
+        let progress = |th: &mut Throttle, f: f32, force: bool| {
+            if let Some(f) = th.next(f, force) {
+                self.emit(
+                    "strength-progress",
+                    &StrengthProgress {
+                        song_id: song_id.clone(),
+                        job,
+                        fraction: f,
+                    },
+                );
+            }
+        };
+        progress(&mut th, 0.0, true);
+        let result: Result<Vec<Track>, String> = (|| {
+            // The base set from disk (the derived set replaces it in memory).
+            let (base, _) = self.read_cached_stems(&song_id, &info)?;
+            if cancel.load(Ordering::Relaxed) {
+                return Err("cancelled".into());
+            }
+            progress(&mut th, 0.3, true);
+            if want.level == 0 {
+                return Ok(base);
+            }
+            let o = original.ok_or(
+                "Separation strength needs the original mix, which isn't available for this song.",
+            )?;
+            let views: Vec<[&[f32]; 2]> = base
+                .iter()
+                .map(|t| [&t.channels[0][..], &t.channels[1][..]])
+                .collect();
+            let len = o.channels[0].len();
+            if views.iter().any(|v| v[0].len() != len || v[1].len() != len) {
+                return Err("stems and original differ in length".into());
+            }
+            let out = apply_strength(
+                [&o.channels[0][..], &o.channels[1][..]],
+                &views,
+                STRENGTH_P[want.level as usize],
+                &StrengthOptions {
+                    smooth: want.smooth,
+                    ..Default::default()
+                },
+                &mut |f| progress(&mut th, 0.3 + 0.7 * f, false),
+                &cancel,
+            )
+            .map_err(|_| "cancelled".to_string())?;
+            Ok(base
+                .iter()
+                .zip(out)
+                .map(|(t, [l, r])| Track {
+                    name: t.name.clone(),
+                    channels: [Arc::new(l), Arc::new(r)],
+                    sample_rate: t.sample_rate,
+                })
+                .collect())
+        })();
+        let mut st = lock(&self.st);
+        let current = st.strength_job.as_ref().is_some_and(|j| j.id == job)
+            && st.generation == generation
+            && !cancel.load(Ordering::Relaxed);
+        if !current {
+            log!("strength job {job} dropped (superseded or cancelled)");
+            drop(st);
+            self.emit(
+                "strength-error",
+                &StrengthError {
+                    song_id,
+                    job,
+                    message: "Cancelled".into(),
+                    cancelled: true,
+                },
+            );
+            return;
+        }
+        st.strength_job = None;
+        match result {
+            Ok(tracks) => {
+                if let Some(song) = st.song.as_mut() {
+                    song.stems = Some(tracks);
+                    song.loaded_strength = want;
+                    if let Some(e) = &self.engine {
+                        song.load_into(e);
+                    }
+                }
+                self.apply_gains(&st);
+                drop(st);
+                log!(
+                    "strength job {job} done in {:.2}s",
+                    t0.elapsed().as_secs_f64()
+                );
+                progress(&mut th, 1.0, true);
+                self.emit(
+                    "strength-done",
+                    &StrengthDone {
+                        song_id,
+                        job,
+                        strength: want,
+                    },
+                );
+            }
+            Err(msg) => {
+                drop(st);
+                log!("strength job {job} failed: {msg}");
+                self.emit(
+                    "strength-error",
+                    &StrengthError {
+                        song_id,
+                        job,
+                        message: msg,
+                        cancelled: false,
+                    },
+                );
+            }
+        }
+    }
+
+    /// True while a strength derivation runs.
+    pub fn strength_running(&self) -> bool {
+        lock(&self.st).strength_job.is_some()
     }
 
     /// Autotest helper, unstretched, for checking an export of the stems
@@ -2115,5 +2479,200 @@ mod tests {
         assert!(b
             .export_mix(export_req(&out, false, Some(3.0), Some(3.0)))
             .is_err());
+    }
+
+    /// A song with three cached stems (guitar hard-left 440 Hz + hard-right
+    /// 660 Hz, centred bass and drums) and a cached original with a leftover.
+    fn song_with_stems(b: &Arc<Backend>) -> (String, PathBuf) {
+        std::fs::create_dir_all(b.data_dir()).unwrap();
+        let n = RATE as usize * 3;
+        let t = |f: f32, a: f32| -> Vec<f32> {
+            (0..n)
+                .map(|i| a * (i as f32 * f * std::f32::consts::TAU / RATE as f32).sin())
+                .collect()
+        };
+        let (gl, gr, ba, dr, res) = (
+            t(440.0, 0.3),
+            t(660.0, 0.25),
+            t(82.0, 0.4),
+            t(2000.0, 0.05),
+            t(5100.0, 0.02),
+        );
+        let ol: Vec<f32> = (0..n).map(|i| gl[i] + ba[i] + dr[i] + res[i]).collect();
+        let or: Vec<f32> = (0..n).map(|i| gr[i] + ba[i] + dr[i] + res[i]).collect();
+        let wav = b.data_dir().join("song.wav");
+        stemx_io::write_wav(&wav, RATE, &[&ol, &or], stemx_io::WavFormat::F32).unwrap();
+        let info = b.open_song(wav.to_str().unwrap()).unwrap();
+        let id = info.song_id.clone();
+        let dir = stemx_library::stem_set_dir("test", 1);
+        let files = b
+            .library
+            .write_stems(
+                &id,
+                &dir,
+                RATE,
+                &[
+                    ("guitar", [&gl[..], &gr[..]]),
+                    ("bass", [&ba[..], &ba[..]]),
+                    ("drums", [&dr[..], &dr[..]]),
+                ],
+            )
+            .unwrap();
+        let oi = b.library.write_original(&id, RATE, [&ol, &or]).unwrap();
+        b.library
+            .update(&id, |m| {
+                m.original = Some(oi);
+                m.put_stem_set(StemsInfo {
+                    model_id: "test".into(),
+                    model_name: "Test".into(),
+                    device_label: "CPU".into(),
+                    sample_rate: RATE,
+                    len: n,
+                    stems: files,
+                    shifts: 1,
+                    dir,
+                });
+            })
+            .unwrap();
+        (id, wav)
+    }
+
+    fn wait_strength(b: &Arc<Backend>) {
+        let t0 = Instant::now();
+        while b.strength_running() && t0.elapsed() < Duration::from_secs(30) {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    #[allow(clippy::needless_range_loop)]
+    fn refine_and_strength_persist_and_export_what_you_hear() {
+        use stemx_dsp::refine::{pan_offline, PanParams};
+        let (b, events) = test_backend("refine");
+        let (id, wav) = song_with_stems(&b);
+        let info = b.open_song(wav.to_str().unwrap()).unwrap();
+        assert!(info.stems_cached && info.original_available);
+        assert!(info.refine.is_empty() && info.strength_job == 0);
+
+        // Refine: unknown stem refused; keep-left guitar saved with the song.
+        let left = RefineParams {
+            pan: PanParams::left(),
+            ..RefineParams::default()
+        };
+        assert!(b.set_refine("banjo", left).is_err());
+        b.set_refine("guitar", left).unwrap();
+        b.set_refine("bass", RefineParams::default()).unwrap();
+        b.flush_refine_save(true);
+        let again = b.open_song(wav.to_str().unwrap()).unwrap();
+        assert_eq!(again.refine.len(), 1);
+        assert_eq!(again.refine["guitar"], left);
+
+        // Export "All but guitar": the original minus the LEFT guitar only.
+        let (stems, orig) = {
+            let st = lock(&b.st);
+            let s = st.song.as_ref().unwrap();
+            (s.stems.clone().unwrap(), s.original.clone().unwrap())
+        };
+        let out = b.data_dir().join("allbut.wav");
+        let mut req = export_req(&out, false, None, None);
+        req.stems = vec![
+            ExportStem {
+                stem: "bass".into(),
+                volume: 1.0,
+            },
+            ExportStem {
+                stem: "drums".into(),
+                volume: 1.0,
+            },
+        ];
+        b.export_mix(req).unwrap();
+        wait_export(&b);
+        let got = stemx_io::decode_file(&out).unwrap();
+        let g = stems.iter().find(|t| t.name == "guitar").unwrap();
+        let sel = pan_offline(&left.pan, RATE, &g.channels[0], &g.channels[1]);
+        for c in 0..2 {
+            let err = (0..got.channels[c].len())
+                .map(|i| (got.channels[c][i] - (orig.channels[c][i] - sel[c][i])).abs())
+                .fold(0.0f32, f32::max);
+            // 24-bit file.
+            assert!(err < 1e-4, "ch {c}: {err}");
+        }
+        // The right guitar is still in the export (right channel within
+        // -40 dB of the original; the mask leaks a little).
+        let rr: f32 = got.channels[1]
+            .iter()
+            .zip(orig.channels[1].iter())
+            .map(|(a, o)| (a - o).powi(2))
+            .sum();
+        assert!(
+            rr / (got.channels[1].len() as f32) < 3e-6,
+            "{}",
+            rr / (got.channels[1].len() as f32)
+        );
+
+        // Strength: derived stems sum to the original, saved, re-applied on open.
+        let job = b
+            .set_strength(StrengthSetting {
+                level: 2,
+                smooth: false,
+            })
+            .unwrap();
+        assert!(job > 0);
+        wait_strength(&b);
+        assert!(lock(&events).iter().any(|e| e == "strength-done"));
+        let sum_err = |b: &Arc<Backend>| {
+            let st = lock(&b.st);
+            let s = st.song.as_ref().unwrap();
+            let stems = s.stems.as_ref().unwrap();
+            let o = s.original.as_ref().unwrap();
+            (0..o.channels[0].len())
+                .map(|i| {
+                    let sum: f32 = stems.iter().map(|t| t.channels[0][i]).sum();
+                    (sum - o.channels[0][i]).abs()
+                })
+                .fold(0.0f32, f32::max)
+        };
+        assert!(sum_err(&b) < 1e-4, "{}", sum_err(&b));
+        // Smooth: no longer sums to the original (the leftover is not shared out).
+        b.set_strength(StrengthSetting {
+            level: 2,
+            smooth: true,
+        })
+        .unwrap();
+        wait_strength(&b);
+        assert!(sum_err(&b) > 1e-3);
+        // Same setting again: nothing to do.
+        assert_eq!(
+            b.set_strength(StrengthSetting {
+                level: 2,
+                smooth: true,
+            })
+            .unwrap(),
+            0
+        );
+        let reopened = b.open_song(wav.to_str().unwrap()).unwrap();
+        assert_eq!(
+            reopened.strength,
+            StrengthSetting {
+                level: 2,
+                smooth: true
+            }
+        );
+        assert!(reopened.strength_job > 0);
+        wait_strength(&b);
+        assert_eq!(
+            lock(&b.st).song.as_ref().unwrap().loaded_strength,
+            reopened.strength
+        );
+        // Back to Natural: the cached stems again.
+        b.set_strength(StrengthSetting::default()).unwrap();
+        wait_strength(&b);
+        let st = lock(&b.st);
+        let s = st.song.as_ref().unwrap();
+        assert_eq!(
+            s.stems.as_ref().unwrap()[0].channels[0][..],
+            stems[0].channels[0][..]
+        );
+        assert_eq!(s.meta.song_id, id);
     }
 }

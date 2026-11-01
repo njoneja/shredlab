@@ -3508,6 +3508,7 @@ dependencies = [
  "serde_json",
  "stemx-audio",
  "stemx-beats",
+ "stemx-dsp",
  "stemx-io",
  "stemx-library",
  "stemx-separation",
@@ -3684,6 +3685,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "stemx-dsp",
  "symphonia",
  "thiserror 2.0.21",
 ]
