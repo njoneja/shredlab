@@ -15,6 +15,7 @@
     music: '<path d="M9 18V5l11-2v13"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="17.5" cy="16" r="2.5"/>',
     help: '<circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.7.3-1 .9-1 1.7"/><circle cx="12" cy="17" r=".8" fill="currentColor"/>',
     keyboard: '<rect x="2.5" y="6" width="19" height="12" rx="2"/><path d="M6 10h1M10 10h1M14 10h1M18 10h0M7 14h10"/>',
+    settings: '<circle cx="12" cy="12" r="3"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1"/><circle cx="12" cy="12" r="6.5"/>',
     // stems
     vocals: '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0"/><path d="M12 17.5V21M9 21h6"/>',
     guitar: '<path d="M19.5 4.5l-7 7"/><path d="M17.5 2.5l4 4"/><path d="M11.5 9.5c-2-1-4.5-.5-5.5 1.5-.5 1-1.5 1-2.5 1.5-2 1.5-1.5 5 .5 7s5.5 2.5 7 .5c.5-1 .5-2 1.5-2.5 2-1 2.5-3.5 1.5-5.5"/><circle cx="8.5" cy="15.5" r="1.3"/>',

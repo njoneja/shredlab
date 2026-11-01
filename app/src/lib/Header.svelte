@@ -1,9 +1,17 @@
 <script lang="ts">
   import Icon from "./Icon.svelte";
-  import { app } from "./store.svelte";
+  import SettingsPopover from "./SettingsPopover.svelte";
+  import { app, QUALITY_TEXT } from "./store.svelte";
   import { formatTime } from "./meter";
 
   let { onhelp }: { onhelp: () => void } = $props();
+
+  let settingsOpen = $state(false);
+  let settingsWrap = $state<HTMLElement>();
+
+  function onWindowClick(e: MouseEvent) {
+    if (settingsOpen && settingsWrap && !settingsWrap.contains(e.target as Node)) settingsOpen = false;
+  }
 
   const subline = $derived.by(() => {
     const s = app.song;
@@ -11,14 +19,22 @@
     const parts: string[] = [];
     if (s.artist) parts.push(s.artist);
     parts.push(formatTime(s.duration_sec));
-    if (s.separated_with) parts.push(`${s.separated_with.model_name} on ${s.separated_with.device_label}`);
-    else if (app.separating && app.sepModel) parts.push(`${app.sepModel} on ${app.sepDevice}`);
+    // While separating, show what is being used; otherwise what the loaded stems were made with.
+    if (app.separating && app.sepModel) {
+      parts.push(`${app.sepModel} on ${app.sepDevice}`);
+      if (app.sepQuality) parts.push(QUALITY_TEXT[app.sepQuality]);
+    } else if (s.separated_with) {
+      parts.push(`${s.separated_with.model_name} on ${s.separated_with.device_label}`);
+      if (s.separated_with.quality) parts.push(QUALITY_TEXT[s.separated_with.quality] ?? s.separated_with.quality);
+    }
     if (s.bpm != null) parts.push(`${Math.round(s.bpm)} BPM`);
     return parts;
   });
 
   const canExport = $derived(app.stemsReady && !app.exportSummary.startsWith("Nothing"));
 </script>
+
+<svelte:window onclick={onWindowClick} />
 
 <header>
   <div class="title">
@@ -31,6 +47,19 @@
     {/if}
   </div>
   <div class="actions">
+    <div class="settings" bind:this={settingsWrap}>
+      <button
+        class="btn ghost icon-only"
+        aria-pressed={settingsOpen}
+        onclick={() => (settingsOpen = !settingsOpen)}
+        title="Settings"
+        aria-label="Settings"
+        aria-expanded={settingsOpen}
+      >
+        <Icon name="settings" />
+      </button>
+      {#if settingsOpen}<SettingsPopover onclose={() => (settingsOpen = false)} />{/if}
+    </div>
     <button class="btn ghost icon-only" onclick={onhelp} title="Keyboard shortcuts" aria-label="Keyboard shortcuts">
       <Icon name="keyboard" />
     </button>
@@ -81,6 +110,9 @@
     align-items: flex-start;
     gap: 8px;
     flex-shrink: 0;
+  }
+  .settings {
+    position: relative;
   }
   .export {
     display: flex;

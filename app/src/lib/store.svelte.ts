@@ -1,12 +1,15 @@
 // App state (Svelte 5 runes). All backend calls go through `api`.
 import { api } from "./api";
 import type {
+  AppSettingsInfo,
+  AppSettingsUpdate,
   BeatGrid,
   ClickState,
   ExportFormat,
   LibraryEntry,
   LoopState,
   MeterOverride,
+  Quality,
   SeparationStage,
   SongInfo,
   SongSettings,
@@ -15,6 +18,7 @@ import type {
   Subdivision,
 } from "./types";
 import { STEMS } from "./types";
+import { backingFromOriginal, clampGain } from "./mix";
 import { barAt, commonBeatsPerBar, effectiveDownbeats, nearestBeatIndex, normaliseOverrides } from "./meter";
 
 export interface StemUi {
@@ -30,6 +34,8 @@ export const STAGE_TEXT: Record<SeparationStage, string> = {
   writing: "Saving stems…",
   beats: "Detecting beats…",
 };
+
+export const QUALITY_TEXT: Record<Quality, string> = { standard: "Standard", high: "High" };
 
 export const SPEED_MIN = 50;
 export const SPEED_MAX = 150;
@@ -56,8 +62,16 @@ class AppState {
   sepFraction = $state(0);
   sepModel = $state("");
   sepDevice = $state("");
+  sepModelId = $state("");
+  sepQuality = $state<Quality | null>(null);
   sepError = $state<string | null>(null);
   stemsReady = $state(false);
+
+  // app settings (model, quality); persisted by the backend
+  appSettings = $state<AppSettingsInfo | null>(null);
+  savingSettings = $state(false);
+  /** Set when the user changed a setting; the prompt shows while the loaded stems don't match. */
+  askReseparate = $state(false);
 
   // analysis
   peaks = $state<number[] | null>(null);
@@ -89,13 +103,30 @@ class AppState {
   beatsPerBar = $derived(commonBeatsPerBar(this.grid, this.downbeats));
   anySolo = $derived(STEMS.some((s) => this.mix[s].solo));
   hasLoop = $derived(this.loop.a_sec != null && this.loop.b_sec != null);
+  /** Stems the export mixes: the switched-on ones (solo ignored; on at −∞ still counts as on for P1). */
+  exportStems = $derived(STEMS.filter((s) => this.mix[s].on));
   exportSummary = $derived.by(() => {
-    const on = STEMS.filter((s) => this.mix[s].on && this.mix[s].volume > 0);
+    const on = this.exportStems;
     const off = STEMS.filter((s) => !on.includes(s));
     if (!on.length) return "Nothing to export: all stems are off";
     if (!off.length) return "Exports: all stems";
     return `Exports: ${on.join(", ")} (${off.join(", ")} off)`;
   });
+  /** Number of stems the loaded song has (from its model; the mixer rows otherwise). */
+  songStemCount = $derived.by(() => {
+    const id = this.song?.separated_with?.model_id;
+    const m = id ? this.appSettings?.models.find((x) => x.id === id) : undefined;
+    return m?.stems.length || STEMS.length;
+  });
+  exportFromOriginal = $derived(backingFromOriginal(!!this.song?.original_available, this.exportStems.length, this.songStemCount));
+  /** Loaded stems were made with a different model/quality than the current settings. */
+  settingsMismatch = $derived.by(() => {
+    const sw = this.song?.separated_with;
+    const st = this.appSettings;
+    if (!sw || !st || st.model_id == null) return false;
+    return sw.model_id !== st.model_id || sw.quality !== st.quality;
+  });
+  showReseparate = $derived(this.askReseparate && this.settingsMismatch && !this.separating && this.stemsReady);
 
   private saveTimer: number | null = null;
   private started = false;
@@ -124,7 +155,9 @@ class AppState {
       if (p.song_id !== this.song?.song_id) return;
       this.separating = false;
       this.stemsReady = true;
-      this.song = { ...this.song, stems_cached: true, separated_with: p.separated_with };
+      // separation-done carries no original_available; after a separation (or a
+      // cached-set load) the backend has the original loaded too (API.md P1).
+      this.song = { ...this.song, stems_cached: true, separated_with: p.separated_with, original_available: true };
       this.showToast("Stems ready");
       this.refreshLibrary();
     });
@@ -146,7 +179,43 @@ class AppState {
       this.exportError = p.cancelled ? null : p.message;
     });
     await api.onFileDrop((paths) => this.openPath(paths[0]));
-    await this.refreshLibrary();
+    await Promise.all([this.refreshLibrary(), this.loadAppSettings()]);
+  }
+
+  async loadAppSettings() {
+    try {
+      this.appSettings = await api.getAppSettings();
+    } catch (e) {
+      console.warn("get_app_settings failed", e);
+    }
+  }
+
+  /** Save a changed setting; fields left out keep the current saved choice. */
+  async saveAppSettings(change: Partial<AppSettingsUpdate>) {
+    const cur = this.appSettings;
+    const update: AppSettingsUpdate = {
+      model_id: cur?.model_choice ?? null,
+      quality: cur?.quality_choice ?? null,
+      ...change,
+    };
+    this.savingSettings = true;
+    try {
+      this.appSettings = await api.setAppSettings(update);
+      this.askReseparate = true;
+    } catch (e) {
+      this.report(e);
+    } finally {
+      this.savingSettings = false;
+    }
+  }
+
+  async reseparate() {
+    this.askReseparate = false;
+    await this.startSeparation();
+  }
+
+  keepCurrentStems() {
+    this.askReseparate = false;
   }
 
   async refreshLibrary() {
@@ -190,6 +259,7 @@ class AppState {
       this.separating = false;
       this.sepError = null;
       this.sepFraction = 0;
+      this.askReseparate = false;
       this.position = 0;
       this.playing = false;
       this.countInLeft = 0;
@@ -237,7 +307,8 @@ class AppState {
       this.countInSet = true;
     }
     for (const m of s.mix ?? []) {
-      if (this.mix[m.stem]) this.mix[m.stem] = { on: m.on, volume: m.volume, solo: false };
+      // Volumes are linear gains (old settings: 0..1, now up to +6 dB).
+      if (this.mix[m.stem]) this.mix[m.stem] = { on: m.on, volume: clampGain(Number(m.volume)), solo: false };
     }
   }
 
@@ -293,6 +364,8 @@ class AppState {
       this.sepFraction = 0;
       this.sepModel = s.model_name;
       this.sepDevice = s.device_label;
+      this.sepModelId = s.model_id;
+      this.sepQuality = s.quality;
     } catch (e) {
       this.sepError = e instanceof Error ? e.message : String(e);
     }
@@ -383,7 +456,7 @@ class AppState {
   }
 
   async setVolume(stem: StemName, v: number) {
-    this.mix[stem].volume = clamp(v, 0, 1);
+    this.mix[stem].volume = clampGain(v);
     await this.pushMix();
   }
 
@@ -517,7 +590,7 @@ class AppState {
       await api.exportMix({
         path,
         format: this.exportFormat,
-        stems: STEMS.filter((s) => this.mix[s].on && this.mix[s].volume > 0).map((s) => ({ stem: s, volume: this.mix[s].volume })),
+        stems: this.exportStems.map((s) => ({ stem: s, volume: this.mix[s].volume })),
         speed_percent: this.speed,
         semitones: this.semitones,
         cents: this.cents,

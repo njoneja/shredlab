@@ -20,6 +20,7 @@
       <button class="btn ghost small icon-only" onclick={() => app.closeExport()} disabled={app.exporting} aria-label="Close"><Icon name="close" size={14} /></button>
     </div>
     <p class="muted">{app.exportSummary}. Volumes as set; solo is ignored.</p>
+    {#if app.exportFromOriginal}<p class="muted caption">Backing track built from the original</p>{/if}
     {#if changedTempo}
       <p class="muted">
         Includes speed {app.speed}% and pitch {app.semitones > 0 ? "+" : ""}{app.semitones} st {app.cents ? `${app.cents > 0 ? "+" : ""}${app.cents}¢` : ""}.
@@ -87,6 +88,10 @@
   p {
     margin: 0;
     font-size: 13px;
+  }
+  .caption {
+    font-size: 12px;
+    margin-top: -6px;
   }
   .formats {
     display: grid;

@@ -2,6 +2,7 @@
   import Icon from "./Icon.svelte";
   import { app } from "./store.svelte";
   import { STEMS, type StemName } from "./types";
+  import { SLIDER_MAX, formatDb, gainToSlider, sliderToGain } from "./mix";
 
   const LABEL: Record<StemName, string> = {
     vocals: "Vocals",
@@ -20,6 +21,13 @@
   }
 
   const disabled = $derived(!app.stemsReady);
+
+  // Arrow/Page/Home/End on a focused volume slider move it (0.5 dB per arrow
+  // step) instead of triggering the global seek/speed shortcuts.
+  const SLIDER_KEYS = new Set(["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "PageUp", "PageDown", "Home", "End"]);
+  function sliderKeys(e: KeyboardEvent) {
+    if (SLIDER_KEYS.has(e.key) && !e.shiftKey && !e.altKey) e.stopPropagation();
+  }
 </script>
 
 <svelte:window onclick={() => (menu = null)} onkeydown={(e) => e.key === "Escape" && (menu = null)} />
@@ -55,19 +63,23 @@
         {LABEL[stem]}
         <kbd class="key">{i + 1}</kbd>
       </span>
+      <!-- dB-linear from −40 to +6 dB in 0.5 dB steps; the bottom position is off (−∞). -->
       <input
         class="vol"
         type="range"
         min="0"
-        max="100"
+        max={SLIDER_MAX}
         step="1"
-        value={Math.round(m.volume * 100)}
+        value={gainToSlider(m.volume)}
         {disabled}
         aria-label="{LABEL[stem]} volume"
-        oninput={(e) => app.setVolume(stem, Number(e.currentTarget.value) / 100)}
+        aria-valuetext={formatDb(m.volume)}
+        title="{LABEL[stem]} volume: {formatDb(m.volume)} (double-click: 0 dB)"
+        oninput={(e) => app.setVolume(stem, sliderToGain(Number(e.currentTarget.value)))}
         ondblclick={() => app.setVolume(stem, 1)}
+        onkeydown={sliderKeys}
       />
-      <span class="readout mono">{Math.round(m.volume * 100)}%</span>
+      <span class="readout mono">{formatDb(m.volume)}</span>
       <div class="actions">
         <button class="btn small" {disabled} onclick={() => app.onlyThis(stem)} title="Turn all other stems off (Shift+{i + 1})">
           Only this
@@ -120,7 +132,7 @@
   }
   .row {
     display: grid;
-    grid-template-columns: 40px minmax(110px, 150px) minmax(80px, 1fr) 44px auto;
+    grid-template-columns: 40px minmax(110px, 150px) minmax(80px, 1fr) 62px auto;
     align-items: center;
     gap: 12px;
     padding: 4px 8px;
@@ -255,7 +267,7 @@
 
   @media (max-width: 960px) {
     .row {
-      grid-template-columns: 40px minmax(90px, 120px) minmax(60px, 1fr) 40px auto;
+      grid-template-columns: 40px minmax(90px, 120px) minmax(60px, 1fr) 58px auto;
       gap: 8px;
     }
     .key {
