@@ -15,8 +15,8 @@ use serde::{Deserialize, Serialize};
 
 pub use eq::{log_freqs, response_db, BandParams, CutParams, EndMode, Eq, EqParams, SHELF_MAX_DB};
 pub use pan::{
-    pan_offline, PanMask, PanMode, PanParams, FIELD_BANDS, FIELD_BAND_EDGES_HZ, FIELD_BINS,
-    FIELD_LEN, PAN_HOP, PAN_LATENCY, PAN_N_FFT,
+    pan_offline, PanMask, PanParams, FIELD_BANDS, FIELD_BAND_EDGES_HZ, FIELD_BINS, FIELD_LEN,
+    PAN_HOP, PAN_LATENCY, PAN_N_FFT,
 };
 pub use presets::{apply_preset, eq_preset, EqPreset, EQ_PRESETS};
 
@@ -81,13 +81,6 @@ impl RefineChain {
         self.pan.is_bypassed() && self.eq.is_bypassed()
     }
 
-    /// True while the EQ stage passes its input unchanged (flat and all fades
-    /// finished): then [`process_parts`](Self::process_parts) returns
-    /// `r == p` bit-exact, and the engine can mix the selection alone.
-    pub fn eq_bypassed(&self) -> bool {
-        self.eq.is_bypassed()
-    }
-
     /// Clears signal state and jumps to the target params (seek). Follow with
     /// [`prime`](Self::prime) of the next `latency()` input samples.
     pub fn reset(&mut self) {
@@ -105,25 +98,6 @@ impl RefineChain {
     pub fn process_inplace(&mut self, l: &mut [f32], r: &mut [f32]) {
         self.pan.process_inplace(l, r);
         self.eq.process_inplace(l, r);
-    }
-
-    /// Processes a block in place and also returns the pan-selected part
-    /// before the EQ: afterwards `l, r` hold the selection `p` (pan mask
-    /// only) and `eq_l, eq_r` the refined part `r` (selection then EQ), both
-    /// `latency()` samples late. With a flat EQ, `r == p` bit-exact. The
-    /// engine needs both for the backing mix (`the unpublished Refine notes`):
-    /// `mix = w·original + Σ (g_i·r_i − w·p_i)`.
-    pub fn process_parts(
-        &mut self,
-        l: &mut [f32],
-        r: &mut [f32],
-        eq_l: &mut [f32],
-        eq_r: &mut [f32],
-    ) {
-        self.pan.process_inplace(l, r);
-        eq_l.copy_from_slice(l);
-        eq_r.copy_from_slice(r);
-        self.eq.process_inplace(eq_l, eq_r);
     }
 
     /// Processes a block: `out` = refined `in`, `latency()` samples late.

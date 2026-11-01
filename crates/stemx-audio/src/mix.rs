@@ -24,18 +24,24 @@
 //! # Refined stems (Refine panel, P5)
 //!
 //! Every stem runs through a [`RefineChain`] (stereo selection, then EQ),
-//! refined or not. With the selection `p_i` and the refined part `r_i`
-//! (the selection after the EQ):
+//! refined or not. With `s_i` the whole stem and `r_i` the part that is
+//! heard (the chain's output: the stem, or the stem with a stereo window
+//! removed or alone, then EQ'd):
 //!
 //! ```text
-//! out = w * original + Σ_i (gain_i * r_i - w * p_i)
+//! out = w * original + Σ_i (gain_i * r_i - w * s_i)
 //! ```
 //!
-//! An unrefined chain passes the stem through bit-exact (`p_i = r_i = s_i`),
-//! so this is exactly the formula above. With a flat EQ (`r_i = p_i`) the
-//! mixer adds `(gain_i - w) * p_i` as before. In Original mode the selection
-//! leaves the backing and the refined part takes its place, so "All but this"
-//! on a refined stem removes only the selection (`original - p_i`).
+//! The whole stem always leaves the backing and only the heard part comes
+//! back, so a part that is not heard is not in the mix at all. Which part
+//! is heard is the caller's business ([`PanParams::invert`]: ShredLab makes
+//! the stereo window an exception to the row's on switch). An unrefined
+//! chain passes the stem through bit-exact (`r_i = s_i`), so this is
+//! exactly the P1 formula above: while a chain is bypassed the mixer adds
+//! `(gain_i - w) * r_i` as before, otherwise it reads `s_i` straight from
+//! the track (the chain's output is aligned with it, see below).
+//!
+//! [`PanParams::invert`]: stemx_dsp::refine::PanParams::invert
 //!
 //! The chain has a constant latency of [`PAN_LATENCY`] samples. Instead of
 //! delaying everything else, the mixer feeds each chain the stem `L`
@@ -176,9 +182,10 @@ struct TrackSet {
     chains: Vec<RefineChain>,
     /// Output position the chains are aligned with (`None`: prime first).
     chain_pos: Option<i64>,
-    /// Selection (`p`) and refined part (`r`) of one sub-block.
+    /// Heard part (`r`, the chain output) and whole stem (`s`) of one
+    /// sub-block.
     sel: [Vec<f32>; 2],
-    eq: [Vec<f32>; 2],
+    dry: [Vec<f32>; 2],
 }
 
 impl TrackSet {
@@ -212,7 +219,7 @@ impl TrackSet {
             chains,
             chain_pos: None,
             sel: [vec![0.0; CHUNK], vec![0.0; CHUNK]],
-            eq: [vec![0.0; CHUNK], vec![0.0; CHUNK]],
+            dry: [vec![0.0; CHUNK], vec![0.0; CHUNK]],
         }
     }
 
@@ -295,7 +302,7 @@ impl TrackSet {
             }
         }
         let [sl, sr] = &mut self.sel;
-        let [el, er] = &mut self.eq;
+        let [dl, dr] = &mut self.dry;
         for ((t, g), c) in self
             .tracks
             .iter()
@@ -309,36 +316,43 @@ impl TrackSet {
                 let m = CHUNK.min(n - off);
                 let (pl, pr) = (&mut sl[..m], &mut sr[..m]);
                 read_track(t, pos + off as i64 + LA, pl, pr);
-                // Flat EQ: r == p bit-exact, so mix the selection alone.
-                let flat = c.eq_bypassed();
-                if flat {
-                    c.process_inplace(pl, pr);
-                } else {
-                    c.process_parts(pl, pr, &mut el[..m], &mut er[..m]);
-                }
+                c.process_inplace(pl, pr);
+                // Bypassed chain: r == s bit-exact, so mix the output alone
+                // (checked after processing: a fade that just ended left
+                // only identity frames, a fade that just started is not
+                // bypassed).
+                let bypass = c.is_bypassed();
                 let w_cur = if has_orig { w.cur } else { 0.0 };
                 // Fast path: a steady zero contribution (this also keeps
                 // "all stems at unity" bit-exact).
                 let steady = gain.steady() && (!has_orig || w.steady());
-                let zero = if flat {
+                let zero = if bypass {
                     gain.cur - w_cur == 0.0
                 } else {
                     gain.cur == 0.0 && w_cur == 0.0
                 };
                 if !(steady && zero) {
                     let (lo, ro) = (&mut l[off..off + m], &mut r[off..off + m]);
+                    let need_dry = !bypass && has_orig;
+                    if need_dry {
+                        read_track(t, pos + off as i64, &mut dl[..m], &mut dr[..m]);
+                    }
                     for i in 0..m {
                         let gi = gain.next();
                         let wi = if has_orig { w.next() } else { 0.0 };
                         let f = fade(off + i);
-                        if flat {
+                        if bypass {
                             let k = (gi - wi) * f;
                             lo[i] += pl[i] * k;
                             ro[i] += pr[i] * k;
-                        } else {
+                        } else if need_dry {
                             let (a, b) = (gi * f, wi * f);
-                            lo[i] += el[i] * a - pl[i] * b;
-                            ro[i] += er[i] * a - pr[i] * b;
+                            lo[i] += pl[i] * a - dl[i] * b;
+                            ro[i] += pr[i] * a - dr[i] * b;
+                        } else {
+                            let a = gi * f;
+                            lo[i] += pl[i] * a;
+                            ro[i] += pr[i] * a;
                         }
                     }
                 }

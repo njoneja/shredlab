@@ -1,7 +1,9 @@
 //! Refined stems in the mixer, playback pipeline and export (M5c).
 //!
-//! The mix rule (crate `mix` docs): `out = w·original + Σ (g_i·r_i − w·p_i)`
-//! with `p_i` the stem's stereo selection and `r_i` the selection after EQ.
+//! The mix rule (crate `mix` docs): `out = w·original + Σ (g_i·r_i − w·s_i)`
+//! with `s_i` the whole stem and `r_i` the heard part after EQ. The stereo
+//! window is an exception to the row's on switch: on → the stem minus the
+//! window (`invert`), off → the window alone (heard at the row's volume).
 
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -57,9 +59,14 @@ fn gains(v: [f32; 3]) -> Vec<(String, f32)> {
         .collect()
 }
 
-fn keep_left() -> RefineParams {
+/// The stereo window "left" as an exception to a row whose switch is `on`:
+/// on → everything but the left part, off → only the left part.
+fn except_left(on: bool) -> RefineParams {
     RefineParams {
-        pan: PanParams::left(),
+        pan: PanParams {
+            invert: on,
+            ..PanParams::left()
+        },
         ..RefineParams::default()
     }
 }
@@ -128,49 +135,118 @@ fn identity_refine_is_bit_identical_to_the_plain_mix() {
 }
 
 #[test]
-fn all_but_a_refined_stem_removes_only_its_selection() {
+fn an_exception_flips_with_the_switch() {
     let n = 60_000;
     let (stems, orig) = song(n);
-    let p = keep_left();
     let g = &stems[0];
-    let sel = pan_offline(&p.pan, SR, &g.channels[0], &g.channels[1]);
-    // "All but guitar" with guitar = keep left, Original mode.
-    let mut m = Mixer::new(vec![], &gains([0.0, 1.0, 1.0]));
+    let left = pan_offline(&PanParams::left(), SR, &g.channels[0], &g.channels[1]);
+    let mid = 10_000..n - 10_000;
+    let resid = |out: &[f32], want: &dyn Fn(usize) -> f32| {
+        rms(&mid.clone().map(|i| out[i] - want(i)).collect::<Vec<_>>())
+    };
+
+    // Guitar ON except left, everything on: the original minus the left
+    // guitar (the unheard part leaves the mix). The right guitar stays.
+    let mut m = Mixer::new(vec![], &gains([1.0, 1.0, 1.0]));
     m.set_mode(MixMode::Original);
-    m.set_refine("guitar", p);
+    m.set_refine("guitar", except_left(true));
     m.load_with_original(stems.clone(), Some(orig.clone()), false);
     let out = mix_all(&mut m, n, 512);
     for c in 0..2 {
-        let want: Vec<f32> = (0..n).map(|i| orig.channels[c][i] - sel[c][i]).collect();
-        assert!(max_diff(&out[c], &want) < 1e-5, "ch {c}");
+        let want: Vec<f32> = (0..n).map(|i| orig.channels[c][i] - left[c][i]).collect();
+        assert!(max_diff(&out[c], &want) < 1e-5, "on except left, ch {c}");
     }
-    // By ear, so to speak: the left guitar is gone, the right guitar stays.
-    let mid = 10_000..n - 10_000;
-    let left_guitar_left = rms(&out[0][mid.clone()]
-        .iter()
-        .zip(&orig.channels[0][mid.clone()])
-        .zip(&g.channels[0][mid.clone()])
-        .map(|((o, x), gl)| o - (x - gl))
-        .collect::<Vec<_>>());
-    assert!(
-        left_guitar_left < 0.01,
-        "left guitar remains: {left_guitar_left}"
-    );
-    let right = rms(&out[1][mid.clone()]
-        .iter()
-        .zip(&orig.channels[1][mid.clone()])
-        .map(|(o, x)| o - x)
-        .collect::<Vec<_>>());
-    assert!(right < 0.01, "right channel changed: {right}");
+    let r = resid(&out[0], &|i| orig.channels[0][i] - g.channels[0][i]);
+    assert!(r < 0.01, "left guitar remains: {r}");
+    let r = resid(&out[1], &|i| orig.channels[1][i]);
+    assert!(r < 0.01, "right channel changed: {r}");
 
-    // Everything on at 0 dB with the refined guitar: the original itself
-    // (the selection leaves the backing, the row adds it back).
+    // Guitar OFF except left (heard at its volume), the rest on: the
+    // original minus the right guitar.
     let mut m = Mixer::new(vec![], &gains([1.0, 1.0, 1.0]));
     m.set_mode(MixMode::Original);
-    m.set_refine("guitar", p);
+    m.set_refine("guitar", except_left(false));
     m.load_with_original(stems.clone(), Some(orig.clone()), false);
     let out = mix_all(&mut m, n, 700);
-    assert!(max_diff(&out[0], &orig.channels[0]) < 1e-6);
+    for c in 0..2 {
+        let want: Vec<f32> = (0..n)
+            .map(|i| orig.channels[c][i] - g.channels[c][i] + left[c][i])
+            .collect();
+        assert!(max_diff(&out[c], &want) < 1e-5, "off except left, ch {c}");
+    }
+    let r = resid(&out[0], &|i| orig.channels[0][i]);
+    assert!(r < 0.01, "left channel changed: {r}");
+    let r = resid(&out[1], &|i| orig.channels[1][i] - g.channels[1][i]);
+    assert!(r < 0.01, "right guitar remains: {r}");
+
+    // Solo (plain sum) plays exactly what the row plays: ON except left at
+    // 0.5 = half the right guitar; OFF except left = the left guitar.
+    for (on, gain) in [(true, 0.5f32), (false, 1.0)] {
+        let mut m = Mixer::new(vec![], &gains([gain, 0.0, 0.0]));
+        m.set_mode(MixMode::Stems);
+        m.set_refine("guitar", except_left(on));
+        m.load_with_original(stems.clone(), Some(orig.clone()), false);
+        let out = mix_all(&mut m, n, 256);
+        for c in 0..2 {
+            let want: Vec<f32> = (0..n)
+                .map(|i| {
+                    let heard = if on {
+                        g.channels[c][i] - left[c][i]
+                    } else {
+                        left[c][i]
+                    };
+                    gain * heard
+                })
+                .collect();
+            assert!(max_diff(&out[c], &want) < 1e-5, "solo on={on}, ch {c}");
+        }
+    }
+}
+
+#[test]
+fn flipping_the_switch_with_an_exception_crossfades() {
+    let n = 2 * SR as usize;
+    let (stems, orig) = song(n);
+    let g = gains([1.0, 1.0, 1.0]);
+    let mut p = Pipeline::new(vec![], &g, false);
+    p.set_mix(g.clone(), MixMode::Original);
+    p.set_refine("guitar", except_left(true));
+    p.load_with_original(stems.clone(), Some(orig.clone()));
+    p.play();
+    let (a, _) = run(&mut p, 20_000, 256);
+    // Switch off (the gain stays: the left part is now heard), then on.
+    p.set_refine("guitar", except_left(false));
+    let (b, _) = run(&mut p, 20_000, 256);
+    p.set_refine("guitar", except_left(true));
+    let (c, _) = run(&mut p, 20_000, 256);
+    let mut all = a[0].clone();
+    all.extend_from_slice(&b[0]);
+    all.extend_from_slice(&c[0]);
+    let sig = orig.channels[0]
+        .windows(2)
+        .map(|w| (w[1] - w[0]).abs())
+        .fold(0.0f32, f32::max);
+    let st = all
+        .windows(2)
+        .map(|w| (w[1] - w[0]).abs())
+        .fold(0.0f32, f32::max);
+    assert!(st < sig * 1.5, "step {st} vs {sig}");
+    // Settled after each flip: left channel without, then with the left guitar.
+    let gl = &stems[0].channels[0];
+    let tail = 15_000..20_000;
+    let d = |x: &[f32], off: usize, with: bool| {
+        rms(&tail
+            .clone()
+            .map(|i| x[i] - (orig.channels[0][off + i] - if with { 0.0 } else { gl[off + i] }))
+            .collect::<Vec<_>>())
+    };
+    assert!(d(&a[0], 0, false) < 0.01, "{}", d(&a[0], 0, false));
+    assert!(d(&b[0], 20_000, true) < 0.01, "{}", d(&b[0], 20_000, true));
+    assert!(
+        d(&c[0], 40_000, false) < 0.01,
+        "{}",
+        d(&c[0], 40_000, false)
+    );
 }
 
 #[test]
@@ -229,8 +305,9 @@ fn run(p: &mut Pipeline, frames: usize, block: usize) -> ([Vec<f32>; 2], Vec<Met
     (out, m)
 }
 
+/// Guitar OFF except left (the left part heard) with EQ; bass EQ'd.
 fn refined_list() -> Vec<(String, RefineParams)> {
-    let mut eq = keep_left();
+    let mut eq = except_left(false);
     eq.eq = eq_preset("guitar-focus").unwrap().eq;
     vec![
         ("guitar".to_string(), eq),
@@ -249,7 +326,7 @@ fn request(stems: &[Track], orig: &Track, speed: f64, semis: f64) -> RenderReque
         tracks: stems.to_vec(),
         original: Some(orig.clone()),
         mode: MixMode::Original,
-        gains: gains([0.0, 1.0, 1.0]),
+        gains: gains([1.0, 1.0, 1.0]),
         speed,
         semitones: semis,
         click: ClickConfig::default(),
@@ -305,18 +382,17 @@ fn playback_equals_export_with_refine_on() {
             }
         }
         // And the refined guitar really is in it: unstretched export equals
-        // original − selection(guitar) with bass EQ'd.
+        // original − guitar + EQ(left guitar) − bass + EQ(bass).
         if speed == 1.0 {
             let rl = refined_list();
-            let gsel = pan_offline(
-                &rl[0].1.pan,
-                SR,
-                &stems[0].channels[0],
-                &stems[0].channels[1],
-            );
+            let gr = refine_offline(&rl[0].1, SR, &stems[0].channels[0], &stems[0].channels[1]);
             let br = refine_offline(&rl[1].1, SR, &stems[1].channels[0], &stems[1].channels[1]);
             let want: Vec<f32> = (0..n)
-                .map(|i| orig.channels[0][i] - gsel[0][i] - stems[1].channels[0][i] + br[0][i])
+                .map(|i| {
+                    orig.channels[0][i] - stems[0].channels[0][i] + gr[0][i]
+                        - stems[1].channels[0][i]
+                        + br[0][i]
+                })
                 .collect();
             assert!(max_diff(&export[0], &want) < 1e-5);
         }
@@ -396,7 +472,7 @@ fn turning_refine_on_while_playing_is_seamless() {
     // Bass EQ on mid-play, then guitar selection: smoothed, no jump.
     p.set_refine("bass", refined_list()[1].1);
     let (b, _) = run(&mut p, 10_000, 256);
-    p.set_refine("guitar", keep_left());
+    p.set_refine("guitar", except_left(true));
     let (c, _) = run(&mut p, 20_000, 256);
     let mut all = a[0].clone();
     all.extend_from_slice(&b[0]);

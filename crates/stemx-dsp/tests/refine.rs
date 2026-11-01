@@ -89,11 +89,11 @@ fn keep_left_keeps_the_left_tone_only() {
 }
 
 #[test]
-fn remove_left_removes_only_the_left_tone() {
+fn inverted_left_removes_only_the_left_tone() {
     let n = SR as usize;
     let (l, r) = lcr_signal(n);
     let p = PanParams {
-        mode: PanMode::Remove,
+        invert: true,
         ..PanParams::left()
     };
     let [ol, or] = refine_offline(&pan_only(p), SR, &l, &r);
@@ -135,17 +135,21 @@ fn keep_plus_remove_and_lcr_sum_to_the_input() {
         center: 0.2,
         width: 0.5,
         softness: 0.3,
-        mode: PanMode::Keep,
+        invert: false,
     };
     let remove = PanParams {
-        mode: PanMode::Remove,
+        invert: true,
         ..keep
     };
     let parts = [
         refine_offline(&pan_only(keep), SR, &l, &r),
         refine_offline(&pan_only(remove), SR, &l, &r),
     ];
-    assert!(maxerr(&parts) < 1e-5, "keep+remove err {}", maxerr(&parts));
+    assert!(
+        maxerr(&parts) < 1e-5,
+        "window+inverse err {}",
+        maxerr(&parts)
+    );
     let lcr = [
         refine_offline(&pan_only(PanParams::left()), SR, &l, &r),
         refine_offline(&pan_only(PanParams::center()), SR, &l, &r),
@@ -291,7 +295,7 @@ fn streaming_matches_offline_for_any_block_size() {
         center: -0.4,
         width: 0.7,
         softness: 0.3,
-        mode: PanMode::Remove,
+        invert: true,
     });
     p.eq = eq_preset("vocals-clarity").unwrap().eq;
     let [fl, fr] = refine_offline(&p, SR, &l, &r);
@@ -303,32 +307,6 @@ fn streaming_matches_offline_for_any_block_size() {
         assert_eq!(&sl[lat..], &fl[..n - lat], "seed {seed}");
         assert_eq!(&sr[lat..], &fr[..n - lat], "seed {seed}");
     }
-}
-
-#[test]
-fn process_parts_returns_the_selection_and_the_refined_part() {
-    let n = 30_000;
-    let (l, r) = lcr_signal(n);
-    let mut p = pan_only(PanParams::left());
-    let sel = refine_offline(&p, SR, &l, &r);
-    p.eq = eq_preset("guitar-focus").unwrap().eq;
-    let full = refine_offline(&p, SR, &l, &r);
-    let mut chain = RefineChain::new(SR);
-    chain.set_params_now(&p);
-    let lat = chain.latency();
-    let (mut pl, mut pr) = (l.clone(), r.clone());
-    let (mut el, mut er) = (vec![0.0; n], vec![0.0; n]);
-    chain.process_parts(&mut pl, &mut pr, &mut el, &mut er);
-    assert_eq!(&pl[lat..], &sel[0][..n - lat]);
-    assert_eq!(&pr[lat..], &sel[1][..n - lat]);
-    assert_eq!(&el[lat..], &full[0][..n - lat]);
-    assert_eq!(&er[lat..], &full[1][..n - lat]);
-    // Flat EQ: the refined part is the selection, bit-exact.
-    chain.set_params_now(&pan_only(PanParams::left()));
-    let (mut pl, mut pr) = (l.clone(), r.clone());
-    chain.process_parts(&mut pl, &mut pr, &mut el, &mut er);
-    assert_eq!(pl, el);
-    assert_eq!(pr, er);
 }
 
 #[test]
@@ -377,7 +355,7 @@ fn pan_parameter_changes_do_not_click() {
         (
             40_000,
             pan_only(PanParams {
-                mode: PanMode::Remove,
+                invert: true,
                 ..PanParams::left()
             }),
         ),
@@ -583,7 +561,19 @@ fn params_serialize_and_presets_are_sane() {
     let s = serde_json::to_string(&p).unwrap();
     let back: RefineParams = serde_json::from_str(&s).unwrap();
     assert_eq!(back, p);
-    assert!(s.contains("\"mode\":\"keep\""));
+    // `invert` is a run-time setting: never saved, and an old saved `mode`
+    // field is ignored.
+    let pan_json = serde_json::to_string(&p.pan).unwrap();
+    assert!(!pan_json.contains("invert") && !pan_json.contains("mode"));
+    let mut inv = p;
+    inv.pan.invert = true;
+    let back: RefineParams = serde_json::from_str(&serde_json::to_string(&inv).unwrap()).unwrap();
+    assert_eq!(back, p);
+    let old: RefineParams = serde_json::from_str(
+        r#"{"pan":{"enabled":true,"center":-1,"width":1.34,"mode":"remove"}}"#,
+    )
+    .unwrap();
+    assert!(old.pan.enabled && !old.pan.invert && old.pan.center == -1.0);
     // Missing fields fall back to defaults (forward compatible saves).
     let partial: RefineParams = serde_json::from_str(r#"{"pan":{"enabled":true}}"#).unwrap();
     assert!(partial.pan.enabled && partial.eq.is_identity());

@@ -1,19 +1,19 @@
 //! Applies a RefineChain to a stereo WAV so you can listen to it.
 //!
 //! cargo run --release -p stemx-dsp --example refine_wav -- <input.wav | --song "<title>" --stem <name>>
-//!     [--pan left|center|right|<center>,<width>[,<softness>]] [--remove]
+//!     [--pan left|center|right|<center>,<width>[,<softness>]] [--invert]
 //!     [--eq <preset id>] [--out <file.wav>]
 //!
 //! Without --out, writes out/refine/<name>_<settings>.wav (gitignored).
 //! Library songs are read only. Examples:
 //!   --song "Here I Go Again" --stem guitar --pan left
-//!   --song "Here I Go Again" --stem guitar --pan left --remove
+//!   --song "Here I Go Again" --stem guitar --pan left --invert
 
 use std::path::PathBuf;
 
 use stemx_dsp::refine::{
-    eq_preset, refine_offline, PanMode, PanParams, RefineChain, RefineParams, EQ_PRESETS,
-    FIELD_BANDS, FIELD_BINS, FIELD_LEN,
+    eq_preset, refine_offline, PanParams, RefineChain, RefineParams, EQ_PRESETS, FIELD_BANDS,
+    FIELD_BINS, FIELD_LEN,
 };
 
 #[path = "common/mod.rs"]
@@ -61,15 +61,17 @@ fn main() {
                     center: v[0],
                     width: v[1],
                     softness: v.get(2).copied().unwrap_or(0.2),
-                    mode: PanMode::Keep,
+                    invert: false,
                 }
             }
         };
         tag += &format!("_pan-{}", pan.replace(',', "_"));
     }
-    if args.iter().any(|a| a == "--remove") {
-        params.pan.mode = PanMode::Remove;
-        tag += "_remove";
+    // `--invert` (alias `--remove`): everything except the window, like an
+    // "on" row with an exception.
+    if args.iter().any(|a| a == "--invert" || a == "--remove") {
+        params.pan.invert = true;
+        tag += "_invert";
     }
     if let Some(id) = get("--eq") {
         let pr = eq_preset(&id).unwrap_or_else(|| {

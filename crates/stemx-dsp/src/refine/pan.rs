@@ -6,8 +6,8 @@
 //! kept part keeps its own stereo image. The selection is a window
 //! `center ± width/2` with raised-cosine edges `softness` wide, centred on
 //! the window edges: the gain is 0.5 exactly at `center ± width/2`. Because
-//! the edges are complementary, Keep and Remove of the same window sum to the
-//! input, and the Left / Center / Right presets tile the field (they also
+//! the edges are complementary, a window and its inverse (`invert`) sum to
+//! the input, and the Left / Center / Right presets tile the field (they also
 //! sum to the input).
 //!
 //! # Framing and latency
@@ -69,15 +69,6 @@ pub const PARAM_TAU_SECS: f32 = 0.03;
 
 const SNAP: f32 = 1e-4;
 
-/// Keep the selected pan window, or remove it and keep the rest.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum PanMode {
-    #[default]
-    Keep,
-    Remove,
-}
-
 /// Stereo-position selection of one stem.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -90,7 +81,12 @@ pub struct PanParams {
     pub width: f32,
     /// Width of each raised-cosine edge in pan units (0.02 … 1).
     pub softness: f32,
-    pub mode: PanMode,
+    /// Pass everything except the window instead of the window alone.
+    /// Not saved and not set by the UI: the owner derives it at run time
+    /// (ShredLab: the row's on switch, so the window is an exception to the
+    /// switch). Old saved data with a `mode` field still loads (ignored).
+    #[serde(skip)]
+    pub invert: bool,
 }
 
 impl Default for PanParams {
@@ -100,7 +96,7 @@ impl Default for PanParams {
             center: 0.0,
             width: 0.66,
             softness: 0.2,
-            mode: PanMode::Keep,
+            invert: false,
         }
     }
 }
@@ -144,9 +140,10 @@ impl PanParams {
     /// The mask's gain for a bin at `pan` (ignoring `enabled`).
     pub fn gain(&self, pan: f32) -> f32 {
         let sel = window_gain(pan, self.center, self.width, self.softness);
-        match self.mode {
-            PanMode::Keep => sel,
-            PanMode::Remove => 1.0 - sel,
+        if self.invert {
+            1.0 - sel
+        } else {
+            sel
         }
     }
 
@@ -179,7 +176,8 @@ struct Cur {
     center: f32,
     width: f32,
     softness: f32,
-    /// 0 = keep, 1 = remove (crossfades on a mode change).
+    /// 0 = the window, 1 = everything but the window (crossfades when
+    /// `invert` changes).
     remove: f32,
     /// 0 = identity, 1 = full mask.
     amount: f32,
@@ -191,7 +189,7 @@ impl Cur {
             center: p.center,
             width: p.width,
             softness: p.softness,
-            remove: if p.mode == PanMode::Remove { 1.0 } else { 0.0 },
+            remove: if p.invert { 1.0 } else { 0.0 },
             amount: if p.enabled { 1.0 } else { 0.0 },
         }
     }

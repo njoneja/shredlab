@@ -4,7 +4,7 @@
 
 use std::time::Instant;
 
-use stemx_dsp::refine::{eq_preset, PanMode, PanParams, RefineChain, RefineParams, FIELD_LEN};
+use stemx_dsp::refine::{eq_preset, PanParams, RefineChain, RefineParams, FIELD_LEN};
 
 const SR: u32 = 44_100;
 const BLOCK: usize = 256;
@@ -29,10 +29,7 @@ fn main() {
     let n = SR as usize * secs;
     let (l, r) = (noise(n, 1), noise(n, 2));
     let eq = eq_preset("guitar-focus").unwrap().eq;
-    let pan = PanParams {
-        mode: PanMode::Keep,
-        ..PanParams::left()
-    };
+    let pan = PanParams::left();
     let cases: [(&str, RefineParams, bool); 5] = [
         ("bypass (identity)", RefineParams::default(), false),
         (
