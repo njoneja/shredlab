@@ -1,0 +1,18 @@
+{
+  "_comment": "Copy to tools/personal_models.local.json (gitignored) and edit. Keys are the short names accepted by add_personal_model.py. Paths are relative to the repo root (or absolute). Use checkpoint_url/config_url to download instead; *_sha256 is optional and checked after download. Never commit URLs for models with unclear licenses.",
+  "models": {
+    "my-roformer": {
+      "name": "My BS-RoFormer (6 stems)",
+      "checkpoint": "models/my_model.ckpt",
+      "config": "models/my_model.yaml",
+      "checkpoint_url": "https://example.com/path/my_model.ckpt",
+      "checkpoint_sha256": "",
+      "config_url": "https://example.com/path/my_model.yaml",
+      "license": {
+        "spdx": "unknown",
+        "source": "https://example.com/where-the-model-comes-from",
+        "notes": "What you know about the license."
+      }
+    }
+  }
+}

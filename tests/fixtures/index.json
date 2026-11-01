@@ -1,0 +1,86 @@
+{
+  "format": "raw little-endian, C order (last axis fastest)",
+  "sample_rate": 44100,
+  "files": {
+    "synth_input": {
+      "file": "synth_input.bin",
+      "dtype": "f32",
+      "shape": [
+        2,
+        22050
+      ],
+      "bytes": 176400,
+      "desc": "synth-v1 input, first 22050 samples (0.5 s), stereo"
+    },
+    "demucs_stft": {
+      "file": "demucs_stft.bin",
+      "dtype": "f32",
+      "shape": [
+        2,
+        2048,
+        22,
+        2
+      ],
+      "bytes": 720896,
+      "desc": "dh.spec(synth_input): (C, n_fft/2=2048 bins, ceil(L/1024)=22 frames, re/im)",
+      "n_fft": 4096,
+      "hop": 1024
+    },
+    "demucs_istft": {
+      "file": "demucs_istft.bin",
+      "dtype": "f32",
+      "shape": [
+        2,
+        22050
+      ],
+      "bytes": 176400,
+      "desc": "dh.ispec(demucs_stft, 22050): roundtrip back to (C, L)"
+    },
+    "roformer_stft": {
+      "file": "roformer_stft.bin",
+      "dtype": "f32",
+      "shape": [
+        2,
+        1025,
+        44,
+        2
+      ],
+      "bytes": 721600,
+      "desc": "torch.stft(synth_input, 2048, 512, hann, center=True): (C, 1025 bins, 1 + L//512 = 44 frames, re/im)",
+      "n_fft": 2048,
+      "hop": 512
+    },
+    "roformer_istft": {
+      "file": "roformer_istft.bin",
+      "dtype": "f32",
+      "shape": [
+        2,
+        22050
+      ],
+      "bytes": 176400,
+      "desc": "rs.istft(roformer_stft, 22050) (numpy reference; matches torch.istft(length=L))"
+    }
+  },
+  "song_normalization": {
+    "synth_input_22050": {
+      "mean": 0.002857909305021167,
+      "std": 0.24460774660110474
+    },
+    "synth_v1_343980": {
+      "mean": 0.00011013746552634984,
+      "std": 0.24470940232276917
+    },
+    "synth_v1_588800": {
+      "mean": -7.881798228481784e-05,
+      "std": 0.24452082812786102
+    }
+  },
+  "checks": {
+    "demucs_stft_vs_torch_rel_max_err": 2.2896115581261256e-07,
+    "roformer_stft_numpy_vs_torch_rel_max_err": 1.2547742755941727e-07,
+    "demucs_istft_vs_torch_max_abs_err": 2.384185791015625e-07,
+    "demucs_istft_roundtrip_max_abs_err (not ~0 by design: Nyquist bin and edge frames dropped)": 0.22756299376487732,
+    "roformer_istft_numpy_vs_torch_max_abs_err": 2.384185791015625e-07,
+    "roformer_istft_roundtrip_max_abs_err": 1.7881393432617188e-07
+  }
+}
