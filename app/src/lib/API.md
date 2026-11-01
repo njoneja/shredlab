@@ -21,7 +21,9 @@ shows the intended behaviour.
 - **Events** are emitted app-wide (`app_handle.emit(name, payload)`), names in
   kebab-case.
 - Times are **seconds as f64, in song time** (position in the original audio,
-  independent of playback speed). Gains are **linear** (1.0 = unity).
+  independent of playback speed). Gains are **linear** (1.0 = unity). The UI
+  shows stem volumes in dB and converts them to linear gain itself (see
+  "Volume" below); the backend accepts 0..2.0 (clamped) and never sees dB.
 - Async commands must not block the UI thread. Long work (separation, export,
   beat analysis) runs on a background thread and reports through events.
 - Only one song is open at a time; most commands act on "the current song".
@@ -35,8 +37,15 @@ Stem names (`StemName`) are exactly: `"vocals" | "guitar" | "bass" | "drums" | "
 ## Types
 
 ```ts
-SeparatedWith  { model_name: string, device_label: string }
-  // e.g. { "model_name": "Demucs 6-stem", "device_label": "GPU" }
+Quality = "standard" | "high"
+  // Separation quality: "standard" = 1 pass, "high" = 2 passes (Demucs
+  // shifts=2: the song is also separated shifted by 0.25 s and the two
+  // results are averaged; deterministic offsets 0 and 0.25 s).
+
+SeparatedWith  { model_name: string, device_label: string, model_id: string, quality: Quality }
+  // e.g. { "model_name": "Demucs 6-stem", "device_label": "GPU",
+  //        "model_id": "htdemucs_6s", "quality": "high" }
+  // The model and quality actually used for the loaded stems.
   // UI renders "<model_name> on <device_label>", so keep device_label short:
   // "GPU" or "CPU" (optionally "GPU (DirectML)").
 
@@ -52,8 +61,35 @@ SongInfo {
   separated_with: SeparatedWith | null,   // set iff stems_cached
   beats_ready: boolean,     // true = get_beats() returns a grid now
   bpm: number | null,       // from the beat grid if beats_ready, else null
-  settings: SongSettings | null           // last value given to save_song_settings, verbatim
+  settings: SongSettings | null,          // last value given to save_song_settings, verbatim
+  original_available: boolean // stems AND the sample-aligned original are loaded,
+                              // so the backing track can come from the original (P1).
+                              // False before separation, or for an old cache entry
+                              // without the original whose source file is gone.
 }
+
+ModelInfo {
+  id: string,               // registry id, e.g. "htdemucs_6s"
+  name: string,             // display name
+  personal: boolean,        // personal model (manifest flag or personal folder)
+  license: string,          // SPDX id from the manifest, e.g. "MIT", or "unknown"
+  stems: string[]           // stem names the model produces
+}
+  // UI tags personal models "personal, license unknown" (or "personal, <license>").
+
+AppSettingsInfo {
+  models: ModelInfo[],         // all installed models
+  model_id: string | null,     // model the next separation uses (null: none installed)
+  model_choice: string | null, // saved choice; null = default model
+  model_from_env: boolean,     // STEMX_MODEL overrides the choice (dev builds)
+  quality: Quality,            // quality the next separation uses
+  quality_choice: Quality | null, // saved choice; null = default for the device
+  default_quality: Quality,    // "high" when model_id runs on the GPU, else "standard"
+  device_label: string         // predicted device of model_id: "GPU" | "CPU"
+}
+
+AppSettingsUpdate { model_id: string | null, quality: Quality | null }
+  // null = use the default. Persisted in <data dir>/settings.json.
 
 LibraryEntry {
   song_id: string, path: string, title: string, artist: string | null,
@@ -63,7 +99,7 @@ LibraryEntry {
 
 SeparationStage = "loading_model" | "decoding" | "separating" | "writing" | "beats"
 
-StemMixState { stem: StemName, on: boolean, volume: number /* 0..1 */, solo: boolean }
+StemMixState { stem: StemName, on: boolean, volume: number /* linear 0..2, see Volume */, solo: boolean }
 
 LoopState { a_sec: number | null, b_sec: number | null, enabled: boolean }
   // When enabled is true, a_sec and b_sec are non-null and a_sec < b_sec.
@@ -95,7 +131,8 @@ ExportFormat = "wav" | "flac" | "mp3"
 ExportRequest {
   path: string,              // absolute output path, extension already included
   format: ExportFormat,
-  stems: { stem: StemName, volume: number }[],   // exactly the stems to mix, with gains
+  stems: { stem: StemName, volume: number }[],   // exactly the stems that are on, with linear
+                             // gains (include on stems at volume 0: they count as "on" for P1)
   speed_percent: number,     // 50..150, apply time-stretch like playback
   semitones: number,         // -12..12
   cents: number              // -50..50
@@ -113,7 +150,7 @@ SongSettings   // OPAQUE to the backend: store the JSON value and return it verb
 | `open_song` | `path: String` | `SongInfo` | Decode (or start decoding) the file and make it current. Stops playback, position = 0, loop cleared. If stems are cached, load them so playback uses stems immediately. If a separation is running for another song it is cancelled (emit `separation-error` with `cancelled: true` for that song). Adds/updates the library entry. Kick off beat analysis in the background if the grid is not cached; emit `beats-ready` when done. May return before decoding finishes only if `duration_sec` is known. |
 | `close_song` | – | `()` | Stop playback, cancel separation, drop the current song. |
 | `get_library` | – | `LibraryEntry[]` | Recent songs, most recently opened first, max ~20. |
-| `start_separation` | – | `SeparationStarted` = `SeparatedWith` | Starts separating the current song on a background thread. Returns immediately with the model and device that will be used. `Err` if already running or no song. Progress via events below. |
+| `start_separation` | – | `SeparationStarted` = `SeparatedWith` | Separates the current song with the **current settings** (model + quality, see `get_app_settings`) on a background thread. Returns immediately with the model, device and quality that will be used. If that (model, quality) is already cached for the song, the stems are loaded from the cache instead (well under a second; same events: optional `separation-progress`, then `separation-done`). `Err` if already running, no song, or the song can't be separated (original file gone and no cached set). Progress via events below; with quality "high" `fraction` stays smooth across both passes. |
 | `cancel_separation` | – | `()` | Cancel if running (no-op otherwise). Must emit `separation-error` with `cancelled: true`. |
 | `play` | – | `()` | Start playback (see Playback rules). |
 | `pause` | – | `()` | Pause; also aborts a running count-in. |
@@ -129,6 +166,8 @@ SongSettings   // OPAQUE to the backend: store the JSON value and return it verb
 | `export_mix` | `req: ExportRequest` | `()` | Starts export on a background thread and returns immediately. Progress via events. `Err` if an export is already running. |
 | `cancel_export` | – | `()` | Cancel if running; emit `export-error` with `cancelled: true`. Delete the partial file. |
 | `save_song_settings` | `song_id: String, settings: serde_json::Value` | `()` | Persist next to the song's library entry. Returned verbatim in `SongInfo.settings` on the next `open_song` of that song. Called debounced (~600 ms) after changes. |
+| `get_app_settings` | – | `AppSettingsInfo` | Models and the separation settings. |
+| `set_app_settings` | `settings: AppSettingsUpdate` | `AppSettingsInfo` | Saves the choice (null = default) and returns the new effective settings. Does **not** re-separate: if a song is open and its `separated_with` (model_id, quality) differs from the new effective `model_id`/`quality`, the UI asks "Re-separate this song?" and calls `start_separation` on yes. `Err` for an unknown model id. |
 
 ## Events
 
@@ -149,18 +188,47 @@ Events for a `song_id` that is no longer current are ignored by the UI.
 
 ### Before / after separation
 - Without stems, playback uses the **original mix** (mix settings have no
-  effect). With stems, playback is the sum of the audible stems.
+  effect). With stems, see Backing track below.
 - Separation runs while the original plays; playback must not stutter.
+- `open_song` loads the cached set for the current (model, quality) if
+  there is one, else the most recently used cached set (so changing a
+  setting never forces a re-separation by itself). `separated_with` tells
+  which one is loaded.
+- Cached songs open even if the source file has moved: `open_song` with
+  the old path finds the library entry (stems and the original are in the
+  cache).
+
+### Backing track from the original (P1)
+- With `original_available`, let *n* = number of stems, *on* = stems with
+  `on: true` (ignoring volume and solo). If no stem is soloed and
+  `2 * on >= n`, playback is `original + Σ (gain_i − 1) · stem_i`, where
+  off stems have gain 0 (so "All but guitar" = original − guitar, and all
+  stems on at 0 dB = the original, bit for bit). Otherwise (isolating, or
+  any solo) it is the plain sum of the audible stems.
+- Mode changes crossfade over 30 ms; gain changes ramp (~12 ms).
+- Export applies the same rule to `req.stems` (on = listed stems). The UI
+  shows "Backing track built from the original" under the export summary
+  when `original_available && 2 * req.stems.length >= n`.
+
+### Volume
+- The mixer shows stem volume in dB, from −∞ (slider bottom = gain 0) to
+  +6 dB; 0 dB = as separated; double-click resets to 0 dB. The UI maps dB
+  to linear gain `10^(dB/20)` (+6 dB = 1.995) and sends linear gains.
+- Playback has a safety limiter on the music (soft knee, look-ahead,
+  transparent below −1 dBFS, output ≤ −0.1 dBFS); click and count-in are
+  added after it. Export does not use it; it keeps its own limiter /
+  normalization, so boosted exports don't clip either.
 
 ### Audibility (playback)
 - If **any** stem has `solo: true`, only stems with `solo: true` play.
 - Otherwise, stems with `on: true` play.
 - An audible stem plays at `volume` (linear). The UI keeps solo exclusive
   (at most one), but the backend should implement the general rule above.
+- How the audible stems are combined: see Backing track (P1).
 
 ### Export
 - Mix exactly `req.stems` at their volumes (the UI has already applied the
-  switches and **ignores solo**). Apply `speed_percent`, `semitones`, `cents`
+  switches and **ignores solo**), using the P1 rule above. Apply `speed_percent`, `semitones`, `cents`
   as in playback. Whole song, no click, no loop. Avoid clipping (a limiter or
   float WAV is fine; MP3 at ≥ 192 kbps).
 
@@ -200,7 +268,7 @@ Events for a `song_id` that is no longer current are ignored by the UI.
 
 ## Startup sequence (what the UI does)
 
-1. `listen` to all events, `get_library`.
+1. `listen` to all events, `get_library`, `get_app_settings`.
 2. User picks/drops a file → `open_song(path)`.
 3. UI sends `set_mix`, `set_speed`, `set_pitch`, `set_loop`, `set_click` with
    its current state, then `get_waveform(1200)`; if `beats_ready`,
