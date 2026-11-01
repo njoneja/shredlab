@@ -23,5 +23,8 @@ export default defineConfig({
     target: process.env.TAURI_ENV_PLATFORM === "windows" ? "chrome105" : "safari15",
     minify: !process.env.TAURI_ENV_DEBUG,
     sourcemap: !!process.env.TAURI_ENV_DEBUG,
+    // Never inline fonts as data: URIs; the Tauri CSP (font-src via
+    // default-src 'self') would block them.
+    assetsInlineLimit: (file: string) => (file.endsWith(".woff2") ? false : undefined),
   },
 });

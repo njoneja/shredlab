@@ -19,7 +19,7 @@
       <h2>Export what you hear</h2>
       <button class="btn ghost small icon-only" onclick={() => app.closeExport()} disabled={app.exporting} aria-label="Close"><Icon name="close" size={14} /></button>
     </div>
-    <p class="muted">{app.exportSummary}. Volumes as set; solo is ignored.</p>
+    <p class="muted">{app.exportSummary}. {app.anySolo ? "Solo is on, so only the soloed stem is exported, at its volume." : "Volumes as set."}</p>
     {#if app.exportFromOriginal}<p class="muted caption">Backing track built from the original</p>{/if}
     {#if changedTempo}
       <p class="muted">
@@ -59,7 +59,7 @@
     position: fixed;
     inset: 0;
     z-index: 60;
-    background: rgba(0, 0, 0, 0.55);
+    background: var(--backdrop);
     display: grid;
     place-items: center;
     padding: 20px;
@@ -74,7 +74,7 @@
     display: flex;
     flex-direction: column;
     gap: 10px;
-    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+    box-shadow: var(--shadow);
   }
   .head {
     display: flex;

@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Stem Extractor",
+  "productName": "ShredLab",
   "version": "0.1.0",
   "identifier": "dev.stemextractor.app",
   "build": {
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Stem Extractor",
+        "title": "ShredLab",
         "width": 1100,
         "height": 720,
         "minWidth": 800,

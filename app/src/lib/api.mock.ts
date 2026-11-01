@@ -19,7 +19,9 @@ import type {
   SongInfo,
   SongSettings,
   StemMixState,
+  Theme,
 } from "./types";
+import { THEMES } from "./types";
 
 type Handler = (payload: unknown) => void;
 const handlers = new Map<string, Set<Handler>>();
@@ -32,6 +34,7 @@ const LS_SETTINGS = "stemx.mock.settings.";
 // Cached stem sets, most recent last: "<song_id>|<model_id>|<quality>".
 const LS_CACHED = "stemx.mock.cached_sets";
 const LS_APP = "stemx.mock.app_settings";
+const LS_THEME = "stemx.mock.theme";
 
 function lsGet<T>(key: string, fallback: T): T {
   try {
@@ -81,6 +84,7 @@ const MOCK_DEVICE = "GPU"; // mock pretends to have a GPU, so High is the defaul
 const DEFAULT_QUALITY: Quality = "high";
 
 let appChoice: AppSettingsUpdate = lsGet<AppSettingsUpdate>(LS_APP, { model_id: null, quality: null });
+let themeChoice: Theme = lsGet<Theme>(LS_THEME, THEMES[0]);
 
 function appSettings(): AppSettingsInfo {
   const model_id = appChoice.model_id && MODELS.some((m) => m.id === appChoice.model_id) ? appChoice.model_id : DEFAULT_MODEL;
@@ -93,6 +97,7 @@ function appSettings(): AppSettingsInfo {
     quality_choice: appChoice.quality,
     default_quality: DEFAULT_QUALITY,
     device_label: MOCK_DEVICE,
+    theme: THEMES.includes(themeChoice) ? themeChoice : THEMES[0],
   };
 }
 
@@ -484,6 +489,12 @@ export const mockBackend: Backend = {
     if (update.model_id != null && !MODELS.some((m) => m.id === update.model_id)) throw new Error(`Unknown model: ${update.model_id}`);
     appChoice = { model_id: update.model_id, quality: update.quality };
     lsSet(LS_APP, appChoice);
+    return appSettings();
+  },
+  async setTheme(theme) {
+    if (!THEMES.includes(theme)) throw new Error(`Unknown theme: ${theme}`);
+    themeChoice = theme;
+    lsSet(LS_THEME, theme);
     return appSettings();
   },
   async onFileDrop(cb) {

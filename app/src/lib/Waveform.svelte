@@ -40,8 +40,9 @@
     return () => ro.disconnect();
   });
 
-  // Redraw whenever anything visible changes.
+  // Redraw whenever anything visible changes (the theme changes the colours).
   $effect(() => {
+    void app.theme;
     draw(app.peaks, app.position, app.loop.a_sec, app.loop.b_sec, app.loop.enabled, app.downbeats, width, height);
   });
 
@@ -72,7 +73,7 @@
     if (a != null && b != null) {
       const xa = tToX(a);
       const xb = tToX(b);
-      ctx.fillStyle = loopOn ? cssVar("--loop-soft") : "rgba(255,255,255,0.05)";
+      ctx.fillStyle = loopOn ? cssVar("--loop-soft") : cssVar("--loop-idle");
       ctx.fillRect(xa, 0, xb - xa, h);
     }
 
@@ -86,7 +87,7 @@
         const bar = i + 1;
         const x = Math.round(tToX(downbeats[i])) + 0.5;
         const labelled = (bar - 1) % step === 0;
-        ctx.strokeStyle = labelled ? "rgba(255,255,255,0.10)" : "rgba(255,255,255,0.04)";
+        ctx.strokeStyle = labelled ? cssVar("--grid-line") : cssVar("--grid-line-faint");
         ctx.beginPath();
         ctx.moveTo(x, labelled ? 4 : top);
         ctx.lineTo(x, h);

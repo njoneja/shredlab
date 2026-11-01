@@ -1,6 +1,7 @@
 <script lang="ts">
   import { app } from "./store.svelte";
-  import type { ModelInfo, Quality } from "./types";
+  import { THEMES, type ModelInfo, type Quality } from "./types";
+  import { THEME_INFO } from "./theme";
 
   let { onclose }: { onclose: () => void } = $props();
 
@@ -33,6 +34,20 @@
 
 <div class="pop" role="dialog" aria-label="Settings">
   <h2>Settings</h2>
+  <div class="field">
+    <div class="label" id="theme-label">Theme</div>
+    <div class="themes" role="radiogroup" aria-labelledby="theme-label">
+      {#each THEMES as t (t)}
+        <button role="radio" aria-checked={app.theme === t} onclick={() => app.setTheme(t)}>
+          <span class="swatch" style:background={THEME_INFO[t].bg} aria-hidden="true"
+            ><span class="swatch-dot" style:background={THEME_INFO[t].accent}></span></span
+          >
+          <span class="tname">{THEME_INFO[t].name}{#if t === THEMES[0]}<span class="muted note default">(default)</span>{/if}</span>
+          <span class="tick" aria-hidden="true">{app.theme === t ? "✓" : ""}</span>
+        </button>
+      {/each}
+    </div>
+  </div>
   {#if !st}
     <p class="muted">Settings are not available.</p>
   {:else}
@@ -79,7 +94,7 @@
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: 10px;
-    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+    box-shadow: var(--shadow);
   }
   h2 {
     margin: 0;
@@ -120,6 +135,53 @@
   .options button[aria-checked="true"] {
     border-color: var(--accent);
     background: var(--accent-soft);
+  }
+  .themes {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .themes button {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 5px 8px;
+    background: none;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    text-align: left;
+  }
+  .themes button:hover {
+    background: var(--surface-2);
+  }
+  .themes button[aria-checked="true"] {
+    background: var(--surface-2);
+    border-color: var(--border);
+  }
+  .swatch {
+    flex: none;
+    width: 22px;
+    height: 16px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    display: grid;
+    place-items: center;
+  }
+  .swatch-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+  }
+  .tname {
+    flex: 1;
+  }
+  .default {
+    margin-left: 6px;
+  }
+  .tick {
+    width: 14px;
+    color: var(--accent);
+    font-weight: 700;
   }
   select {
     width: 100%;

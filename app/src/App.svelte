@@ -34,7 +34,7 @@
     if (digit) {
       const stem = STEMS[Number(digit[1]) - 1];
       if (e.altKey) app.allButThis(stem);
-      else if (e.shiftKey) app.onlyThis(stem);
+      else if (e.shiftKey) app.toggleSolo(stem);
       else app.toggleStem(stem);
     } else if (e.altKey) {
       handled = false;
@@ -133,7 +133,7 @@
     border: 1px solid var(--danger);
     color: var(--danger);
     border-radius: var(--radius-sm);
-    background: rgba(255, 107, 91, 0.08);
+    background: color-mix(in srgb, var(--danger) 8%, transparent);
   }
   .mock-badge {
     position: fixed;
@@ -152,7 +152,7 @@
     border: 1px solid var(--border);
     padding: 8px 16px;
     border-radius: 20px;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+    box-shadow: var(--shadow);
     z-index: 70;
   }
 </style>

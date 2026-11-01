@@ -12,8 +12,8 @@
     [["Shift", "↑ ↓"], "Pitch ±1 semitone"],
     [["C"], "Click on / off"],
     [["1–6"], "Toggle stem on / off"],
-    [["Shift", "1–6"], "Only this stem"],
-    [["Alt", "1–6"], "All but this stem"],
+    [["Shift", "1–6"], "Solo stem on / off"],
+    [["Alt", "1–6"], "All but this stem (play along)"],
   ];
 </script>
 
@@ -31,7 +31,7 @@
         <dd>{what}</dd>
       {/each}
     </dl>
-    <p class="muted">Stems are numbered top to bottom: 1 vocals, 2 guitar, 3 bass, 4 drums, 5 piano, 6 other.</p>
+    <p class="muted">Stems are numbered top to bottom: 1 vocals, 2 guitar, 3 bass, 4 drums, 5 piano / keys, 6 other.</p>
   </div>
 </div>
 
@@ -40,7 +40,7 @@
     position: fixed;
     inset: 0;
     z-index: 60;
-    background: rgba(0, 0, 0, 0.55);
+    background: var(--backdrop);
     display: grid;
     place-items: center;
     padding: 20px;
@@ -52,6 +52,7 @@
     border: 1px solid var(--border);
     border-radius: 12px;
     padding: 16px 18px;
+    box-shadow: var(--shadow);
   }
   .head {
     display: flex;

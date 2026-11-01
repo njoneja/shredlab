@@ -1,6 +1,7 @@
 <script lang="ts">
   import Icon from "./Icon.svelte";
   import SettingsPopover from "./SettingsPopover.svelte";
+  import Wordmark from "./Wordmark.svelte";
   import { app, QUALITY_TEXT } from "./store.svelte";
   import { formatTime } from "./meter";
 
@@ -37,13 +38,13 @@
 <svelte:window onclick={onWindowClick} />
 
 <header>
-  <div class="title">
+  <div class="left">
+    <div class="brand" class:divider={!!app.song}><Wordmark size={20} /></div>
     {#if app.song}
-      <h1 title={app.song.path}>{app.song.title}</h1>
-      <div class="sub muted">{subline.join(" · ")}</div>
-    {:else}
-      <h1 class="brand"><Icon name="music" size={20} /> Stem Extractor</h1>
-      <div class="sub muted">Split songs into stems to play along or transcribe</div>
+      <div class="title">
+        <h1 title={app.song.path}>{app.song.title}</h1>
+        <div class="sub muted">{subline.join(" · ")}</div>
+      </div>
     {/if}
   </div>
   <div class="actions">
@@ -84,6 +85,22 @@
     justify-content: space-between;
     gap: 16px;
   }
+  .left {
+    display: flex;
+    align-items: flex-start;
+    gap: 16px;
+    min-width: 0;
+  }
+  .brand {
+    flex: none;
+    height: 40px;
+    display: flex;
+    align-items: center;
+  }
+  .brand.divider {
+    padding-right: 16px;
+    border-right: 1px solid var(--border);
+  }
   .title {
     min-width: 0;
   }
@@ -94,12 +111,6 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-  }
-  .brand {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    color: var(--accent);
   }
   .sub {
     font-size: 13px;

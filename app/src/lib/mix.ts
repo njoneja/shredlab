@@ -54,7 +54,7 @@ export function formatDb(g: number): string {
 /**
  * Whether playback/export of `onCount` stems (of a song with `stemCount`
  * stems) is built from the original: `original_available && 2·on >= n`.
- * Export ignores solo, so this is exactly the export rule.
+ * Solo always gives the plain sum, so callers check solo first.
  */
 export function backingFromOriginal(originalAvailable: boolean, onCount: number, stemCount: number): boolean {
   return originalAvailable && onCount > 0 && 2 * onCount >= stemCount;

@@ -3,7 +3,15 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Stem Extractor</title>
+    <title>ShredLab</title>
+    <script src="/theme-init.js"></script>
+    <!-- Page background per theme until app.css loads (same values as its --bg). -->
+    <style>
+      html { background: #0b0c10; color-scheme: dark; }
+      html[data-theme="rosewood"] { background: #1a0f10; }
+      html[data-theme="valve"] { background: #16120e; }
+      html[data-theme="manuscript"] { background: #f4efe4; color-scheme: light; }
+    </style>
   </head>
   <body>
     <div id="app"></div>

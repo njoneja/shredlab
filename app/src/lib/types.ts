@@ -4,6 +4,10 @@
 export const STEMS = ["vocals", "guitar", "bass", "drums", "piano", "other"] as const;
 export type StemName = (typeof STEMS)[number];
 
+/** UI themes (from the brand guide); the first is the default. */
+export const THEMES = ["stage", "rosewood", "valve", "manuscript"] as const;
+export type Theme = (typeof THEMES)[number];
+
 /** "standard" = 1 pass, "high" = 2 passes (Demucs shifts=2). */
 export type Quality = "standard" | "high";
 
@@ -48,6 +52,7 @@ export interface AppSettingsInfo {
   quality_choice: Quality | null; // saved choice; null = default for the device
   default_quality: Quality;
   device_label: string; // predicted device of model_id
+  theme: Theme; // UI theme ("stage" by default)
 }
 
 /** null = use the default. */
@@ -146,6 +151,8 @@ export interface ExportRequest {
   path: string;
   format: ExportFormat;
   stems: { stem: StemName; volume: number }[];
+  /** The stems are the soloed ones: mixed as the plain sum (never from the original). */
+  solo: boolean;
   speed_percent: number;
   semitones: number;
   cents: number;
@@ -211,6 +218,7 @@ export interface Backend {
   saveSongSettings(songId: string, settings: SongSettings): Promise<void>;
   getAppSettings(): Promise<AppSettingsInfo>;
   setAppSettings(settings: AppSettingsUpdate): Promise<AppSettingsInfo>;
+  setTheme(theme: Theme): Promise<AppSettingsInfo>;
   /** Paths dropped onto the window (Tauri drag-drop; HTML5 drop in the mock). */
   onFileDrop(cb: (paths: string[]) => void): Promise<Unlisten>;
   listen<E extends EventName>(event: E, cb: (payload: EventMap[E]) => void): Promise<Unlisten>;

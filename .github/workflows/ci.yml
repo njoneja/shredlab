@@ -96,7 +96,7 @@ jobs:
         if: runner.os == 'macOS'
         working-directory: target/debug/bundle/macos
         # tar keeps the executable bit, which upload-artifact's zip drops.
-        run: tar -czf stem-extractor-app.tar.gz "Stem Extractor.app"
+        run: tar -czf stem-extractor-app.tar.gz "ShredLab.app"
 
       - uses: actions/upload-artifact@v4
         with:

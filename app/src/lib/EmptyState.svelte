@@ -2,6 +2,7 @@
   import Icon from "./Icon.svelte";
   import { app } from "./store.svelte";
   import { formatTime } from "./meter";
+  import Wordmark from "./Wordmark.svelte";
 
   let dragOver = $state(false);
 
@@ -26,7 +27,8 @@
     ondragleave={() => (dragOver = false)}
     ondrop={() => (dragOver = false)}
   >
-    <div class="big-icon"><Icon name="music" size={40} /></div>
+    <div class="mark"><Wordmark size={44} /></div>
+    <p class="tagline muted">Split songs into stems to play along or transcribe</p>
     <h2>Open a song to get started</h2>
     <p class="muted">Drop an audio file here (MP3, WAV, FLAC, M4A, OGG) or choose one.</p>
     <button class="btn primary" onclick={() => app.pickAndOpen()} disabled={app.opening}>
@@ -83,8 +85,13 @@
     border-color: var(--accent);
     background: var(--accent-soft);
   }
-  .big-icon {
-    color: var(--accent);
+  /* The treble clef hangs below the baseline; leave room for it. */
+  .mark {
+    padding: 4px 0 18px;
+  }
+  .drop p.tagline {
+    margin: 0 0 14px;
+    font-size: 13px;
   }
   h2 {
     margin: 4px 0 0;

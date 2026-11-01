@@ -115,7 +115,7 @@
     background: var(--surface-3);
     border: 1px solid var(--border);
     border-radius: var(--radius);
-    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+    box-shadow: var(--shadow);
   }
   .head {
     display: flex;

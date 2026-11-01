@@ -31,6 +31,7 @@ export const tauriBackend: Backend = {
   saveSongSettings: (songId, settings) => invoke("save_song_settings", { songId, settings }),
   getAppSettings: () => invoke("get_app_settings"),
   setAppSettings: (settings) => invoke("set_app_settings", { settings }),
+  setTheme: (theme) => invoke("set_theme", { theme }),
   async onFileDrop(cb) {
     return getCurrentWebview().onDragDropEvent((e) => {
       if (e.payload.type === "drop" && e.payload.paths.length) cb(e.payload.paths);

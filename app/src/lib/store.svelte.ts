@@ -16,9 +16,11 @@ import type {
   StemMixState,
   StemName,
   Subdivision,
+  Theme,
 } from "./types";
 import { STEMS } from "./types";
 import { backingFromOriginal, clampGain } from "./mix";
+import { applyTheme, currentTheme, isTheme } from "./theme";
 import { barAt, commonBeatsPerBar, effectiveDownbeats, nearestBeatIndex, normaliseOverrides } from "./meter";
 
 export interface StemUi {
@@ -70,6 +72,8 @@ class AppState {
   // app settings (model, quality); persisted by the backend
   appSettings = $state<AppSettingsInfo | null>(null);
   savingSettings = $state(false);
+  /** UI theme; applied to <html> before first paint from a localStorage mirror. */
+  theme = $state<Theme>(currentTheme());
   /** Set when the user changed a setting; the prompt shows while the loaded stems don't match. */
   askReseparate = $state(false);
 
@@ -103,10 +107,15 @@ class AppState {
   beatsPerBar = $derived(commonBeatsPerBar(this.grid, this.downbeats));
   anySolo = $derived(STEMS.some((s) => this.mix[s].solo));
   hasLoop = $derived(this.loop.a_sec != null && this.loop.b_sec != null);
-  /** Stems the export mixes: the switched-on ones (solo ignored; on at −∞ still counts as on for P1). */
-  exportStems = $derived(STEMS.filter((s) => this.mix[s].on));
+  /**
+   * Stems the export mixes: exactly what is audible. With a solo, the soloed
+   * stems (always the plain sum); otherwise the switched-on ones (on at −∞
+   * still counts as on for P1).
+   */
+  exportStems = $derived(STEMS.filter((s) => (this.anySolo ? this.mix[s].solo : this.mix[s].on)));
   exportSummary = $derived.by(() => {
     const on = this.exportStems;
+    if (this.anySolo) return `Exports: ${on.join(", ")} (soloed)`;
     const off = STEMS.filter((s) => !on.includes(s));
     if (!on.length) return "Nothing to export: all stems are off";
     if (!off.length) return "Exports: all stems";
@@ -118,7 +127,11 @@ class AppState {
     const m = id ? this.appSettings?.models.find((x) => x.id === id) : undefined;
     return m?.stems.length || STEMS.length;
   });
-  exportFromOriginal = $derived(backingFromOriginal(!!this.song?.original_available, this.exportStems.length, this.songStemCount));
+  exportFromOriginal = $derived(
+    !this.anySolo && backingFromOriginal(!!this.song?.original_available, this.exportStems.length, this.songStemCount),
+  );
+  /** Every stem on and nothing soloed ("All on" would change nothing). */
+  allOnAlready = $derived(STEMS.every((s) => this.mix[s].on && !this.mix[s].solo));
   /** Loaded stems were made with a different model/quality than the current settings. */
   settingsMismatch = $derived.by(() => {
     const sw = this.song?.separated_with;
@@ -183,8 +196,26 @@ class AppState {
   async loadAppSettings() {
     try {
       this.appSettings = await api.getAppSettings();
+      // The backend setting wins over the mirror (e.g. a cleared WebView cache).
+      const t = this.appSettings.theme;
+      if (isTheme(t) && t !== this.theme) {
+        this.theme = t;
+        applyTheme(t);
+      }
     } catch (e) {
       console.warn("get_app_settings failed", e);
+    }
+  }
+
+  /** Applies a theme instantly and saves it with the app settings. */
+  async setTheme(t: Theme) {
+    if (t === this.theme) return;
+    this.theme = t;
+    applyTheme(t);
+    try {
+      this.appSettings = await api.setTheme(t);
+    } catch (e) {
+      this.report(e);
     }
   }
 
@@ -458,13 +489,21 @@ class AppState {
     await this.pushMix();
   }
 
-  async onlyThis(stem: StemName) {
-    for (const s of STEMS) this.mix[s].on = s === stem;
+  /** "All on": every stem on and solo cleared; volumes unchanged. */
+  async allOn() {
+    for (const s of STEMS) {
+      this.mix[s].on = true;
+      this.mix[s].solo = false;
+    }
     await this.pushMix();
   }
 
+  /** "All but this" (play along): this stem off, all others on, solo cleared. */
   async allButThis(stem: StemName) {
-    for (const s of STEMS) this.mix[s].on = s !== stem;
+    for (const s of STEMS) {
+      this.mix[s].on = s !== stem;
+      this.mix[s].solo = false;
+    }
     await this.pushMix();
   }
 
@@ -589,6 +628,7 @@ class AppState {
         path,
         format: this.exportFormat,
         stems: this.exportStems.map((s) => ({ stem: s, volume: this.mix[s].volume })),
+        solo: this.anySolo,
         speed_percent: this.speed,
         semitones: this.semitones,
         cents: this.cents,

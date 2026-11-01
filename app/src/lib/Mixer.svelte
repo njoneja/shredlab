@@ -1,16 +1,34 @@
 <script lang="ts">
-  import Icon from "./Icon.svelte";
   import { app } from "./store.svelte";
   import { STEMS, type StemName } from "./types";
   import { SLIDER_MAX, formatDb, gainToSlider, sliderToGain } from "./mix";
 
+  /** Full names: tooltips and every accessible name (never the tape abbreviation). */
   const LABEL: Record<StemName, string> = {
     vocals: "Vocals",
     guitar: "Guitar",
     bass: "Bass",
     drums: "Drums",
-    piano: "Piano",
+    piano: "Piano / keys",
     other: "Other",
+  };
+  /** Scribble-strip abbreviations written on the tape (brand guide). */
+  const SHORT: Record<StemName, string> = {
+    vocals: "VOX",
+    guitar: "GTR",
+    bass: "BASS",
+    drums: "DRUMS",
+    piano: "KEYS",
+    other: "MISC",
+  };
+  /** Small fixed tilt per strip, so they look hand-stuck. */
+  const TILT: Record<StemName, number> = {
+    vocals: -2,
+    guitar: 1.5,
+    bass: -1,
+    drums: 1,
+    piano: -1.5,
+    other: 2,
   };
 
   let menu = $state<{ stem: StemName; x: number; y: number } | null>(null);
@@ -33,6 +51,17 @@
 <svelte:window onclick={() => (menu = null)} onkeydown={(e) => e.key === "Escape" && (menu = null)} />
 
 <section class="mixer" class:disabled aria-label="Stem mixer">
+  <div class="head">
+    <h2>Stems</h2>
+    <button
+      class="btn small"
+      disabled={disabled || app.allOnAlready}
+      onclick={() => app.allOn()}
+      title="Turn every stem on and clear solo (volumes stay as set)"
+    >
+      All on
+    </button>
+  </div>
   {#if disabled}
     <div class="notice">
       {#if app.separating}
@@ -55,13 +84,42 @@
       aria-label={LABEL[stem]}
     >
       <label class="switch" title="Turn {LABEL[stem]} on/off ({i + 1})">
-        <input type="checkbox" checked={m.on} {disabled} onchange={(e) => app.setStemOn(stem, e.currentTarget.checked)} />
+        <input
+          type="checkbox"
+          checked={m.on}
+          {disabled}
+          aria-label="{LABEL[stem]} on"
+          onchange={(e) => app.setStemOn(stem, e.currentTarget.checked)}
+        />
         <span class="track"><span class="thumb"></span></span>
       </label>
+      <button
+        class="btn small solo"
+        aria-pressed={m.solo}
+        aria-label="Solo {LABEL[stem]}"
+        {disabled}
+        onclick={() => app.toggleSolo(stem)}
+        title="Solo {LABEL[stem]}: hear just this stem, without changing the switches (Shift+{i + 1})"
+      >
+        S
+      </button>
+      <button
+        class="all-but"
+        {disabled}
+        onclick={() => app.allButThis(stem)}
+        aria-label="Play along: everything except {LABEL[stem]}"
+        title="Play along: everything except {LABEL[stem]} (Alt+{i + 1})"
+      >
+        <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+          <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="1.6" />
+          <path d="M3.8 12.2 12.2 3.8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+        </svg>
+      </button>
       <span class="name">
-        <span class="stem-icon"><Icon name={stem} size={18} /></span>
-        {LABEL[stem]}
-        <kbd class="key">{i + 1}</kbd>
+        <span class="dot" aria-hidden="true"></span>
+        <span class="tape" style:--tilt="{TILT[stem]}deg" title={LABEL[stem]} aria-hidden="true">{SHORT[stem]}</span>
+        <span class="sr-only">{LABEL[stem]}</span>
+        <kbd class="key" aria-hidden="true">{i + 1}</kbd>
       </span>
       <!-- dB-linear from −40 to +6 dB in 0.5 dB steps; the bottom position is off (−∞). -->
       <input
@@ -80,37 +138,20 @@
         onkeydown={sliderKeys}
       />
       <span class="readout mono">{formatDb(m.volume)}</span>
-      <div class="actions">
-        <button class="btn small" {disabled} onclick={() => app.onlyThis(stem)} title="Turn all other stems off (Shift+{i + 1})">
-          Only this
-        </button>
-        <button class="btn small" {disabled} onclick={() => app.allButThis(stem)} title="Turn only this stem off (Alt+{i + 1})">
-          All but this
-        </button>
-        <button
-          class="btn small solo"
-          aria-pressed={m.solo}
-          {disabled}
-          onclick={() => app.toggleSolo(stem)}
-          title="Solo: hear just this stem for now, without changing the switches"
-        >
-          S
-        </button>
-      </div>
     </div>
   {/each}
   {#if app.anySolo && !disabled}
-    <div class="solo-note">Solo is on: only the soloed stem plays. Export still uses the switches.</div>
+    <div class="solo-note">Solo is on: only the soloed stem plays, and Export follows what you hear.</div>
   {/if}
 </section>
 
 {#if menu}
   <div class="menu" style:left="{menu.x}px" style:top="{menu.y}px" role="menu">
-    <button role="menuitem" onclick={() => menu && app.onlyThis(menu.stem)}>Only this</button>
-    <button role="menuitem" onclick={() => menu && app.allButThis(menu.stem)}>All but this</button>
     <button role="menuitem" onclick={() => menu && app.toggleSolo(menu.stem)}>
       {menu && app.mix[menu.stem].solo ? "Unsolo" : "Solo"}
     </button>
+    <button role="menuitem" onclick={() => menu && app.allButThis(menu.stem)}>All but this</button>
+    <button role="menuitem" onclick={() => app.allOn()}>All on</button>
   </div>
 {/if}
 
@@ -125,6 +166,20 @@
     border-radius: var(--radius);
     padding: 6px;
   }
+  .head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 4px 2px 8px;
+  }
+  h2 {
+    margin: 0;
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--muted);
+  }
   .notice {
     font-size: 12.5px;
     color: var(--muted);
@@ -132,15 +187,16 @@
   }
   .row {
     display: grid;
-    grid-template-columns: 40px minmax(110px, 150px) minmax(80px, 1fr) 62px auto;
+    grid-template-columns: 40px 24px 24px minmax(120px, 160px) minmax(80px, 1fr) 62px;
     align-items: center;
-    gap: 12px;
-    padding: 4px 8px;
+    gap: 10px;
+    padding: 5px 8px;
     border-radius: var(--radius-sm);
     border-left: 3px solid var(--stem-color);
     background: var(--surface-2);
     transition: opacity 0.12s;
   }
+  /* The whole row dims when off, tape included. */
   .row.off {
     opacity: 0.42;
   }
@@ -154,11 +210,30 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    font-weight: 600;
+    min-width: 0;
   }
-  .stem-icon {
-    color: var(--stem-color);
-    display: inline-flex;
+  .dot {
+    flex: none;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--stem-color);
+  }
+  /* Scribble strip: masking tape written in marker. */
+  .tape {
+    display: inline-block;
+    padding: 3px 10px 2px;
+    font-family: var(--font-marker);
+    font-size: 15px;
+    line-height: 1.15;
+    letter-spacing: 0.04em;
+    background: var(--tape);
+    color: var(--tape-ink);
+    clip-path: polygon(2% 0, 98% 6%, 100% 48%, 97% 100%, 4% 94%, 0 52%);
+    box-shadow: 0 1px 0 rgba(0, 0, 0, 0.25);
+    transform: rotate(var(--tilt, 0deg));
+    white-space: nowrap;
+    user-select: none;
   }
   .key {
     margin-left: auto;
@@ -173,19 +248,37 @@
     font-size: 12px;
     color: var(--muted);
   }
-  .actions {
-    display: flex;
-    gap: 6px;
-  }
   .solo {
-    width: 28px;
+    width: 24px;
+    padding: 0;
     justify-content: center;
     font-weight: 700;
   }
   .solo[aria-pressed="true"] {
     background: var(--solo);
     border-color: var(--solo);
-    color: #1b1600;
+    color: var(--accent-fg);
+  }
+  .solo[aria-pressed="true"]:hover:not(:disabled) {
+    background: var(--solo);
+    filter: brightness(1.08);
+  }
+  /* "All but this": quieter than S (no fill, faint icon). */
+  .all-but {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    border: 0;
+    border-radius: 5px;
+    background: transparent;
+    color: var(--faint);
+  }
+  .all-but:hover:not(:disabled) {
+    color: var(--muted);
+    background: var(--surface-3);
   }
   .solo-note {
     font-size: 12px;
@@ -252,7 +345,7 @@
     background: var(--surface-3);
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+    box-shadow: var(--shadow);
   }
   .menu button {
     text-align: left;
@@ -267,7 +360,7 @@
 
   @media (max-width: 960px) {
     .row {
-      grid-template-columns: 40px minmax(90px, 120px) minmax(60px, 1fr) 58px auto;
+      grid-template-columns: 40px 24px 24px minmax(100px, 130px) minmax(60px, 1fr) 58px;
       gap: 8px;
     }
     .key {

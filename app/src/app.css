@@ -1,42 +1,200 @@
-/* Theme tokens. Restyle the app by changing these. */
-:root {
-  --bg: #121418;
-  --surface: #1a1d23;
-  --surface-2: #22262e;
-  --surface-3: #2b3039;
-  --border: #2f343e;
-  --fg: #e8eaee;
-  --muted: #959cab;
-  --faint: #626a79;
-  --accent: #f0a83a; /* warm amber */
-  --accent-fg: #1a1205;
+/* Fonts are bundled (no network requests). Licenses: app/THIRD_PARTY.md. */
+@font-face {
+  font-family: "Rock Salt";
+  src: url("./assets/fonts/RockSalt-Regular.woff2") format("woff2");
+  font-display: block;
+}
+@font-face {
+  font-family: "Permanent Marker";
+  src: url("./assets/fonts/PermanentMarker-Regular.woff2") format("woff2");
+  font-display: block;
+}
+/* Noto Music, subset to the treble and bass clefs (U+1D11E, U+1D122). */
+@font-face {
+  font-family: "Noto Music";
+  src: url("./assets/fonts/NotoMusic-Clefs.woff2") format("woff2");
+  unicode-range: U+1D11E, U+1D122;
+  font-display: block;
+}
+
+/*
+ * Theme tokens (from the brand guide). <html data-theme="..."> picks the
+ * theme; public/theme-init.js sets it before first paint. Stage is the
+ * default, so it also applies without the attribute.
+ */
+:root,
+:root[data-theme="stage"] {
+  --bg: #0B0C10;
+  --surface: #14161D;
+  --surface-2: #1B1E27;
+  --surface-3: #232733;
+  --border: #262A35;
+  --fg: #EEF0F6;
+  --muted: #8F96A8;
+  --faint: #5E6578;
+  --accent: #FF3D7F;
+  --accent-fg: #14060C;
+  --accent-soft: rgba(255, 61, 127, 0.16);
+  --loop: #3DD6FF;
+  --loop-soft: rgba(61, 214, 255, 0.15);
+  --solo: var(--accent);
+  --danger: #FF5C4D;
+  --ok: #3DFFA0;
+  --wave: #4A5163;
+  --wave-played: #B9C0D0;
+  --playhead: #FFFFFF;
+  --tape: #E9DFC8;
+  --tape-ink: #2A1A14;
+  /* Not in the brand guide: waveform bar lines, the inactive loop shade, popup shadow, dialog backdrop. */
+  --grid-line: rgba(255, 255, 255, 0.1);
+  --grid-line-faint: rgba(255, 255, 255, 0.04);
+  --loop-idle: rgba(255, 255, 255, 0.05);
+  --shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+  --backdrop: rgba(0, 0, 0, 0.55);
+
+  --stem-vocals: #FF7AB8;
+  --stem-guitar: #FFB020;
+  --stem-bass: #8C7BFF;
+  --stem-drums: #3DFFA0;
+  --stem-piano: #3DD6FF;
+  --stem-other: #9AA1B2;
+
+  color-scheme: dark;
+}
+
+/* Rosewood */
+:root[data-theme="rosewood"] {
+  --bg: #1A0F10;
+  --surface: #261618;
+  --surface-2: #2F1C1F;
+  --surface-3: #3A2327;
+  --border: #43282B;
+  --fg: #F6E7DF;
+  --muted: #C2A39C;
+  --faint: #8A6B66;
+  --accent: #E0875A;
+  --accent-fg: #1E1406;
+  --accent-soft: rgba(224, 135, 90, 0.16);
+  --loop: #7FC4C0;
+  --loop-soft: rgba(127, 196, 192, 0.15);
+  --solo: var(--accent);
+  --danger: #FF6B5B;
+  --ok: #7BCB8A;
+  --wave: #5E4448;
+  --wave-played: #D9C4BD;
+  --playhead: #FFF4EC;
+  --tape: #E9DFC8;
+  --tape-ink: #2A1A14;
+  /* Not in the brand guide: waveform bar lines, the inactive loop shade, popup shadow, dialog backdrop. */
+  --grid-line: rgba(255, 255, 255, 0.1);
+  --grid-line-faint: rgba(255, 255, 255, 0.04);
+  --loop-idle: rgba(255, 255, 255, 0.05);
+  --shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+  --backdrop: rgba(0, 0, 0, 0.55);
+
+  --stem-vocals: #F28B9C;
+  --stem-guitar: #D9A441;
+  --stem-bass: #A592F0;
+  --stem-drums: #7BCB8A;
+  --stem-piano: #7FC4C0;
+  --stem-other: #BFA8A2;
+
+  color-scheme: dark;
+}
+
+/* Valve */
+:root[data-theme="valve"] {
+  --bg: #16120E;
+  --surface: #211B15;
+  --surface-2: #2A231B;
+  --surface-3: #342B22;
+  --border: #3A3027;
+  --fg: #F3E9D8;
+  --muted: #B3A48F;
+  --faint: #7D705E;
+  --accent: #F0A83A;
+  --accent-fg: #1A1205;
   --accent-soft: rgba(240, 168, 58, 0.16);
-  --loop: #4fb3d9;
-  --loop-soft: rgba(79, 179, 217, 0.16);
-  --solo: #e6c229;
-  --danger: #ff6b5b;
-  --ok: #5fcf8a;
-  --wave: #5b6475;
-  --wave-played: #b9c0cc;
-  --playhead: #ffffff;
+  --loop: #5FB8D6;
+  --loop-soft: rgba(95, 184, 214, 0.15);
+  --solo: var(--accent);
+  --danger: #FF6B5B;
+  --ok: #67CF8E;
+  --wave: #5A4F42;
+  --wave-played: #D2C6B3;
+  --playhead: #FFFFFF;
+  --tape: #E9DFC8;
+  --tape-ink: #2A1A14;
+  /* Not in the brand guide: waveform bar lines, the inactive loop shade, popup shadow, dialog backdrop. */
+  --grid-line: rgba(255, 255, 255, 0.1);
+  --grid-line-faint: rgba(255, 255, 255, 0.04);
+  --loop-idle: rgba(255, 255, 255, 0.05);
+  --shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+  --backdrop: rgba(0, 0, 0, 0.55);
 
-  --stem-vocals: #ef7aa3;
-  --stem-guitar: #f0a83a;
-  --stem-bass: #8f83f2;
-  --stem-drums: #5fcf8a;
-  --stem-piano: #4fb3d9;
-  --stem-other: #a7adb9;
+  --stem-vocals: #EF7AA3;
+  --stem-guitar: #E8C25A;
+  --stem-bass: #9A8CF5;
+  --stem-drums: #67CF8E;
+  --stem-piano: #5FB8D6;
+  --stem-other: #B3A48F;
 
+  color-scheme: dark;
+}
+
+/* Manuscript */
+:root[data-theme="manuscript"] {
+  --bg: #F4EFE4;
+  --surface: #FBF8F1;
+  --surface-2: #EFE8DA;
+  --surface-3: #E6DDCB;
+  --border: #D9CFBD;
+  --fg: #1D2230;
+  --muted: #5C6070;
+  --faint: #8A8D99;
+  --accent: #C2412D;
+  --accent-fg: #FFFFFF;
+  --accent-soft: rgba(194, 65, 45, 0.12);
+  --loop: #2F6DB3;
+  --loop-soft: rgba(47, 109, 179, 0.12);
+  --solo: var(--accent);
+  --danger: #B42318;
+  --ok: #25784B; /* darker than the brand guide's #2E8B57 so "ok" text reaches 4.5:1 */
+  --wave: #C9BFAD;
+  --wave-played: #4A5060;
+  --playhead: #1D2230;
+  --tape: #E3D3AE;
+  --tape-ink: #1D2230;
+  /* Not in the brand guide: waveform bar lines, the inactive loop shade, popup shadow, dialog backdrop. */
+  --grid-line: rgba(0, 0, 0, 0.12);
+  --grid-line-faint: rgba(0, 0, 0, 0.05);
+  --loop-idle: rgba(0, 0, 0, 0.05);
+  --shadow: 0 12px 32px rgba(60, 45, 20, 0.18);
+  --backdrop: rgba(40, 30, 10, 0.35);
+
+  --stem-vocals: #B8336A;
+  --stem-guitar: #B5651D;
+  --stem-bass: #5B4BC4;
+  --stem-drums: #2E8B57;
+  --stem-piano: #2F6DB3;
+  --stem-other: #7A7468;
+
+  color-scheme: light;
+}
+
+:root {
   --radius: 8px;
   --radius-sm: 5px;
   --gap: 12px;
   --font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --mono: ui-monospace, "Cascadia Mono", "SF Mono", Consolas, monospace;
+  --font-wordmark: "Rock Salt", cursive;
+  --font-music: "Noto Music", serif;
+  --font-marker: "Permanent Marker", cursive;
 
   font-family: var(--font);
   font-size: 14px;
   line-height: 1.45;
-  color-scheme: dark;
 }
 
 * {
@@ -72,15 +230,18 @@ button:disabled {
   outline-offset: 2px;
 }
 
+/* Native-size buttons (brand guide): 28px high, 13px, weight 500. */
 .btn {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  height: 32px;
+  height: 28px;
   padding: 0 12px;
-  border-radius: var(--radius-sm);
+  border-radius: 5px;
   border: 1px solid var(--border);
   background: var(--surface-2);
+  font-size: 13px;
+  font-weight: 500;
   white-space: nowrap;
 }
 .btn:hover:not(:disabled) {
@@ -90,7 +251,6 @@ button:disabled {
   background: var(--accent);
   border-color: var(--accent);
   color: var(--accent-fg);
-  font-weight: 600;
 }
 .btn.primary:hover:not(:disabled) {
   filter: brightness(1.08);
@@ -104,14 +264,17 @@ button:disabled {
   background: var(--surface-2);
 }
 .btn.small {
-  height: 26px;
+  height: 24px;
   padding: 0 8px;
   font-size: 12px;
 }
 .btn.icon-only {
   padding: 0;
-  width: 32px;
+  width: 28px;
   justify-content: center;
+}
+.btn.small.icon-only {
+  width: 24px;
 }
 .btn.toggle[aria-pressed="true"] {
   background: var(--accent-soft);
@@ -141,4 +304,43 @@ kbd {
   border-radius: 4px;
   background: var(--surface-2);
   color: var(--muted);
+}
+
+/* Visually hidden, still read by screen readers. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Wordmark (brand guide): Rock Salt letters, Noto Music clefs in the accent. */
+.wordmark {
+  font-family: var(--font-wordmark);
+  line-height: 1;
+  display: inline-flex;
+  align-items: baseline;
+  color: var(--fg);
+  white-space: nowrap;
+}
+.wordmark .clef {
+  font-family: var(--font-music);
+  display: inline-block;
+  line-height: 1;
+  position: relative;
+  transform: skewX(-6deg);
+  color: var(--accent);
+}
+.wordmark .treble {
+  font-size: 1.256em;
+  top: 0.12em;
+}
+.wordmark .bass {
+  font-size: 1.06em;
+  top: 0.15em;
 }
