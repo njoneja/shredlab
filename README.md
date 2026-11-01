@@ -59,6 +59,42 @@ Note: the Tauri crate embeds the built frontend, so `cargo build`/`clippy`/
 `pnpm --dir app build` once first (any `tauri dev`/`tauri build` also
 creates it).
 
+### Separation CLI (`stemx`)
+
+```sh
+cargo build --release -p stemx-cli
+target/release/stemx models                                   # list models (+ license, personal flag)
+target/release/stemx selftest [--model ID] [--device auto|cpu|gpu]
+target/release/stemx separate song.mp3 --model htdemucs_6s --out out/song [--device auto|cpu|gpu]
+target/release/stemx decode song.mp3 song.wav                 # decoder check (44.1 kHz float WAV)
+```
+
+Models are looked up in `--models-dir DIR` (repeatable), else in
+`$STEMX_MODELS_DIR` (`;`-separated on Windows, `:` elsewhere), else in
+`models/registry` and `models/personal` of the repo. `--device auto` uses
+the GPU (DirectML on Windows, CoreML on macOS, CUDA with the `cuda` cargo
+feature) only if its self-test passes, else the CPU. Self-test results are
+cached in `target/stemx-cache/` (`--cache-dir`).
+
+Slow golden tests against the Python reference (need
+`tests/fixtures/local/` and the model folders):
+
+```sh
+cargo test --release -p stemx-separation --test golden -- --ignored --nocapture --test-threads 1
+```
+
+### ONNX Runtime binaries
+
+`stemx-separation` uses the `ort` crate with `download-binaries`: at build
+time it downloads pyke's prebuilt ONNX Runtime (1.31, with DirectML on
+Windows) into the user cache (`%LOCALAPPDATA%\ort.pyke.io`) and links it
+**statically**. The only runtime DLL is `DirectML.dll`, which `copy-dylibs`
+copies next to the built binaries (`target/debug`, `target/release`); ship
+it next to the app executable. Set `ORT_LIB_LOCATION` to link a local ORT
+build instead. The `load-dynamic` feature of `stemx-separation` loads
+`onnxruntime.dll` at runtime instead (`ORT_DYLIB_PATH`, or next to the
+executable), e.g. to test against Microsoft's official builds.
+
 ## License
 
 [MIT](LICENSE). Bundled model weights carry their own licenses (see
