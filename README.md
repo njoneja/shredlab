@@ -167,6 +167,8 @@ executable), e.g. to test against Microsoft's official builds.
 
 ## License
 
+Copyright (C) 2026 Navneet Joneja.
+
 [GPL-3.0-or-later](LICENSE), with an additional permission for combining
 with Microsoft DirectML ([LICENSE-EXCEPTION](LICENSE-EXCEPTION)). The name
 and logo are not covered by the GPL; see [TRADEMARKS.md](TRADEMARKS.md).
