@@ -117,6 +117,16 @@ fn full_separation(
     reference: &[f32],
     device: DevicePref,
 ) {
+    full_separation_shifts(entry, input, reference, device, 1);
+}
+
+fn full_separation_shifts(
+    entry: &stemx_separation::ModelEntry,
+    input: &[f32],
+    reference: &[f32],
+    device: DevicePref,
+    shifts: usize,
+) {
     let cache = std::env::temp_dir().join("stemx-golden-cache");
     let opts = LoadOptions {
         device,
@@ -131,14 +141,15 @@ fn full_separation(
     let len = input.len() / 2;
     let t0 = Instant::now();
     let stems = sep
-        .separate(
+        .separate_shifts(
             &[&input[..len], &input[len..]],
+            shifts,
             &mut |_| {},
             &AtomicBool::new(false),
         )
         .unwrap();
     let label = format!(
-        "full separation on {} ({:.2}s)",
+        "full separation shifts={shifts} on {} ({:.2}s)",
         sep.ep().label(),
         t0.elapsed().as_secs_f64()
     );
@@ -256,4 +267,35 @@ fn roformer_golden() {
     let stems_ref = read_bin(&dir, "roformer_stems");
     full_separation(entry, &input, &stems_ref, DevicePref::Cpu);
     full_separation(entry, &input, &stems_ref, DevicePref::Gpu);
+}
+
+#[test]
+#[ignore = "slow; needs tests/fixtures/local and model folders"]
+fn demucs_shifts_golden() {
+    let Some(dir) = local() else { return };
+    if !dir.join("demucs_shifts2_stems.bin").is_file() {
+        eprintln!("skipping: demucs_shifts2_stems not found (tools/make_goldens.py --shifts-only)");
+        return;
+    }
+    let reg = registry();
+    let Some(entry) = reg.get("htdemucs_6s") else {
+        eprintln!("skipping: htdemucs_6s model not found");
+        return;
+    };
+    assert_eq!(
+        stemx_separation::shift_offsets(2, entry.manifest.sample_rate),
+        vec![0, 11025]
+    );
+    let input = read_bin(&dir, "demucs_input");
+    let stems_ref = read_bin(&dir, "demucs_shifts2_stems");
+    full_separation_shifts(entry, &input, &stems_ref, DevicePref::Cpu, 2);
+    full_separation_shifts(entry, &input, &stems_ref, DevicePref::Gpu, 2);
+    // sanity: shifts change the output (vs the single-pass golden)
+    let single = read_bin(&dir, "demucs_stems");
+    let per = single.len() / 6;
+    let d = snr_db(&single[..per], &stems_ref[..per]);
+    eprintln!(
+        "drums: shifts=2 vs shifts=1 reference SNR {d:.1} dB (expected well below {MIN_SNR_DB})"
+    );
+    assert!(d < MIN_SNR_DB);
 }

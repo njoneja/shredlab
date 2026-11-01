@@ -18,6 +18,16 @@ Pipeline for a song (2, L):
        run, cropped back to n, multiplied by triangular weights[:n] and
        overlap-added; finally divided by the summed weights.
     3. out * std + mean
+
+Shifts (demucs apply_model shifts=N > 1, `separate(..., shifts=N)`): step 1 once
+over the real audio; then for each deterministic offset (`shift_offsets`) the
+normalized song is padded as zeros(max_shift - offset) ++ x ++ zeros(offset)
+(== demucs' TensorChunk view of the max_shift-padded mix; chunk context outside
+the view is zeros either way), run through step 2, cropped by
+max_shift - offset, summed and divided by N; then step 3.
+
+CLI (debugging / ad-hoc goldens):
+    python -m tools.reference.demucs_hybrid AUDIO OUT_DIR [--shifts 2] [--model-dir DIR]
 """
 
 import math
@@ -178,18 +188,52 @@ def chunked_apply(model, mix, progress=None):
     return out
 
 
+def max_shift(sample_rate=44100):
+    """demucs apply_model: int(0.5 * samplerate)."""
+    return int(0.5 * sample_rate)
+
+
+def shift_offsets(shifts, sample_rate=44100):
+    """Deterministic offsets round(k * max_shift / shifts), half up, k in 0..shifts
+    (upstream draws random.randint(0, max_shift)). shifts=2 @ 44.1 kHz: [0, 11025].
+    Same as stemx_separation::shift_offsets."""
+    ms = max_shift(sample_rate)
+    return [(2 * k * ms + shifts) // (2 * shifts) for k in range(shifts)]
+
+
+def shifted_apply(model, x, shifts, sample_rate=44100, progress=None):
+    """demucs apply_model shifts on normalized x (2, L) with deterministic offsets."""
+    length = x.shape[1]
+    ms = max_shift(sample_rate)
+    out = np.zeros((model.n_stems, x.shape[0], length), dtype=np.float32)
+    for k, offset in enumerate(shift_offsets(shifts, sample_rate)):
+        lead = ms - offset
+        shifted = np.zeros((x.shape[0], lead + length + offset), dtype=np.float32)
+        shifted[:, lead : lead + length] = x
+        pr = (lambda d, t, k=k: progress(k * t + d, shifts * t)) if progress else None
+        res = chunked_apply(model, shifted, pr)
+        out += res[:, :, lead : lead + length]
+    out /= np.float32(shifts)
+    return out
+
+
 def _wrap(sess, overlap=0.25):
     return sess if hasattr(sess, "run_window") else DemucsHybrid(sess, overlap)
 
 
-def separate(sess, mix, overlap=0.25, progress=None):
+def separate(sess, mix, overlap=0.25, progress=None, shifts=1, sample_rate=44100):
     """mix (2, L) float32 -> (N, 2, L) float32. demucs apply_model with
-    split=True, overlap=0.25, transition_power=1, shifts=0.
+    split=True, overlap=0.25, transition_power=1, shifts=0 (shifts <= 1) or
+    deterministic shifts (see module docstring).
 
     `sess` is an onnxruntime session (or a DemucsHybrid)."""
     model = _wrap(sess, overlap)
     mean, std = song_stats(mix)
-    out = chunked_apply(model, (mix - mean) / std, progress)
+    x = (mix - mean) / std
+    if shifts <= 1:
+        out = chunked_apply(model, x, progress)
+    else:
+        out = shifted_apply(model, x, shifts, sample_rate, progress)
     return out * std + mean
 
 
@@ -200,3 +244,41 @@ def separate_single_segment(sess, seg):
     assert seg.shape[1] == model.segment
     mean, std = song_stats(seg)
     return model.run_window((seg - mean) / std) * std + mean
+
+
+def _main():
+    import argparse
+    import subprocess
+    import time
+    from pathlib import Path
+
+    from scipy.io import wavfile
+
+    from tools.reference import manifest as mf
+    from tools.reference.sessions import make_session
+
+    root = Path(__file__).resolve().parents[2]
+    ap = argparse.ArgumentParser(description="Separate an audio file with the demucs-hybrid reference.")
+    ap.add_argument("audio")
+    ap.add_argument("out_dir")
+    ap.add_argument("--model-dir", default=str(root / "models" / "registry" / "htdemucs_6s"))
+    ap.add_argument("--shifts", type=int, default=1, help="time-shifted passes to average (1 = plain)")
+    ap.add_argument("--ep", default="cpu", choices=["cpu", "dml"])
+    a = ap.parse_args()
+    man = mf.load_manifest(a.model_dir)
+    sr = man["sample_rate"]
+    raw = subprocess.run(["ffmpeg", "-loglevel", "error", "-i", a.audio, "-f", "f32le", "-ac", "2", "-ar", str(sr), "-"],
+                         check=True, capture_output=True).stdout
+    mix = np.ascontiguousarray(np.frombuffer(raw, np.float32).reshape(-1, 2).T)
+    sess = make_session(Path(a.model_dir) / man["file"], a.ep, man["session"])
+    t0 = time.perf_counter()
+    stems = separate(DemucsHybrid(sess, man["overlap"]), mix, shifts=a.shifts, sample_rate=sr)
+    print(f"separated {mix.shape[1] / sr:.1f}s in {time.perf_counter() - t0:.1f}s (shifts={a.shifts})")
+    out = Path(a.out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    for name, st in zip(man["stems"], stems):
+        wavfile.write(out / f"{name}.wav", sr, st.T)
+
+
+if __name__ == "__main__":
+    _main()

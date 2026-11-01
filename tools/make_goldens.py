@@ -2,6 +2,7 @@
 
 Usage:
     .venv\\Scripts\\python.exe tools/make_goldens.py [--audio FILE] [--skip-roformer]
+    .venv\\Scripts\\python.exe tools/make_goldens.py --shifts-only   # only demucs_shifts2_stems
 
 Needs ffmpeg on PATH, models/registry/htdemucs_6s (tools/registry.py
 build-htdemucs) and, for the RoFormer goldens, models/personal/bs-roformer-sw
@@ -34,6 +35,17 @@ def decode(path, sr=SR):
     return np.ascontiguousarray(np.frombuffer(raw, np.float32).reshape(-1, 2).T)
 
 
+def demucs_shifts_golden(w, dh, man, sess, x, shifts=2):
+    """demucs_input separated with deterministic shifts (dh.shift_offsets)."""
+    model = dh.DemucsHybrid(sess, man["overlap"])
+    t0 = time.perf_counter()
+    stems = dh.separate(model, x, shifts=shifts, sample_rate=man["sample_rate"])
+    print(f"demucs separate shifts={shifts}: {time.perf_counter() - t0:.1f}s")
+    w.bin(f"demucs_shifts{shifts}_stems", stems,
+          f"dh.separate(demucs_input, shifts={shifts}): (N=6, 2, {x.shape[1]}), offsets "
+          f"{dh.shift_offsets(shifts, man['sample_rate'])}")
+
+
 def main():
     from tools.fixture_io import FixtureWriter
     from tools.reference import demucs_hybrid as dh
@@ -47,7 +59,17 @@ def main():
     ap.add_argument("--demucs-dir", default=str(ROOT / "models" / "registry" / "htdemucs_6s"))
     ap.add_argument("--roformer-dir", default=str(ROOT / "models" / "personal" / "bs-roformer-sw"))
     ap.add_argument("--skip-roformer", action="store_true")
+    ap.add_argument("--shifts-only", action="store_true",
+                    help="only (re)generate demucs_shifts2_stems from the existing demucs_input.bin")
     a = ap.parse_args()
+
+    if a.shifts_only:
+        w = FixtureWriter(OUT, "index.json", merge=True)
+        man = mf.load_manifest(a.demucs_dir)
+        x = np.fromfile(OUT / "demucs_input.bin", "<f4").reshape(2, -1)
+        demucs_shifts_golden(w, dh, man, make_session(Path(a.demucs_dir) / man["file"], "cpu", man["session"]), x)
+        w.close()
+        return
 
     song = decode(a.audio)
     w = FixtureWriter(OUT, "index.json", {"sample_rate": SR, "source_audio": Path(a.audio).name,
@@ -79,6 +101,7 @@ def main():
     w.bin("demucs_w0_spec", sp, "window 0 graph output `spec`: (6, 4, 2048, 336)")
     w.bin("demucs_w0_out", wave + dh.ispec(dh.uncac(sp), seg.shape[1]),
           "window 0 combined output wave + ispec(uncac(spec)) (normalized domain, before weights): (6, 2, 343980)")
+    demucs_shifts_golden(w, dh, man, sess, x)
     del sess, model
 
     # --- roformer-mask: 60-90 s excerpt (4 full chunks incl. the end-aligned tail)
