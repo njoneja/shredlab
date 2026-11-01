@@ -45,3 +45,27 @@ lto = true
 opt-level = 3
 panic = "abort"
 strip = true
+
+# Dev builds: optimize dependencies and the DSP-heavy workspace crates so
+# `pnpm --dir app tauri dev` decodes, resamples and separates at usable
+# speed (and the audio callback doesn't underrun). App glue stays debug.
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.dev.package.stemx-dsp]
+opt-level = 3
+
+[profile.dev.package.stemx-io]
+opt-level = 3
+
+[profile.dev.package.stemx-beats]
+opt-level = 3
+
+[profile.dev.package.stemx-separation]
+opt-level = 3
+
+[profile.dev.package.stemx-library]
+opt-level = 3
+
+[profile.dev.package.stemx-audio]
+opt-level = 3

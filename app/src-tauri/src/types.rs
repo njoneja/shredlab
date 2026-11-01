@@ -1,0 +1,243 @@
+//! Serde types of the UI <-> backend contract (`app/src/lib/API.md`).
+//! Field names are the exact snake_case JSON names.
+
+use serde::{Deserialize, Serialize};
+
+pub const STEMS: [&str; 6] = ["vocals", "guitar", "bass", "drums", "piano", "other"];
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SeparatedWith {
+    pub model_name: String,
+    pub device_label: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SongInfo {
+    pub song_id: String,
+    pub path: String,
+    pub title: String,
+    pub artist: Option<String>,
+    pub duration_sec: f64,
+    pub sample_rate: u32,
+    pub channels: u32,
+    pub stems_cached: bool,
+    pub separated_with: Option<SeparatedWith>,
+    pub beats_ready: bool,
+    pub bpm: Option<f64>,
+    pub settings: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LibraryEntry {
+    pub song_id: String,
+    pub path: String,
+    pub title: String,
+    pub artist: Option<String>,
+    pub duration_sec: f64,
+    pub stems_cached: bool,
+    pub last_opened_ms: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SeparationStage {
+    LoadingModel,
+    Decoding,
+    Separating,
+    Writing,
+    Beats,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StemMixState {
+    pub stem: String,
+    pub on: bool,
+    pub volume: f32,
+    pub solo: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+pub struct LoopState {
+    pub a_sec: Option<f64>,
+    pub b_sec: Option<f64>,
+    pub enabled: bool,
+}
+
+impl LoopState {
+    /// The active loop range, if enabled and valid.
+    pub fn range(&self) -> Option<(f64, f64)> {
+        match (self.enabled, self.a_sec, self.b_sec) {
+            (true, Some(a), Some(b)) if a.is_finite() && b.is_finite() && a < b => Some((a, b)),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ClickState {
+    pub enabled: bool,
+    pub count_in_enabled: bool,
+    pub count_in_beats: u32,
+    pub subdivision: u32,
+    pub beats_per_bar: u32,
+    pub volume: f32,
+}
+
+impl Default for ClickState {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            count_in_enabled: false,
+            count_in_beats: 4,
+            subdivision: 1,
+            beats_per_bar: 4,
+            volume: 0.8,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum MeterOverride {
+    BeatOne {
+        beat_index: usize,
+    },
+    BeatsPerBar {
+        beat_index: usize,
+        beats_per_bar: u32,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MeterOverridesPayload {
+    pub overrides: Vec<MeterOverride>,
+    pub downbeats: Vec<f64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Waveform {
+    pub duration_sec: f64,
+    pub peaks: Vec<f32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct BeatGrid {
+    pub beats: Vec<f64>,
+    pub downbeats: Vec<f64>,
+    pub bpm: Option<f64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExportFormat {
+    Wav,
+    Flac,
+    Mp3,
+}
+
+impl ExportFormat {
+    pub fn ext(self) -> &'static str {
+        match self {
+            Self::Wav => "wav",
+            Self::Flac => "flac",
+            Self::Mp3 => "mp3",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ExportStem {
+    pub stem: String,
+    pub volume: f32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ExportRequest {
+    pub path: String,
+    pub format: ExportFormat,
+    pub stems: Vec<ExportStem>,
+    pub speed_percent: f64,
+    pub semitones: f64,
+    pub cents: f64,
+}
+
+// ------------------------------------------------------------------ events
+
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct PlaybackPosition {
+    pub position_sec: f64,
+    pub playing: bool,
+    pub count_in_beats_left: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SeparationProgress {
+    pub song_id: String,
+    pub stage: SeparationStage,
+    pub fraction: f32,
+    pub model_name: String,
+    pub device_label: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SeparationDone {
+    pub song_id: String,
+    pub separated_with: SeparatedWith,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SeparationError {
+    pub song_id: String,
+    pub message: String,
+    pub cancelled: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SongIdPayload {
+    pub song_id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ExportProgress {
+    pub fraction: f32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ExportDone {
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ExportError {
+    pub message: String,
+    pub cancelled: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn json_shapes_match_contract() {
+        let o: Vec<MeterOverride> = serde_json::from_str(
+            r#"[{"kind":"beat_one","beat_index":3},{"kind":"beats_per_bar","beat_index":5,"beats_per_bar":3}]"#,
+        )
+        .unwrap();
+        assert_eq!(o[0], MeterOverride::BeatOne { beat_index: 3 });
+        let s = serde_json::to_value(SeparationStage::LoadingModel).unwrap();
+        assert_eq!(s, "loading_model");
+        let r: ExportRequest = serde_json::from_str(
+            r#"{"path":"x.mp3","format":"mp3","stems":[{"stem":"bass","volume":0.5}],"speed_percent":75,"semitones":-2,"cents":10}"#,
+        )
+        .unwrap();
+        assert_eq!(r.format, ExportFormat::Mp3);
+        let l: LoopState =
+            serde_json::from_str(r#"{"a_sec":null,"b_sec":2.0,"enabled":true}"#).unwrap();
+        assert_eq!(l.range(), None);
+        let c: ClickState = serde_json::from_str(
+            r#"{"enabled":true,"count_in_enabled":true,"count_in_beats":7,"subdivision":2,"beats_per_bar":4,"volume":0.5}"#,
+        )
+        .unwrap();
+        assert_eq!(c.count_in_beats, 7);
+    }
+}

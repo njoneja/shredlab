@@ -32,6 +32,10 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "resources": {
+      "../../models/registry/htdemucs_6s/*": "models/htdemucs_6s/",
+      "../../models/onnx/beat_this_final0.onnx": "models/beat_this_final0.onnx"
+    }
   }
 }
