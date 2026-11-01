@@ -13,9 +13,13 @@
 //! -> a loop A-B export with count-in (played once, faded edges) -> the
 //! music start: whole-song count-in export and play from 0 start there
 //! ("Count in to where the music starts"; off = from 0)
+//! -> Refine (guitar keep-left + EQ, bass EQ): "All but guitar" export vs
+//! the refine reference, stretched refined export -> strength (exact and
+//! Smooth: plain sum of all stems vs the original)
 //! -> +6 dB boost export (no clipping) -> WAV/FLAC/MP3 exports. Each step
 //! is logged with its timing; the last line is `AUTOTEST PASS` or
-//! `AUTOTEST FAIL: ...`. The saved settings are restored at the end. Use a
+//! `AUTOTEST FAIL: ...`. The saved settings (app settings, and the song's
+//! refine and strength) are restored at the end. Use a
 //! fresh `STEMX_DATA_DIR` to time both separations.
 
 use std::path::{Path, PathBuf};
@@ -39,7 +43,11 @@ pub fn event_tap() -> Option<Tap> {
     RX.get_or_init(|| Mutex::new(Some(rx)));
     let tx = Mutex::new(tx);
     Some(Arc::new(move |name, v| {
-        if name != "playback-position" && name != "separation-progress" && name != "export-progress"
+        if name != "playback-position"
+            && name != "separation-progress"
+            && name != "export-progress"
+            && name != "strength-progress"
+            && name != "refine-field"
         {
             if let Ok(tx) = tx.lock() {
                 let _ = tx.send((name.to_string(), v.clone()));
@@ -534,6 +542,183 @@ fn check_range_export(
     res
 }
 
+fn wait_strength(rx: &Receiver<Event>) -> Result<f64, String> {
+    let t = Instant::now();
+    wait_for(rx, Duration::from_secs(120), |name, v| match name {
+        "strength-done" => Some(Ok(())),
+        "strength-error" if v["cancelled"] != true => Some(Err(format!("strength failed: {v}"))),
+        _ => None,
+    })?;
+    Ok(t.elapsed().as_secs_f64())
+}
+
+fn plain_req(path: &Path, stems: Vec<ExportStem>, solo: bool, speed: f64) -> ExportRequest {
+    ExportRequest {
+        path: path.display().to_string(),
+        format: ExportFormat::Wav,
+        stems,
+        solo,
+        speed_percent: speed,
+        semitones: 0.0,
+        cents: 0.0,
+        click: false,
+        count_in: false,
+        start_sec: None,
+        end_sec: None,
+    }
+}
+
+/// Plays 4 s from 60 s and logs the producer thread's CPU load (render time
+/// per audio time, one core) over that interval.
+fn measure_load(b: &Arc<Backend>, what: &str) {
+    let Some(s0) = b.debug_engine_stats() else {
+        return;
+    };
+    b.seek(60.0);
+    if b.play().is_err() {
+        return;
+    }
+    std::thread::sleep(Duration::from_secs(4));
+    b.pause();
+    if let Some(s1) = b.debug_engine_stats() {
+        let ns = s1.render_nanos.saturating_sub(s0.render_nanos) as f64;
+        let fr = s1.rendered_frames.saturating_sub(s0.rendered_frames) as f64;
+        let audio_ns = fr * 1e9 / s1.device_sample_rate.max(1) as f64;
+        log!(
+            "autotest: CPU {what}: {:.2} % of one core, underruns {} -> {}",
+            if audio_ns > 0.0 {
+                100.0 * ns / audio_ns
+            } else {
+                0.0
+            },
+            s0.underruns,
+            s1.underruns
+        );
+    }
+}
+
+/// Refine and strength, through the same calls as the UI. `plain` is the
+/// unrefined "All but guitar" export.
+fn check_refine_strength(
+    b: &Arc<Backend>,
+    rx: &Receiver<Event>,
+    out: &Path,
+    plain: &[Vec<f32>; 2],
+) -> Result<(), String> {
+    use stemx_dsp::refine::{eq_preset, PanParams, RefineParams};
+    for stem in STEMS {
+        b.set_refine(stem, RefineParams::default())?;
+    }
+    if b.set_strength(StrengthSetting::default())? > 0 {
+        wait_strength(rx)?;
+    }
+    b.set_mix(
+        STEMS
+            .iter()
+            .map(|s| StemMixState {
+                stem: s.to_string(),
+                on: *s != "guitar",
+                volume: 1.0,
+                solo: false,
+            })
+            .collect(),
+    );
+    measure_load(b, "unrefined (all but guitar)");
+    let guitar = RefineParams {
+        pan: PanParams::left(),
+        eq: eq_preset("guitar-focus").ok_or("no preset")?.eq,
+    };
+    let bass = RefineParams {
+        eq: eq_preset("bass-notes").ok_or("no preset")?.eq,
+        ..RefineParams::default()
+    };
+    b.set_refine("guitar", guitar)?;
+    b.set_refine("bass", bass)?;
+    b.set_refine_analysis(Some("guitar".into()));
+    measure_load(
+        b,
+        "refined (guitar keep-left + EQ, bass EQ, field analysis)",
+    );
+    b.set_speed(80);
+    measure_load(b, "refined, 80% speed");
+    b.set_speed(100);
+    let file = out.join("autotest-refine-all-but-guitar.wav");
+    let _ = std::fs::remove_file(&file);
+    let secs = export_wait(
+        b,
+        rx,
+        plain_req(&file, mix_all_but("guitar", None), false, 100.0),
+    )?;
+    let got = read_wav(&file)?;
+    let others: Vec<&str> = STEMS.iter().copied().filter(|s| *s != "guitar").collect();
+    let want = b
+        .debug_refine_reference(&others)
+        .ok_or("no refine reference")?;
+    let (snr, k) = snr_db(&got, &want);
+    let (snr_plain, _) = snr_db(&got, plain);
+    log!(
+        "autotest: refined all-but-guitar export {secs:.1}s: vs refine reference {snr:.1} dB (gain {k:.3}), vs unrefined export {snr_plain:.1} dB"
+    );
+    if snr < MIX_SNR_MIN || snr_plain > snr - 3.0 {
+        return Err("refined export does not match original - left guitar + EQ'd bass".into());
+    }
+    // Stretched, refined: right length, no clipping.
+    let file = out.join("autotest-refine-80.wav");
+    let _ = std::fs::remove_file(&file);
+    let secs = export_wait(
+        b,
+        rx,
+        plain_req(&file, mix_all_but("guitar", None), false, 80.0),
+    )?;
+    let st = read_wav(&file)?;
+    let peak = st
+        .iter()
+        .flat_map(|c| c.iter())
+        .fold(0.0f32, |m, v| m.max(v.abs()));
+    let ratio = st[0].len() as f64 / got[0].len() as f64;
+    log!("autotest: refined export at 80% {secs:.1}s: length ratio {ratio:.4}, peak {peak:.3}");
+    if (ratio - 1.25).abs() > 0.002 || peak > 1.0 {
+        return Err("stretched refined export is wrong".into());
+    }
+    b.set_refine_analysis(None);
+    b.set_refine("guitar", RefineParams::default())?;
+    b.set_refine("bass", RefineParams::default())?;
+
+    // Strength: the plain sum of all stems (solo all) vs the original.
+    let all: Vec<ExportStem> = mix_all_but("", None);
+    let sum_vs_original = |name: &str| -> Result<f64, String> {
+        let file = out.join(format!("autotest-strength-{name}.wav"));
+        let _ = std::fs::remove_file(&file);
+        export_wait(b, rx, plain_req(&file, all.clone(), true, 100.0))?;
+        let got = read_wav(&file)?;
+        let [orig, _] = b.debug_mix_references(&STEMS).ok_or("no reference")?;
+        Ok(snr_db(&got, &orig).0)
+    };
+    let natural = sum_vs_original("natural")?;
+    let job = b.set_strength(StrengthSetting {
+        level: 2,
+        smooth: false,
+    })?;
+    if job == 0 {
+        return Err("strength did not start".into());
+    }
+    let secs = wait_strength(rx)?;
+    let medium = sum_vs_original("medium")?;
+    b.set_strength(StrengthSetting {
+        level: 2,
+        smooth: true,
+    })?;
+    let secs_s = wait_strength(rx)?;
+    let smooth = sum_vs_original("medium-smooth")?;
+    log!(
+        "autotest: strength: sum of stems vs original: Natural {natural:.1} dB, Medium {medium:.1} dB ({secs:.2}s), Medium+Smooth {smooth:.1} dB ({secs_s:.2}s)"
+    );
+    if medium < MIX_SNR_MIN || medium < natural + 5.0 || smooth > medium - 5.0 {
+        return Err("strength: derived stems don't sum to the original (or Smooth does)".into());
+    }
+    Ok(())
+}
+
 fn run(b: &Arc<Backend>, song: &Path, out: &Path, rx: &Receiver<Event>) -> Result<(), String> {
     std::fs::create_dir_all(out).map_err(|e| e.to_string())?;
     let path = song.display().to_string();
@@ -764,6 +949,22 @@ fn run(b: &Arc<Backend>, song: &Path, out: &Path, rx: &Receiver<Event>) -> Resul
     }
     check_click_export(b, rx, out, &got)?;
     check_range_export(b, rx, out, &got)?;
+    {
+        // The song's own refine/strength go back afterwards, pass or fail.
+        let saved = (again.refine.clone(), again.strength);
+        let r = check_refine_strength(b, rx, out, &got);
+        let restore = (|| -> Result<(), String> {
+            for stem in STEMS {
+                b.set_refine(stem, saved.0.get(stem).copied().unwrap_or_default())?;
+            }
+            if b.set_strength(saved.1)? > 0 {
+                wait_strength(rx)?;
+            }
+            Ok(())
+        })();
+        r?;
+        restore?;
+    }
 
     // Solo export of vocals, bass and drums: what is heard is the plain sum
     // of the soloed stems, even though 3 of 6 on would be P1 mode without

@@ -2185,6 +2185,42 @@ impl Backend {
     }
 }
 
+impl Backend {
+    /// Autotest helper: the engine's diagnostics.
+    #[cfg(debug_assertions)]
+    pub fn debug_engine_stats(&self) -> Option<audio::EngineStats> {
+        self.engine.as_ref().map(|e| e.stats())
+    }
+
+    /// Autotest helper, unstretched: the refined backing mix for the stems
+    /// `on` (gain 1, others off) in P1 mode, computed offline:
+    /// `original + Σ_on (r_i − p_i) − Σ_off p_i`.
+    #[cfg(debug_assertions)]
+    pub fn debug_refine_reference(&self, on: &[&str]) -> Option<[Vec<f32>; 2]> {
+        use stemx_dsp::refine::{pan_offline, refine_offline};
+        let st = lock(&self.st);
+        let song = st.song.as_ref()?;
+        let o = song.original.as_ref()?;
+        let mut out = [o.channels[0].to_vec(), o.channels[1].to_vec()];
+        for t in song.stems.as_ref()? {
+            let p = st.refine.get(&t.name).copied().unwrap_or_default();
+            let sel = pan_offline(&p.pan, RATE, &t.channels[0], &t.channels[1]);
+            let is_on = on.contains(&t.name.as_str());
+            let r = is_on.then(|| refine_offline(&p, RATE, &t.channels[0], &t.channels[1]));
+            for c in 0..2 {
+                for (i, v) in out[c].iter_mut().enumerate() {
+                    let pv = sel[c].get(i).copied().unwrap_or(0.0);
+                    let rv = r
+                        .as_ref()
+                        .map_or(0.0, |r| r[c].get(i).copied().unwrap_or(0.0));
+                    *v += rv - pv;
+                }
+            }
+        }
+        Some(out)
+    }
+}
+
 fn spawn(name: &str, f: impl FnOnce() + Send + 'static) {
     if let Err(e) = std::thread::Builder::new().name(name.into()).spawn(f) {
         log!("cannot start thread {name}: {e}");

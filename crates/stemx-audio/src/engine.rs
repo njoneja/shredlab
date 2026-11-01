@@ -81,6 +81,9 @@ pub struct EngineStats {
     pub buffered_frames: usize,
     /// Producer render time / audio time produced (CPU load of one core, 0..1).
     pub producer_load: f64,
+    /// Raw counters behind `producer_load` (for measuring an interval).
+    pub render_nanos: u64,
+    pub rendered_frames: u64,
 }
 
 type Callback = Arc<Mutex<Option<Box<dyn Fn() + Send + Sync>>>>;
@@ -333,6 +336,8 @@ impl Engine {
             } else {
                 0.0
             },
+            render_nanos: s.render_nanos.load(Ordering::Relaxed),
+            rendered_frames: frames,
         }
     }
 }
