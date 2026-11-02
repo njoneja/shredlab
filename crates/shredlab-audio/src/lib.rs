@@ -132,8 +132,8 @@ pub enum AudioError {
     Encode(String),
     #[error("invalid input: {0}")]
     Invalid(String),
-    #[error("cancelled")]
-    Cancelled,
+    #[error("canceled")]
+    Canceled,
 }
 
 #[cfg(test)]

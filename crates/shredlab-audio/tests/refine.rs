@@ -34,7 +34,7 @@ fn track(name: &str, l: Vec<f32>, r: Vec<f32>) -> Track {
 }
 
 /// Guitar: a hard-left 440 Hz part plus a hard-right 660 Hz part. Bass and
-/// drums centred. The original adds a leftover the stems don't explain.
+/// drums centered. The original adds a leftover the stems don't explain.
 fn song(n: usize) -> (Vec<Track>, Track) {
     let gl = tone(440.0, n, 0.3, 0.0);
     let gr = tone(660.0, n, 0.25, 0.3);
@@ -347,7 +347,7 @@ fn playback_equals_export_with_refine_on() {
         let req = request(&stems, &orig, speed, semis);
         let export = render(&req, &mut |_| {}, &AtomicBool::new(false)).unwrap();
         // Playback path: the same pipeline in small real-time-sized blocks
-        // (offline flavour: no start fade, no limiter, like the engine's
+        // (offline flavor: no start fade, no limiter, like the engine's
         // pipeline minus those two).
         let mut p = Pipeline::new(vec![], &req.gains, false);
         p.set_mix(req.gains.clone(), req.mode);
@@ -494,7 +494,7 @@ fn turning_refine_on_while_playing_is_seamless() {
 }
 
 #[test]
-fn stereo_field_comes_from_the_analysed_stem_only() {
+fn stereo_field_comes_from_the_analyzed_stem_only() {
     let n = SR as usize;
     let (stems, orig) = song(n);
     let g = gains([1.0, 1.0, 1.0]);
@@ -508,7 +508,7 @@ fn stereo_field_comes_from_the_analysed_stem_only() {
     p.set_analysis(Some("guitar"));
     run(&mut p, 8192, 256);
     assert!(p.take_field(&mut f) > 0);
-    // Guitar: hard left and hard right parts, nothing in the centre.
+    // Guitar: hard left and hard right parts, nothing in the center.
     let bin = |k: usize| f[41 + k]; // mid band
     assert!(
         bin(0) > 100.0 * bin(20) && bin(40) > 100.0 * bin(20),

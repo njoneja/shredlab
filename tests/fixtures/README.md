@@ -61,7 +61,7 @@ either hop, so the edge padding paths are exercised.
 
 Because frames 0–1 and the tail frames are discarded in `spec`, the
 roundtrip is not exact near the edges (max error 0.23 on this input). That's
-demucs' own behaviour (matches torch to 2e-7); compare against
+demucs' own behavior (matches torch to 2e-7); compare against
 `demucs_istft.bin`, not the input.
 
 CaC layout for the graph's `mag` input: channels `[L.re, L.im, R.re, R.im]`;

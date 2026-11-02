@@ -17,7 +17,7 @@ Pipeline for a song (2, L):
     1. mean/std of the mono mix (float32), x = (mix - mean) / std
     2. apply_model chunking: stride = int(0.75 * S), offsets 0, stride, 2*stride, ... < L;
        each chunk of n = min(S, L - offset) samples is centered in a full
-       S-sample window filled with neighbouring audio (zeros past the ends),
+       S-sample window filled with neighboring audio (zeros past the ends),
        run, cropped back to n, multiplied by triangular weights[:n] and
        overlap-added; finally divided by the summed weights.
     3. out * std + mean

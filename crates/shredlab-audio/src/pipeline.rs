@@ -377,7 +377,7 @@ impl Pipeline {
         self.mixer.set_analysis(name);
     }
 
-    /// Stereo field of the analysed track since the last call; hop count.
+    /// Stereo field of the analyzed track since the last call; hop count.
     pub fn take_field(&mut self, out: &mut [f32; FIELD_LEN]) -> u32 {
         self.mixer.take_field(out)
     }
@@ -1179,7 +1179,7 @@ mod tests {
         p.seek(0.0);
         p.set_loop(Some((0.0, 4.0)));
         assert_eq!(p.play().seconds, 0.0);
-        // Count-in off: old behaviour.
+        // Count-in off: old behavior.
         p.pause();
         p.set_loop(None);
         p.seek(0.0);

@@ -40,7 +40,7 @@ const SUSPENDED_WAIT: Duration = Duration::from_millis(250);
 /// Time constant of the master volume smoothing (no zipper noise).
 const MASTER_SMOOTH_SECS: f32 = 0.01;
 
-/// Latest stereo field of the analysed track (single slot; the producer
+/// Latest stereo field of the analyzed track (single slot; the producer
 /// overwrites it, readers take it).
 #[derive(Default)]
 struct FieldSlot {
@@ -302,7 +302,7 @@ impl Engine {
         self.send(Cmd::Analysis(name.map(str::to_string)));
     }
 
-    /// Copies the newest stereo field of the analysed track into `out`
+    /// Copies the newest stereo field of the analyzed track into `out`
     /// ([`FIELD_LEN`] floats, band-major: 3 bands × 41 pan bins) if one
     /// arrived since the last call. About 30 per second while playing.
     pub fn take_field(&self, out: &mut [f32; FIELD_LEN]) -> bool {

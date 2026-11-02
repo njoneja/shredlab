@@ -419,7 +419,7 @@ pub struct Mixer {
     mode: MixMode,
     /// Refine parameters by track name (missing = unrefined).
     refine: Vec<(String, RefineParams)>,
-    /// Track whose stereo field is analysed (the open Refine panel).
+    /// Track whose stereo field is analyzed (the open Refine panel).
     analysis: Option<String>,
     len: usize,
     sample_rate: u32,
@@ -553,7 +553,7 @@ impl Mixer {
         self.cur.set_analysis(name);
     }
 
-    /// The analysed track's stereo field since the last call (see
+    /// The analyzed track's stereo field since the last call (see
     /// [`RefineChain::take_field`]); returns the hop count (0 = no data).
     pub fn take_field(&mut self, out: &mut [f32; FIELD_LEN]) -> u32 {
         let Some(name) = self.analysis.as_deref() else {

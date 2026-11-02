@@ -32,8 +32,8 @@ export function floorIndex(arr: number[], t: number): number {
   return lo - 1;
 }
 
-/** Normalise: sort by beat index, last override at an index wins. */
-export function normaliseOverrides(list: MeterOverride[]): MeterOverride[] {
+/** Normalize: sort by beat index, last override at an index wins. */
+export function normalizeOverrides(list: MeterOverride[]): MeterOverride[] {
   const byIdx = new Map<number, MeterOverride>();
   for (const o of list) byIdx.set(o.beat_index, o);
   return [...byIdx.values()].sort((a, b) => a.beat_index - b.beat_index);
@@ -53,7 +53,7 @@ export function effectiveDownbeatIndices(grid: BeatGrid, overrides: MeterOverrid
   const n = beats.length;
   const raw = grid.downbeats.map((t) => nearestBeatIndex(beats, t)).filter((i) => i >= 0);
   const rawSorted = [...new Set(raw)].sort((a, b) => a - b);
-  const ovs = normaliseOverrides(overrides).filter((o) => o.beat_index >= 0 && o.beat_index < n);
+  const ovs = normalizeOverrides(overrides).filter((o) => o.beat_index >= 0 && o.beat_index < n);
   const out: number[] = [];
   const firstEnd = ovs.length ? ovs[0].beat_index : n;
   for (const i of rawSorted) if (i < firstEnd) out.push(i);

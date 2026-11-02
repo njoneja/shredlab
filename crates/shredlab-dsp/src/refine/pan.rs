@@ -7,7 +7,7 @@
 //! `pan = (|R| - |L|) / (|L| + |R|)` (-1 hard left, +1 hard right, as in
 //! `scripts/pan_split.py`), and one real gain applied to both channels, so a
 //! kept part keeps its own stereo image. The selection is a window
-//! `center ± width/2` with raised-cosine edges `softness` wide, centred on
+//! `center ± width/2` with raised-cosine edges `softness` wide, centered on
 //! the window edges: the gain is 0.5 exactly at `center ± width/2`. Because
 //! the edges are complementary, a window and its inverse (`invert`) sum to
 //! the input, and the Left / Center / Right presets tile the field (they also
@@ -56,8 +56,8 @@ pub const PAN_HOP: usize = 1024;
 /// Constant latency of [`PanMask`] (and [`super::RefineChain`]) in samples.
 pub const PAN_LATENCY: usize = PAN_N_FFT;
 
-/// Number of pan bins in the stereo-field analysis (bin `k` is centred on
-/// pan `-1 + 2k / (FIELD_BINS - 1)`; bin 20 is dead centre).
+/// Number of pan bins in the stereo-field analysis (bin `k` is centered on
+/// pan `-1 + 2k / (FIELD_BINS - 1)`; bin 20 is dead center).
 pub const FIELD_BINS: usize = 41;
 /// Number of frequency bands in the stereo-field analysis (low, mid, high).
 pub const FIELD_BANDS: usize = 3;
@@ -78,7 +78,7 @@ const SNAP: f32 = 1e-4;
 pub struct PanParams {
     /// Off means no stereo selection (the stem passes unchanged).
     pub enabled: bool,
-    /// Window centre, -1 (hard left) … +1 (hard right).
+    /// Window center, -1 (hard left) … +1 (hard right).
     pub center: f32,
     /// Full width between the half-gain (-6 dB) points, 0 … 2+.
     pub width: f32,
@@ -115,7 +115,7 @@ impl PanParams {
         }
     }
 
-    /// Quick preset: the centre third (|pan| ≤ 0.33).
+    /// Quick preset: the center third (|pan| ≤ 0.33).
     pub fn center() -> Self {
         Self {
             enabled: true,
@@ -212,7 +212,7 @@ pub struct PanMask {
     window: Vec<f32>,
     /// Identity overlap-add partial sums, `n_fft - hop` long (warm-up).
     partial: Vec<f32>,
-    /// irfft scale and the Σw² normalisation, `1 / (n_fft · Σw²)`.
+    /// irfft scale and the Σw² normalization, `1 / (n_fft · Σw²)`.
     ola_scale: f32,
     fwd: Arc<dyn RealToComplex<f32>>,
     inv: Arc<dyn ComplexToReal<f32>>,

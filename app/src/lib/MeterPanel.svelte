@@ -11,7 +11,7 @@
 
   let panel: HTMLDivElement;
   const currentBar = $derived(Math.max(1, barAt(app.downbeats, app.position)));
-  // Initialised from the playhead once, when the panel opens.
+  // Initialized from the playhead once, when the panel opens.
   let fromBar = $state(Math.max(1, barAt(app.downbeats, app.position)));
   let bpb = $state(app.beatsPerBar);
 

@@ -1,6 +1,6 @@
 name: Audit
 
-# Known vulnerabilities in dependencies, and Rust licences/sources.
+# Known vulnerabilities in dependencies, and Rust licenses/sources.
 # Weekly as well, since advisories appear without any change on our side.
 on:
   push:

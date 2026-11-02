@@ -3,7 +3,7 @@
 // SPDX-FileCopyrightText: 2026 Navneet Joneja
 
 // Generates app/public/THIRD_PARTY_LICENSES.html: the third-party notices
-// shipped inside ShredLab (shown by About > Third-party licences, and copied
+// shipped inside ShredLab (shown by About > Third-party licenses, and copied
 // next to the executable by the installer).
 //
 //   node tools/third_party_licenses/generate.mjs           write the file
@@ -17,7 +17,7 @@
 //
 // Rust crates: normal (non-dev, non-build) dependencies of the `shredlab`
 // package, resolved for Windows and macOS targets and merged, so one file
-// covers both platforms. Licence texts come from each crate's own LICENSE /
+// covers both platforms. License texts come from each crate's own LICENSE /
 // COPYING / NOTICE files; crates without any fall back to the standard text
 // in spdx/<ID>.txt. Everything that is not a crate (ONNX Runtime, models,
 // fonts, vendored C++, JS) is listed in OTHER_COMPONENTS below, with its
@@ -135,11 +135,11 @@ function otherComponents(crates) {
       what: "Neural network inference (statically linked through the ort crate; prebuilt by pyke.io).",
       license: "MIT",
       notes:
-        "Copyright (c) Microsoft Corporation. Licence and third-party notices below are from the official " +
+        "Copyright (c) Microsoft Corporation. License and third-party notices below are from the official " +
         "onnxruntime 1.24.4 release (vendored in tools/third_party_licenses/texts/). " +
         'Source: <a href="https://github.com/microsoft/onnxruntime">github.com/microsoft/onnxruntime</a>.',
       texts: [
-        ["ONNX Runtime licence", join(HERE, "texts", "onnxruntime-LICENSE.txt")],
+        ["ONNX Runtime license", join(HERE, "texts", "onnxruntime-LICENSE.txt")],
         ["ONNX Runtime third-party notices", join(HERE, "texts", "onnxruntime-ThirdPartyNotices.txt")],
       ],
     },
@@ -149,13 +149,13 @@ function otherComponents(crates) {
       license: "Microsoft Software License Terms for DirectML (proprietary, redistributable)",
       notes:
         "DirectML.dll is not covered by the GPL; it is distributed alongside ShredLab under Microsoft's own terms " +
-        "(see the additional permission in ShredLab's licence above). The licence terms are published with the " +
+        "(see the additional permission in ShredLab's license above). The license terms are published with the " +
         '<a href="https://www.nuget.org/packages/Microsoft.AI.DirectML">Microsoft.AI.DirectML package</a> ' +
         '(<a href="https://github.com/microsoft/DirectML">github.com/microsoft/DirectML</a>). ' +
         "Copyright (c) Microsoft Corporation.",
       texts: existsSync(join(HERE, "texts", "DirectML-LICENSE.txt"))
         ? [
-            ["DirectML licence", join(HERE, "texts", "DirectML-LICENSE.txt")],
+            ["DirectML license", join(HERE, "texts", "DirectML-LICENSE.txt")],
             ["DirectML third-party notices", join(HERE, "texts", "DirectML-ThirdPartyNotices.txt")],
           ]
         : [],
@@ -176,21 +176,21 @@ function otherComponents(crates) {
       what: "Time stretching and pitch shifting (vendored C++).",
       license: "MIT",
       notes: 'Copyright (c) 2022 Geraint Luff / Signalsmith Audio Ltd. <a href="https://github.com/Signalsmith-Audio/signalsmith-stretch">Source</a>.',
-      texts: [["Signalsmith Stretch licence", join(ROOT, "crates", "shredlab-audio", "third_party", "signalsmith-stretch", "LICENSE.txt")]],
+      texts: [["Signalsmith Stretch license", join(ROOT, "crates", "shredlab-audio", "third_party", "signalsmith-stretch", "LICENSE.txt")]],
     },
     {
       name: "Signalsmith Linear",
       what: "FFT used by Signalsmith Stretch (vendored C++).",
       license: "MIT",
       notes: '<a href="https://github.com/Signalsmith-Audio/linear">Source</a>.',
-      texts: [["Signalsmith Linear licence", join(ROOT, "crates", "shredlab-audio", "third_party", "signalsmith-linear", "LICENSE.txt")]],
+      texts: [["Signalsmith Linear license", join(ROOT, "crates", "shredlab-audio", "third_party", "signalsmith-linear", "LICENSE.txt")]],
     },
     {
       name: "Demucs v4 (htdemucs_6s model weights)",
       what: "Stem separation model, converted to ONNX and bundled.",
       license: "MIT",
       notes: 'Copyright (c) Meta Platforms, Inc. and affiliates. <a href="https://github.com/facebookresearch/demucs">Source</a>.',
-      texts: [["Demucs licence", join(HERE, "texts", "demucs-LICENSE.txt")]],
+      texts: [["Demucs license", join(HERE, "texts", "demucs-LICENSE.txt")]],
     },
     {
       name: "Beat This! (final0 model weights)",
@@ -199,7 +199,7 @@ function otherComponents(crates) {
       notes:
         "Copyright (c) 2024 Institute of Computational Perception, JKU Linz, Austria. " +
         '<a href="https://github.com/CPJKU/beat_this">Source</a>.',
-      texts: [["Beat This! licence", join(HERE, "texts", "beat_this-LICENSE.txt")]],
+      texts: [["Beat This! license", join(HERE, "texts", "beat_this-LICENSE.txt")]],
     },
     {
       name: "Rock Salt and Permanent Marker fonts",
@@ -221,7 +221,7 @@ function otherComponents(crates) {
       license: "Apache-2.0 OR MIT",
       notes: "Copyright (c) 2017 - Present Tauri Apps Contributors.",
       texts: [
-        ["MIT licence (@tauri-apps/api)", join(tauriApi.dir, "LICENSE-MIT")],
+        ["MIT license (@tauri-apps/api)", join(tauriApi.dir, "LICENSE-MIT")],
         ["Apache License 2.0 (@tauri-apps/api)", join(tauriApi.dir, "LICENSE-APACHE-2.0")],
       ],
     },
@@ -230,7 +230,7 @@ function otherComponents(crates) {
       what: "UI framework runtime (compiled into the UI).",
       license: "MIT",
       notes: "",
-      texts: [["Svelte licence", join(svelte.dir, "LICENSE.md")]],
+      texts: [["Svelte license", join(svelte.dir, "LICENSE.md")]],
     },
   ];
 }
@@ -278,10 +278,10 @@ function render(crates, others) {
     crateTexts.set(key, list);
   }
   if (missing.length) {
-    throw new Error(`no licence text for:\n  ${missing.join("\n  ")}\nadd tools/third_party_licenses/spdx/<ID>.txt`);
+    throw new Error(`no license text for:\n  ${missing.join("\n  ")}\nadd tools/third_party_licenses/spdx/<ID>.txt`);
   }
 
-  // Group crates by licence expression.
+  // Group crates by license expression.
   const groups = new Map();
   for (const c of crates) {
     const e = normExpr(c.license) || "(unspecified)";
@@ -296,11 +296,11 @@ function render(crates, others) {
   const h = [];
   h.push(`<!doctype html><html lang="en"><head><meta charset="utf-8">`);
   h.push(`<meta name="viewport" content="width=device-width,initial-scale=1">`);
-  h.push(`<title>ShredLab third-party licences</title><style>${CSS}</style></head><body><main>`);
-  h.push(`<h1>ShredLab: licences and notices</h1>`);
+  h.push(`<title>ShredLab third-party licenses</title><style>${CSS}</style></head><body><main>`);
+  h.push(`<h1>ShredLab: licenses and notices</h1>`);
   h.push(`<p class="muted">Generated by tools/third_party_licenses/generate.mjs. Do not edit by hand.</p>`);
   h.push(`<nav><ul><li><a href="#shredlab">ShredLab</a></li><li><a href="#components">Bundled components</a></li>`);
-  h.push(`<li><a href="#crates">Rust crates (${crates.length})</a></li><li><a href="#texts">Licence texts</a></li></ul></nav>`);
+  h.push(`<li><a href="#crates">Rust crates (${crates.length})</a></li><li><a href="#texts">License texts</a></li></ul></nav>`);
 
   h.push(`<h2 id="shredlab">ShredLab</h2>`);
   h.push(`<p>Copyright (C) 2026 Navneet Joneja.</p>`);
@@ -318,7 +318,7 @@ function render(crates, others) {
 
   h.push(`<h2 id="components">Bundled components</h2>`);
   others.forEach((o, i) => {
-    h.push(`<div class="card"><h3>${esc(o.name)}</h3><p>${esc(o.what)}</p><p><strong>Licence:</strong> ${esc(o.license)}</p>`);
+    h.push(`<div class="card"><h3>${esc(o.name)}</h3><p>${esc(o.what)}</p><p><strong>License:</strong> ${esc(o.license)}</p>`);
     if (o.notes) h.push(`<p>${o.notes}</p>`);
     if (otherTexts[i].length) {
       h.push(`<p>Texts: ${otherTexts[i].map((t) => `<a href="#${t.id}">${esc(t.title)}</a>`).join(", ")}</p>`);
@@ -329,11 +329,11 @@ function render(crates, others) {
   h.push(`<h2 id="crates">Rust crates</h2>`);
   h.push(
     `<p>ShredLab is built from the following crates from <a href="https://crates.io">crates.io</a> (Windows and macOS builds ` +
-      `combined), grouped by licence. Each crate's source code is available from its linked crates.io page; this ` +
+      `combined), grouped by license. Each crate's source code is available from its linked crates.io page; this ` +
       `includes the crates under MPL-2.0, which are used unmodified.</p>`,
   );
   for (const [expr, list] of groupList) {
-    h.push(`<h3>${esc(expr)} (${list.length})</h3><table><thead><tr><th>Crate</th><th>Licence texts</th></tr></thead><tbody>`);
+    h.push(`<h3>${esc(expr)} (${list.length})</h3><table><thead><tr><th>Crate</th><th>License texts</th></tr></thead><tbody>`);
     for (const c of list) {
       const key = `${c.name} ${c.version}`;
       const links = crateTexts.get(key).map((t) => `<a href="#${t.id}">${esc(t.title.replace(/ \(.*\)$/, ""))}</a>`);
@@ -344,7 +344,7 @@ function render(crates, others) {
     h.push(`</tbody></table>`);
   }
 
-  h.push(`<h2 id="texts">Licence texts</h2>`);
+  h.push(`<h2 id="texts">License texts</h2>`);
   h.push(`<p class="muted">Identical texts are shown once, with the components that use them.</p>`);
   for (const t of texts.values()) {
     h.push(

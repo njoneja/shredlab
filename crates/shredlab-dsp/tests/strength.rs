@@ -6,7 +6,7 @@
 use std::f64::consts::PI;
 use std::sync::atomic::AtomicBool;
 
-use shredlab_dsp::strength::{apply_strength, strength_stream, Cancelled, StrengthOptions};
+use shredlab_dsp::strength::{apply_strength, strength_stream, Canceled, StrengthOptions};
 
 const SR: f64 = 44_100.0;
 
@@ -184,8 +184,8 @@ fn cancel_stops_the_run() {
         &mut |_| {},
         &cancel,
     );
-    assert_eq!(r.unwrap_err(), Cancelled);
-    // Cancelled from the progress callback mid-run.
+    assert_eq!(r.unwrap_err(), Canceled);
+    // Canceled from the progress callback mid-run.
     let cancel = AtomicBool::new(false);
     let r = apply_strength(
         [&orig[0], &orig[1]],
@@ -203,7 +203,7 @@ fn cancel_stops_the_run() {
         },
         &cancel,
     );
-    assert_eq!(r.unwrap_err(), Cancelled);
+    assert_eq!(r.unwrap_err(), Canceled);
 }
 
 #[test]

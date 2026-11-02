@@ -69,14 +69,14 @@ one are out of scope.
 - Smaller, faster model files.
 - Importing your own models inside the app.
 - A frequency range for the stereo exception in Refine, for example to
-  remove bass bleed from the centre of a guitar stem while keeping the
-  rest of the centre.
+  remove bass bleed from the center of a guitar stem while keeping the
+  rest of the center.
 
 ### Library and export
 
 - Separate a whole folder or playlist in the background.
 - Open video files (lessons, live clips) and use their audio.
-- Library search, tags and favourites.
+- Library search, tags and favorites.
 - Export every stem at once to a folder.
 - Practice exports for your phone: a loop repeated or ramping up in
   speed.

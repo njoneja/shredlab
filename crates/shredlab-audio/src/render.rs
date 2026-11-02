@@ -133,7 +133,7 @@ pub fn render(
     let mut last_report = 0.0f32;
     loop {
         if cancel.load(Ordering::Relaxed) {
-            return Err(AudioError::Cancelled);
+            return Err(AudioError::Canceled);
         }
         if with_click {
             p.render_split(&mut l, &mut r, &mut c, &mut meta);
@@ -336,7 +336,7 @@ mod tests {
             refine: vec![],
         };
         let r = render(&req, &mut |_| {}, &AtomicBool::new(true));
-        assert!(matches!(r, Err(AudioError::Cancelled)));
+        assert!(matches!(r, Err(AudioError::Canceled)));
     }
 
     fn click_cfg(beats: Vec<f64>, downbeats: Vec<f64>) -> ClickConfig {

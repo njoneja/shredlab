@@ -13,7 +13,7 @@
 //! where `X` is the original's complex spectrum and `S_j` the cached stems'.
 //! The masks sum to 1 in every bin, so the derived stems always sum to the
 //! original (up to f32 rounding), for any `p`. `p = 1` is a plain ratio mask
-//! ("Natural"); larger `p` pushes each bin towards its loudest stem (less
+//! ("Natural"); larger `p` pushes each bin toward its loudest stem (less
 //! bleed, thinner sound), up to `p = 4` ("Tight").
 //!
 //! `p = 1` is *not* the cached stems: the stems don't sum to the original
@@ -72,17 +72,17 @@ impl Default for StrengthOptions {
     }
 }
 
-/// The run was cancelled through the cancel flag.
+/// The run was canceled through the cancel flag.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Cancelled;
+pub struct Canceled;
 
-impl std::fmt::Display for Cancelled {
+impl std::fmt::Display for Canceled {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("cancelled")
+        f.write_str("canceled")
     }
 }
 
-impl std::error::Error for Cancelled {}
+impl std::error::Error for Canceled {}
 
 struct Plan {
     n_fft: usize,
@@ -279,7 +279,7 @@ pub fn strength_stream(
     progress: &mut dyn FnMut(f32),
     cancel: &AtomicBool,
     sink: &mut dyn FnMut(usize, &[Stereo<'_>]),
-) -> Result<(), Cancelled> {
+) -> Result<(), Canceled> {
     let len = original[0].len();
     assert_eq!(original[1].len(), len, "channel length mismatch");
     for s in stems {
@@ -363,11 +363,11 @@ pub fn strength_stream(
         let span = plan.span;
         while expect < plan.chunks {
             if cancel.load(Ordering::Relaxed) {
-                result = Err(Cancelled);
+                result = Err(Canceled);
                 break;
             }
             let Ok((c, local)) = rx.recv() else {
-                result = Err(Cancelled);
+                result = Err(Canceled);
                 break;
             };
             pending.insert(c, local);
@@ -408,7 +408,7 @@ pub fn strength_stream(
         while rx.recv().is_ok() {}
     });
     if cancel.load(Ordering::Relaxed) {
-        return Err(Cancelled);
+        return Err(Canceled);
     }
     result
 }
@@ -422,7 +422,7 @@ pub fn apply_strength(
     opts: &StrengthOptions,
     progress: &mut dyn FnMut(f32),
     cancel: &AtomicBool,
-) -> Result<Vec<[Vec<f32>; 2]>, Cancelled> {
+) -> Result<Vec<[Vec<f32>; 2]>, Canceled> {
     let len = original[0].len();
     let mut out: Vec<[Vec<f32>; 2]> = (0..stems.len())
         .map(|_| [vec![0.0; len], vec![0.0; len]])

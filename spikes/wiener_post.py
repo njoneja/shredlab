@@ -84,7 +84,7 @@ def main():
         y = np.zeros(v.shape, np.complex64)
         for t in range(0, x.shape[0], BATCH):
             sl = slice(t, t + BATCH)
-            # float64: norbert's EM regularisation is sqrt(eps) of the input
+            # float64: norbert's EM regularization is sqrt(eps) of the input
             # dtype; float32's (~3e-4) swamps quiet bins and the stems no
             # longer sum to the mix (-4 dB error instead of -35 dB).
             y[sl] = norbert.wiener(v[sl].astype(np.float64), x[sl].astype(np.complex128),

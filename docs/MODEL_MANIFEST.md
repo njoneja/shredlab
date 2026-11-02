@@ -53,7 +53,7 @@ format.
 - Song-level normalization: subtract mean, divide by std of the mono mix;
   undo on output.
 - Chunking: demucs `apply_model` semantics: 25% overlap, triangular weights,
-  short last chunk centered in a full segment filled with neighbouring audio.
+  short last chunk centered in a full segment filled with neighboring audio.
 - STFT glue: `tools/reference/demucs_hybrid.py` (`spec`/`ispec`); exact
   padding rules in `tests/fixtures/README.md`. Assumes hop = n_fft / 4.
 

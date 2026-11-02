@@ -7,7 +7,7 @@ them to export the bundled models, so they are kept and maintained.
 | File | What |
 |---|---|
 | `onnx_demucs_own.py` | Export of htdemucs_6s with the STFT moved outside the graph, plus the NumPy STFT/iSTFT glue. This is the bundled separation model. |
-| `onnx_demucs.py` | `separate()`: demucs `apply_model` chunking in NumPy (normalization, 25 % overlap, triangular weights, short last chunk padded with neighbouring audio). |
+| `onnx_demucs.py` | `separate()`: demucs `apply_model` chunking in NumPy (normalization, 25 % overlap, triangular weights, short last chunk padded with neighboring audio). |
 | `onnx_beat_this.py` | Beat This! export, NumPy log-mel preprocessing, chunking and minimal peak picking. |
 | `onnx_roformer.py` | BS-RoFormer export and NumPy STFT (equivalent to `torch.stft(center=True)`). Basis for the `roformer-mask` adapter and the personal-model tool. |
 | `onnx_bisect.py` | Bisects a model sub-module by sub-module to find where ONNX and PyTorch outputs diverge. |

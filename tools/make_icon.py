@@ -4,7 +4,7 @@
 """Builds the ShredLab app icon as an SVG with the clefs as paths.
 
 Treble clef (accent) and bass clef (light) from Noto Music side by side on
-a rounded dark square (Stage colours, from the brand guide). The glyphs
+a rounded dark square (Stage colors, from the brand guide). The glyphs
 are converted to paths, so the SVG does not depend on the font.
 
 Usage (needs fonttools, e.g. in .venv-models):
@@ -54,14 +54,14 @@ def main(font_path, out_path):
     # the treble clef is HEIGHT_FRACTION of the tile.
     scale = HEIGHT_FRACTION * SIZE / (tb[3] - tb[1])
     gap = GAP_EM * upm
-    # Lay out in font units on a shared baseline, then centre the group.
+    # Lay out in font units on a shared baseline, then center the group.
     t_x0 = -tb[0]
     b_x0 = (tb[2] - tb[0]) + gap - bb[0]
     width = (tb[2] - tb[0]) + gap + (bb[2] - bb[0])
     ymin = min(tb[1], bb[1])
     ymax = max(tb[3], bb[3])
     ox = (SIZE - width * scale) / 2
-    # SVG y of the baseline so the group's bbox is centred vertically.
+    # SVG y of the baseline so the group's bbox is centered vertically.
     base = SIZE / 2 + (ymax + ymin) / 2 * scale
 
     t = path_for(gs, treble, scale, ox + t_x0 * scale, base)

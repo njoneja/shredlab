@@ -65,8 +65,8 @@ pub enum Error {
     Runtime(String),
     #[error("invalid input: {0}")]
     Input(String),
-    #[error("cancelled")]
-    Cancelled,
+    #[error("canceled")]
+    Canceled,
 }
 
 impl Error {

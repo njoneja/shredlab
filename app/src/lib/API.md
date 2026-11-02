@@ -4,14 +4,14 @@ This file is the contract between the Svelte UI (`app/src`) and the Tauri
 backend (`app/src-tauri`). The backend implements **exactly** this. TypeScript
 types live in [`types.ts`](types.ts); the Tauri bindings in
 [`api.tauri.ts`](api.tauri.ts); a browser mock in [`api.mock.ts`](api.mock.ts)
-shows the intended behaviour.
+shows the intended behavior.
 
 ## Conventions
 
 - **Commands** are `#[tauri::command]` functions, invoked with
   `invoke("<name>", args)`. Command names are snake_case.
 - **Arguments:** the JS side passes camelCase keys; Tauri maps them to the
-  snake_case Rust parameter names listed here (default Tauri behaviour, so do
+  snake_case Rust parameter names listed here (default Tauri behavior, so do
   **not** add `rename_all`). E.g. JS `{ positionSec }` → Rust `position_sec: f64`.
 - **Struct fields** inside arguments, return values and event payloads are
   **snake_case JSON** exactly as written (serde default for snake_case Rust
@@ -178,7 +178,7 @@ PanParams {                  // the stereo EXCEPTION: does the opposite of the r
 }
   // There is no Keep/Remove mode: switch on = the stem without the window,
   // switch off = only the window. An old saved `mode` field is ignored.
-  // Quick presets: Left {center −1, width 1.34}, Centre {0, 0.66}, Right {1, 1.34}.
+  // Quick presets: Left {center −1, width 1.34}, Center {0, 0.66}, Right {1, 1.34}.
 EqParams { low_cut: EndParams, high_cut: EndParams, bands: [BandParams, BandParams, BandParams] }
 EndParams {
   enabled: boolean,
@@ -202,9 +202,9 @@ StrengthSetting { level: number, smooth: boolean }
 
 | Command | Rust params | Returns | Notes |
 |---|---|---|---|
-| `pick_audio_file` | – | `string \| null` | Native open dialog (tauri-plugin-dialog). Filter: mp3, wav, flac, m4a, aac, ogg, opus. `null` if cancelled. |
+| `pick_audio_file` | – | `string \| null` | Native open dialog (tauri-plugin-dialog). Filter: mp3, wav, flac, m4a, aac, ogg, opus. `null` if canceled. |
 | `pick_export_path` | `default_name: String, format: ExportFormat` | `string \| null` | Native save dialog. `default_name` has no extension (e.g. `"Song (mix)"`); add `.<format>` and a filter for that format. Returns the full path or `null`. |
-| `open_song` | `path: String` | `SongInfo` | Decode (or start decoding) the file and make it current. Stops playback, position = 0, loop cleared. If stems are cached, load them so playback uses stems immediately. If a separation is running for another song it is cancelled (emit `separation-error` with `cancelled: true` for that song). Adds/updates the library entry. Kick off beat analysis in the background if the grid is not cached; emit `beats-ready` when done. May return before decoding finishes only if `duration_sec` is known. |
+| `open_song` | `path: String` | `SongInfo` | Decode (or start decoding) the file and make it current. Stops playback, position = 0, loop cleared. If stems are cached, load them so playback uses stems immediately. If a separation is running for another song it is canceled (emit `separation-error` with `canceled: true` for that song). Adds/updates the library entry. Kick off beat analysis in the background if the grid is not cached; emit `beats-ready` when done. May return before decoding finishes only if `duration_sec` is known. |
 | `close_song` | – | `()` | Stop playback, cancel separation, drop the current song. |
 | `get_library` | – | `LibraryEntry[]` | Recent songs, most recently opened first, max ~20. Songs hidden with `hide_recent` are left out. |
 | `hide_recent` | `song_id: String` | `()` | Removes a song from the recent list only (`hidden` in its `song.json`); stems and settings stay. `open_song` on the same file clears the flag. `Err` for an unknown song. |
@@ -212,7 +212,7 @@ StrengthSetting { level: number, smooth: boolean }
 | `song_size` | `song_id: String` | `number` (bytes) | Size of everything stored for one song (what `delete_song` would free). Walks only that song's folder on a blocking thread; same id checks as `delete_song`. Missing folder: `0`. Used by the "Remove from recent?" dialog. |
 | `delete_song` | `song_id: String` | `number` (bytes freed) | Deletes the song's whole folder (stems of every model/quality, the cached original, `song.json` with mix/Refine/strength/beat settings). Only a direct child of `<library>/songs`, checked after canonicalizing (ids with separators, `..`, drive prefixes or a symlinked folder are refused). `Err` if the song is open (close it first); serialized with `open_song`. Missing folder: `0`. |
 | `start_separation` | – | `SeparationStarted` = `SeparatedWith` | Separates the current song with the **current settings** (model + quality, see `get_app_settings`) on a background thread. Returns immediately with the model, device and quality that will be used. If that (model, quality) is already cached for the song, the stems are loaded from the cache instead (well under a second; same events: optional `separation-progress`, then `separation-done`). `Err` if already running, no song, or the song can't be separated (original file gone and no cached set). Progress via events below; with quality "high" `fraction` stays smooth across both passes. |
-| `cancel_separation` | – | `()` | Cancel if running (no-op otherwise). Must emit `separation-error` with `cancelled: true`. |
+| `cancel_separation` | – | `()` | Cancel if running (no-op otherwise). Must emit `separation-error` with `canceled: true`. |
 | `play` | – | `()` | Start playback (see Playback rules). |
 | `pause` | – | `()` | Pause; also aborts a running count-in. |
 | `seek` | `position_sec: f64` | `()` | Clamp to `[0, duration]`. Works while playing or paused. |
@@ -225,7 +225,7 @@ StrengthSetting { level: number, smooth: boolean }
 | `get_waveform` | `n_points: u32` | `Waveform` | Of the original mix. UI asks for 1200. `Err` if no song. |
 | `get_beats` | – | `BeatGrid \| null` | `null` until beat analysis is done for the current song. |
 | `export_mix` | `req: ExportRequest` | `()` | Starts export on a background thread and returns immediately. Progress via events. `Err` if an export is already running. |
-| `cancel_export` | – | `()` | Cancel if running; emit `export-error` with `cancelled: true`. Delete the partial file. |
+| `cancel_export` | – | `()` | Cancel if running; emit `export-error` with `canceled: true`. Delete the partial file. |
 | `save_song_settings` | `song_id: String, settings: serde_json::Value` | `()` | Persist next to the song's library entry. Returned verbatim in `SongInfo.settings` on the next `open_song` of that song. Called debounced (~600 ms) after changes. |
 | `get_app_settings` | – | `AppSettingsInfo` | Models and the separation settings. |
 | `set_count_in_to_music_start` | `on: bool` | `AppSettingsInfo` | Saves "Count in to where the music starts" with the app settings (`settings.json`) and applies it to playback at once. |
@@ -246,19 +246,19 @@ StrengthSetting { level: number, smooth: boolean }
 | `playback-position` | `{ position_sec: number, playing: boolean, count_in_beats_left: number }` | ~30 Hz while playing (including during count-in) **and** once immediately after every play, pause, seek, loop wrap, and end of song. `count_in_beats_left` = count-in clicks still to come (0 when not counting in). |
 | `separation-progress` | `{ song_id, stage: SeparationStage, fraction: number, model_name, device_label }` | Throttle to ≤ 10 Hz. `fraction` is **overall** progress 0..1, monotonic across stages. |
 | `separation-done` | `{ song_id, separated_with: SeparatedWith, original_available: boolean }` | Stems written and cached. Playback switches from the original to the stems seamlessly at the current position (keep playing if playing). |
-| `separation-error` | `{ song_id, message: string, cancelled: boolean }` | Failure or cancel. Playback of the original continues. |
+| `separation-error` | `{ song_id, message: string, canceled: boolean }` | Failure or cancel. Playback of the original continues. |
 | `beats-ready` | `{ song_id }` | Beat grid for that song is available via `get_beats`. Also fine to emit after separation if beats are computed in the `beats` stage. |
 | `export-progress` | `{ fraction: number }` | ≤ 10 Hz, 0..1. |
 | `export-done` | `{ path: string }` | File complete. |
-| `export-error` | `{ message: string, cancelled: boolean }` | Failure or cancel. |
-| `refine-field` | `{ stem: StemName, bins: number[] }` | ~30 Hz while playing, for the stem set with `set_refine_analysis`. `bins`: 123 linear powers, band-major: 3 bands (< 250 Hz, 250 Hz–2.5 kHz, ≥ 2.5 kHz) × 41 pan bins from hard left (bin 0) to hard right (bin 40), centre = bin 20. Measured on the stem before refine (about 0.1 s ahead of what is heard). Nothing while paused. |
+| `export-error` | `{ message: string, canceled: boolean }` | Failure or cancel. |
+| `refine-field` | `{ stem: StemName, bins: number[] }` | ~30 Hz while playing, for the stem set with `set_refine_analysis`. `bins`: 123 linear powers, band-major: 3 bands (< 250 Hz, 250 Hz–2.5 kHz, ≥ 2.5 kHz) × 41 pan bins from hard left (bin 0) to hard right (bin 40), center = bin 20. Measured on the stem before refine (about 0.1 s ahead of what is heard). Nothing while paused. |
 | `strength-progress` | `{ song_id, job: number, fraction: number }` | ≤ 10 Hz while re-deriving. |
 | `strength-done` | `{ song_id, job: number, strength: StrengthSetting }` | The derived stems are playing. |
-| `strength-error` | `{ song_id, job: number, message: string, cancelled: boolean }` | Failure, or `cancelled: true` when a newer job or a song switch replaced it. |
+| `strength-error` | `{ song_id, job: number, message: string, canceled: boolean }` | Failure, or `canceled: true` when a newer job or a song switch replaced it. |
 
 Events for a `song_id` that is no longer current are ignored by the UI.
 
-## Behaviour rules
+## Behavior rules
 
 ### Before / after separation
 - Without stems, playback uses the **original mix** (mix settings have no

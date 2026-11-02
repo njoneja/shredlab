@@ -14,9 +14,9 @@
   const noGrid = $derived(!app.grid);
   const volIcon = $derived(app.masterVolume === 0 ? "volume-mute" : app.masterVolume < 0.5 ? "volume-low" : "volume");
 
-  // Media-player layout: play controls and volume centred, click/count-in on
+  // Media-player layout: play controls and volume centered, click/count-in on
   // the left, speed/pitch on the right. When the sides no longer fit beside the
-  // centre at equal width (so the centre stays centred), they drop to a
+  // center at equal width (so the center stays centered), they drop to a
   // second row: left aligned and right aligned, so nothing changes sides.
   let bar: HTMLDivElement;
   let left: HTMLDivElement;

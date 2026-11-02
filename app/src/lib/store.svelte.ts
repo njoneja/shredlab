@@ -28,8 +28,8 @@ import type {
 import { STEMS } from "./types";
 import { backingFromOriginal, clampGain } from "./mix";
 import { applyTheme, currentTheme, isTheme } from "./theme";
-import { defaultRefine, exceptionSide, hasException, isIdentity, mockPresets, normalise, STRENGTH_NAMES } from "./refine";
-import { barAt, commonBeatsPerBar, effectiveDownbeats, formatTime, nearestBeatIndex, normaliseOverrides } from "./meter";
+import { defaultRefine, exceptionSide, hasException, isIdentity, mockPresets, normalize, STRENGTH_NAMES } from "./refine";
+import { barAt, commonBeatsPerBar, effectiveDownbeats, formatTime, nearestBeatIndex, normalizeOverrides } from "./meter";
 
 export interface StemUi {
   on: boolean;
@@ -302,7 +302,7 @@ class AppState {
     await api.listen("separation-error", (p) => {
       if (p.song_id !== this.song?.song_id) return;
       this.separating = false;
-      this.sepError = p.cancelled ? "Separation cancelled." : p.message;
+      this.sepError = p.canceled ? "Separation canceled." : p.message;
     });
     await api.listen("beats-ready", (p) => {
       if (p.song_id === this.song?.song_id) this.loadBeats();
@@ -314,7 +314,7 @@ class AppState {
     });
     await api.listen("export-error", (p) => {
       this.exporting = false;
-      this.exportError = p.cancelled ? null : p.message;
+      this.exportError = p.canceled ? null : p.message;
     });
     await api.listen("refine-field", (p) => {
       if (p.stem === this.refineOpen) this.field = p.bins;
@@ -331,7 +331,7 @@ class AppState {
       this.strengthError = err;
     };
     await api.listen("strength-done", (p) => strengthEnd(p.job, p.song_id, null));
-    await api.listen("strength-error", (p) => strengthEnd(p.job, p.song_id, p.cancelled ? null : p.message));
+    await api.listen("strength-error", (p) => strengthEnd(p.job, p.song_id, p.canceled ? null : p.message));
     api
       .getRefinePresets()
       .then((p) => (this.refinePresets = p))
@@ -481,7 +481,7 @@ class AppState {
       this.field = null;
       this.refine = defaultRefineAll();
       for (const [stem, p] of Object.entries(info.refine ?? {})) {
-        if (stem in this.refine) this.refine[stem as StemName] = normalise(p);
+        if (stem in this.refine) this.refine[stem as StemName] = normalize(p);
       }
       this.strength = { ...(info.strength ?? { level: 0, smooth: false }) };
       this.strengthError = null;
@@ -522,7 +522,7 @@ class AppState {
     this.countInSet = false;
     if (!s || s.version !== 1) return;
     this.loop = { ...s.loop };
-    this.overrides = normaliseOverrides(s.overrides ?? []);
+    this.overrides = normalizeOverrides(s.overrides ?? []);
     this.click.count_in_enabled = !!s.count_in_enabled;
     this.click.count_in_each_repeat = !!s.count_in_each_repeat;
     this.click.subdivision = s.subdivision ?? 1;
@@ -746,7 +746,7 @@ class AppState {
     const pr = this.refinePresets.find((p) => p.id === id);
     if (!pr) return;
     const cur = $state.snapshot(this.refine[stem]);
-    await this.setRefine(stem, { ...cur, eq: normalise({ eq: structuredClone(pr.eq) }).eq });
+    await this.setRefine(stem, { ...cur, eq: normalize({ eq: structuredClone(pr.eq) }).eq });
   }
 
   // ---- strength (P4) ----
@@ -860,7 +860,7 @@ class AppState {
   }
 
   private async setOverrides(list: MeterOverride[]) {
-    this.overrides = normaliseOverrides(list);
+    this.overrides = normalizeOverrides(list);
     this.clampCountIn();
     await this.sendMeter();
     await this.pushClick();

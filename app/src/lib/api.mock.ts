@@ -217,7 +217,7 @@ function updateFieldTimer() {
 function runStrength(song_id: string, strength: StrengthSetting): number {
   if (strengthTimer != null) {
     clearInterval(strengthTimer);
-    emit("strength-error", { song_id, job: strengthJob, message: "Cancelled", cancelled: true });
+    emit("strength-error", { song_id, job: strengthJob, message: "Canceled", canceled: true });
   }
   const job = ++strengthJob;
   const t0 = performance.now();
@@ -401,7 +401,7 @@ export const mockBackend: Backend = {
     if (sepTimer != null) {
       const old = song;
       stopSeparation();
-      if (old) emit("separation-error", { song_id: old.song_id, message: "Cancelled", cancelled: true });
+      if (old) emit("separation-error", { song_id: old.song_id, message: "Canceled", canceled: true });
     }
     if (beatsTimer != null) clearTimeout(beatsTimer);
     const d = describe(path);
@@ -441,7 +441,7 @@ export const mockBackend: Backend = {
       song.strength_job = runStrength(id, strength);
     }
     if (!cached) {
-      // Beats are analysed separately from stems; pretend it takes a moment.
+      // Beats are analyzed separately from stems; pretend it takes a moment.
       const id = song_id;
       beatsTimer = window.setTimeout(() => {
         if (song?.song_id === id) {
@@ -559,7 +559,7 @@ export const mockBackend: Backend = {
   async cancelSeparation() {
     if (sepTimer == null || !song) return;
     stopSeparation();
-    emit("separation-error", { song_id: song.song_id, message: "Cancelled", cancelled: true });
+    emit("separation-error", { song_id: song.song_id, message: "Canceled", canceled: true });
   },
   async play() {
     if (!song) return;
@@ -649,7 +649,7 @@ export const mockBackend: Backend = {
     if (exportTimer == null) return;
     clearInterval(exportTimer);
     exportTimer = null;
-    emit("export-error", { message: "Cancelled", cancelled: true });
+    emit("export-error", { message: "Canceled", canceled: true });
   },
   async saveSongSettings(songId, settings) {
     lsSet(LS_SETTINGS + songId, settings);

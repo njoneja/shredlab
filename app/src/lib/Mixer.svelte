@@ -244,7 +244,7 @@
     grid-template-columns: 124px 24px 24px minmax(120px, 160px) minmax(80px, 1fr) 62px;
     align-items: center;
     gap: 10px;
-    /* Rows have a 3px stem-colour border plus 8px padding. */
+    /* Rows have a 3px stem-color border plus 8px padding. */
     padding: 0 8px 2px 11px;
   }
   .all-on {
@@ -517,7 +517,7 @@
   .part.left {
     left: 0;
   }
-  .part.centre {
+  .part.center {
     left: 28%;
   }
   .part.right {

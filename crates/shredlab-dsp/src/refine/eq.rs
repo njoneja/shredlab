@@ -106,9 +106,9 @@ impl CutParams {
 #[serde(default)]
 pub struct BandParams {
     pub enabled: bool,
-    /// Centre frequency in Hz.
+    /// Center frequency in Hz.
     pub freq: f32,
-    /// Gain at the centre in dB (about ±18 in the UI).
+    /// Gain at the center in dB (about ±18 in the UI).
     pub gain_db: f32,
     /// Bandwidth (RBJ Q; 0.7 broad … 4 narrow).
     pub q: f32,
@@ -207,7 +207,7 @@ impl EqParams {
     }
 }
 
-/// Normalised biquad coefficients (`a0 = 1`).
+/// Normalized biquad coefficients (`a0 = 1`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Coefs {
     pub b0: f64,
@@ -443,7 +443,7 @@ struct Band {
     gain: f64,
     log_q: f64,
     /// Coefficients at the start of the current sub-block (interpolated
-    /// per sample towards `coefs`, so a glide has no zipper steps).
+    /// per sample toward `coefs`, so a glide has no zipper steps).
     from: Svf,
     coefs: Svf,
     state: [SvfState; 2],

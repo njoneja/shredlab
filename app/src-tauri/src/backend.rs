@@ -7,11 +7,11 @@
 //! Threads:
 //! - `open_song` runs on a blocking worker (decode + resample, or reading
 //!   the cached stems).
-//! - separation: one background thread per run, cancelled through an
+//! - separation: one background thread per run, canceled through an
 //!   `AtomicBool`. The loaded `Separator` is kept between runs.
 //! - beat tracking: one background thread per song (Beat This! on ORT CPU).
 //! - export: one background thread per export.
-//! - strength: one background thread per re-derivation (cancelled when a
+//! - strength: one background thread per re-derivation (canceled when a
 //!   newer one starts or the song changes).
 //! - position: a 30 Hz emitter thread (also the stereo-field events of the
 //!   open Refine panel and the debounced save of refine settings).
@@ -919,13 +919,13 @@ impl Backend {
     fn cancel_separation_locked(&self, st: &mut State) {
         if let Some(job) = st.separation.take() {
             job.cancel.store(true, Ordering::Relaxed);
-            log!("separation of {} cancelled", job.song_id);
+            log!("separation of {} canceled", job.song_id);
             self.emit(
                 "separation-error",
                 &SeparationError {
                     song_id: job.song_id,
-                    message: "Cancelled".into(),
-                    cancelled: true,
+                    message: "Canceled".into(),
+                    canceled: true,
                 },
             );
         }
@@ -1393,7 +1393,7 @@ impl Backend {
             Some(info) => self.load_cached_set(&song_id, info),
             None => self.separate_and_cache(&entry, shifts, &song_id, &mix, &cancel),
         };
-        let cancelled = cancel.load(Ordering::Relaxed);
+        let canceled = cancel.load(Ordering::Relaxed);
         let mut st = lock(&self.st);
         // Clear our job record (only if it is still ours).
         if st
@@ -1415,7 +1415,7 @@ impl Backend {
                 );
                 let current = st.generation == generation
                     && st.song.as_ref().is_some_and(|s| s.meta.song_id == song_id);
-                if !current || cancelled {
+                if !current || canceled {
                     return;
                 }
                 let with = separated_with(&info);
@@ -1451,7 +1451,7 @@ impl Backend {
                     },
                 );
             }
-            Err(_) if cancelled => {
+            Err(_) if canceled => {
                 // The cancel path already emitted separation-error.
             }
             Err(msg) => {
@@ -1463,7 +1463,7 @@ impl Backend {
                     &SeparationError {
                         song_id,
                         message: msg,
-                        cancelled: false,
+                        canceled: false,
                     },
                 );
             }
@@ -1530,7 +1530,7 @@ impl Backend {
         let sep = guard.as_mut().ok_or("model not loaded")?;
         device = device_label(sep.ep()).to_string();
         if cancel.load(Ordering::Relaxed) {
-            return Err("cancelled".into());
+            return Err("canceled".into());
         }
         progress(&mut th, SeparationStage::Decoding, 0.05, &device, true);
         let ts = Instant::now();
@@ -1564,7 +1564,7 @@ impl Backend {
             if shifts == 1 { "" } else { "es" }
         );
         if cancel.load(Ordering::Relaxed) {
-            return Err("cancelled".into());
+            return Err("canceled".into());
         }
         if stems.channels != 2 || stems.sample_rate != RATE {
             return Err(format!(
@@ -1987,16 +1987,16 @@ impl Backend {
         spawn("shredlab-export", move || {
             let t0 = Instant::now();
             let res = b.run_export(&render_req, &path, format, &cancel);
-            let cancelled = cancel.load(Ordering::Relaxed);
+            let canceled = cancel.load(Ordering::Relaxed);
             {
                 let mut st = lock(&b.st);
                 if st.export.as_ref().is_some_and(|c| Arc::ptr_eq(c, &cancel)) {
                     st.export = None;
                 }
             }
-            if cancelled {
+            if canceled {
                 let _ = std::fs::remove_file(&path);
-                log!("export cancelled, partial file removed");
+                log!("export canceled, partial file removed");
                 return;
             }
             match res {
@@ -2020,7 +2020,7 @@ impl Backend {
                         "export-error",
                         &ExportError {
                             message: msg,
-                            cancelled: false,
+                            canceled: false,
                         },
                     );
                 }
@@ -2046,7 +2046,7 @@ impl Backend {
         let out = audio::render(req, &mut |f| progress(0.9 * f, false), cancel)
             .map_err(|e| format!("Render failed: {e}"))?;
         if cancel.load(Ordering::Relaxed) {
-            return Err("cancelled".into());
+            return Err("canceled".into());
         }
         // No whole-song normalization: `encode` applies a look-ahead peak
         // limiter, so the export matches the level heard in playback.
@@ -2068,8 +2068,8 @@ impl Backend {
             self.emit(
                 "export-error",
                 &ExportError {
-                    message: "Cancelled".into(),
-                    cancelled: true,
+                    message: "Canceled".into(),
+                    canceled: true,
                 },
             );
         }
@@ -2249,7 +2249,7 @@ impl Backend {
             // The base set from disk (the derived set replaces it in memory).
             let (base, _) = self.read_cached_stems(&song_id, &info)?;
             if cancel.load(Ordering::Relaxed) {
-                return Err("cancelled".into());
+                return Err("canceled".into());
             }
             progress(&mut th, 0.3, true);
             if want.level == 0 {
@@ -2277,7 +2277,7 @@ impl Backend {
                 &mut |f| progress(&mut th, 0.3 + 0.7 * f, false),
                 &cancel,
             )
-            .map_err(|_| "cancelled".to_string())?;
+            .map_err(|_| "canceled".to_string())?;
             Ok(base
                 .iter()
                 .zip(out)
@@ -2293,15 +2293,15 @@ impl Backend {
             && st.generation == generation
             && !cancel.load(Ordering::Relaxed);
         if !current {
-            log!("strength job {job} dropped (superseded or cancelled)");
+            log!("strength job {job} dropped (superseded or canceled)");
             drop(st);
             self.emit(
                 "strength-error",
                 &StrengthError {
                     song_id,
                     job,
-                    message: "Cancelled".into(),
-                    cancelled: true,
+                    message: "Canceled".into(),
+                    canceled: true,
                 },
             );
             return;
@@ -2341,7 +2341,7 @@ impl Backend {
                         song_id,
                         job,
                         message: msg,
-                        cancelled: false,
+                        canceled: false,
                     },
                 );
             }
@@ -2774,7 +2774,7 @@ mod tests {
     }
 
     /// A song with three cached stems (guitar hard-left 440 Hz + hard-right
-    /// 660 Hz, centred bass and drums) and a cached original with a leftover.
+    /// 660 Hz, centered bass and drums) and a cached original with a leftover.
     fn song_with_stems(b: &Arc<Backend>) -> (String, PathBuf) {
         std::fs::create_dir_all(b.data_dir()).unwrap();
         let n = RATE as usize * 3;

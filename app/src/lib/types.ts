@@ -119,7 +119,7 @@ export interface StrengthError {
   song_id: string;
   job: number;
   message: string;
-  cancelled: boolean;
+  canceled: boolean;
 }
 
 export interface ModelInfo {
@@ -204,7 +204,7 @@ export interface SeparationDone {
 export interface SeparationError {
   song_id: string;
   message: string;
-  cancelled: boolean;
+  canceled: boolean;
 }
 
 export interface PlaybackPosition {
@@ -293,7 +293,7 @@ export interface ExportDone {
 }
 export interface ExportError {
   message: string;
-  cancelled: boolean;
+  canceled: boolean;
 }
 
 /** Opaque to the backend: stored and returned verbatim. */

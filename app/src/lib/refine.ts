@@ -20,7 +20,7 @@ const band = (freq: number): BandParams => ({ enabled: false, freq, gain_db: 0, 
 export const flatEq = (): EqParams => ({ low_cut: end(80), high_cut: end(12000), bands: [band(200), band(1000), band(5000)] });
 export const defaultRefine = (): RefineParams => ({ pan: defaultPan(), eq: flatEq() });
 
-/** Quick stereo selections: the left / centre / right third of the field. */
+/** Quick stereo selections: the left / center / right third of the field. */
 export const PAN_QUICK = {
   left: { center: -1, width: 1.34 },
   center: { center: 0, width: 0.66 },
@@ -57,10 +57,10 @@ function panOnly(p: PanParams): PanParams {
 /** True when the stem has a stereo exception (the window flips with the switch). */
 export const hasException = (p: RefineParams | undefined) => !!p?.pan.enabled;
 
-/** Which part of the field the exception covers, by its centre. */
-export type Side = "left" | "centre" | "right";
+/** Which part of the field the exception covers, by its center. */
+export type Side = "left" | "center" | "right";
 export function exceptionSide(p: PanParams): Side {
-  return p.center <= -0.2 ? "left" : p.center >= 0.2 ? "right" : "centre";
+  return p.center <= -0.2 ? "left" : p.center >= 0.2 ? "right" : "center";
 }
 
 /** "Guitar on" / "Guitar off, except left" (switch tooltip and accessible name). */
@@ -70,7 +70,7 @@ export function switchText(label: string, on: boolean, p: RefineParams | undefin
 }
 
 /** Fills in fields missing from older saved params (shelf fields etc.). */
-export function normalise(p: Partial<RefineParams> | undefined): RefineParams {
+export function normalize(p: Partial<RefineParams> | undefined): RefineParams {
   const d = defaultRefine();
   if (!p) return d;
   const e = (x: Partial<EndParams> | undefined, f: EndParams): EndParams => ({ ...f, ...x });
@@ -193,7 +193,7 @@ export function mockPresets(): RefinePreset[] {
 
 /** Preset whose EQ equals `eq`, if any (for the menu's current value). */
 export function presetOf(eq: EqParams, presets: RefinePreset[]): string {
-  const same = (a: EqParams, b: EqParams) => JSON.stringify(normalise({ eq: a }).eq) === JSON.stringify(normalise({ eq: b }).eq);
+  const same = (a: EqParams, b: EqParams) => JSON.stringify(normalize({ eq: a }).eq) === JSON.stringify(normalize({ eq: b }).eq);
   if (eqIsFlat(eq)) return "flat";
   return presets.find((p) => same(p.eq, eq))?.id ?? "";
 }

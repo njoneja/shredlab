@@ -85,7 +85,7 @@ jobs:
         run: pnpm check
 
       # The committed notices must match Cargo.lock and node_modules.
-      - name: Third-party licences up to date
+      - name: Third-party licenses up to date
         if: runner.os == 'Windows'
         run: node tools/third_party_licenses/generate.mjs --check
 

@@ -54,7 +54,7 @@ fn noise(n: usize, seed: u64, a: f32) -> Vec<f32> {
         .collect()
 }
 
-/// Left-only 440 Hz, right-only 1000 Hz, centre 2500 Hz (amplitude 0.3 each).
+/// Left-only 440 Hz, right-only 1000 Hz, center 2500 Hz (amplitude 0.3 each).
 fn lcr_signal(n: usize) -> (Vec<f32>, Vec<f32>) {
     let lt = sine(440.0, n, 0.3);
     let rt = sine(1000.0, n, 0.3);
@@ -108,7 +108,7 @@ fn inverted_left_removes_only_the_left_tone() {
 }
 
 #[test]
-fn center_preset_passes_centre_content() {
+fn center_preset_passes_center_content() {
     let n = SR as usize;
     let (l, r) = lcr_signal(n);
     let [ol, or] = refine_offline(&pan_only(PanParams::center()), SR, &l, &r);
@@ -519,7 +519,7 @@ fn eq_matches_the_analytic_biquad_response() {
 fn stereo_field_puts_energy_in_the_right_bins() {
     let n = SR as usize;
     let lt = sine(440.0, n, 0.3); // mid band, hard left
-    let ct = sine(100.0, n, 0.3); // low band, centre
+    let ct = sine(100.0, n, 0.3); // low band, center
     let rt = sine(5000.0, n, 0.3); // high band, hard right
     let l = add(&lt, &ct);
     let r = add(&rt, &ct);
@@ -535,9 +535,9 @@ fn stereo_field_puts_energy_in_the_right_bins() {
     assert!(chain.is_bypassed());
     let bin = |band: usize, b: usize| field[band * FIELD_BINS + b];
     let band_sum = |band: usize| -> f32 { (0..FIELD_BINS).map(|b| bin(band, b)).sum() };
-    let centre = FIELD_BINS / 2;
+    let center = FIELD_BINS / 2;
     assert!(bin(1, 0) > 0.9 * band_sum(1));
-    assert!(bin(0, centre) > 0.9 * band_sum(0));
+    assert!(bin(0, center) > 0.9 * band_sum(0));
     assert!(bin(2, FIELD_BINS - 1) > 0.9 * band_sum(2));
     // Level: a sine of amplitude A reads about 1.5·A² per channel it is in
     // (start-up hops with partial signal pull the average down a little).

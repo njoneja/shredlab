@@ -325,7 +325,7 @@ pub struct SeparationDone {
 pub struct SeparationError {
     pub song_id: String,
     pub message: String,
-    pub cancelled: bool,
+    pub canceled: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -382,7 +382,7 @@ pub struct StrengthError {
     pub song_id: String,
     pub job: u64,
     pub message: String,
-    pub cancelled: bool,
+    pub canceled: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -398,7 +398,7 @@ pub struct ExportDone {
 #[derive(Debug, Clone, Serialize)]
 pub struct ExportError {
     pub message: String,
-    pub cancelled: bool,
+    pub canceled: bool,
 }
 
 #[cfg(test)]

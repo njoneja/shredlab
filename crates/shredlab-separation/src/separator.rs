@@ -285,7 +285,7 @@ impl Separator {
     ///
     /// `progress` gets the overall fraction done (0..=1, across all passes)
     /// after each chunk; `cancel` is checked before each chunk
-    /// ([`Error::Cancelled`]). If a GPU fails mid-run (runtime error), the
+    /// ([`Error::Canceled`]). If a GPU fails mid-run (runtime error), the
     /// model is reloaded on CPU and the song is restarted (progress goes back
     /// to 0).
     pub fn separate_shifts(
@@ -423,7 +423,7 @@ fn run_separation(
                 progress((base + done as f32 / total as f32) / n);
             }
             if cancel.load(Ordering::Relaxed) {
-                return Err(Error::Cancelled);
+                return Err(Error::Canceled);
             }
             Ok(())
         })?;
@@ -460,7 +460,7 @@ fn run_pass(
             progress(done as f32 / total as f32);
         }
         if cancel.load(Ordering::Relaxed) {
-            return Err(Error::Cancelled);
+            return Err(Error::Canceled);
         }
         Ok(())
     })?;
@@ -704,7 +704,7 @@ mod tests {
     }
 
     #[test]
-    fn shifted_progress_is_monotonic_and_cancellable() {
+    fn shifted_progress_is_monotonic_and_cancelable() {
         let (l, r) = song(300);
         let x = [&l[..], &r[..]];
         let mut a = Fake {
@@ -721,6 +721,6 @@ mod tests {
 
         let cancel = AtomicBool::new(true);
         let r = run_separation(&mut a, &x, 2, SR, &mut |_| {}, &cancel);
-        assert!(matches!(r, Err(Error::Cancelled)));
+        assert!(matches!(r, Err(Error::Canceled)));
     }
 }

@@ -108,7 +108,7 @@ fn main() {
     let all: f64 = total.iter().sum::<f64>().max(1e-30);
     let third = |r: std::ops::Range<usize>| 100.0 * total[r].iter().sum::<f64>() / all;
     println!(
-        "input stereo field: left {:.0} %, centre {:.0} %, right {:.0} % (pan thirds)",
+        "input stereo field: left {:.0} %, center {:.0} %, right {:.0} % (pan thirds)",
         third(0..14),
         third(14..27),
         third(27..FIELD_BINS)

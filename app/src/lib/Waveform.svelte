@@ -43,7 +43,7 @@
     return () => ro.disconnect();
   });
 
-  // Redraw whenever anything visible changes (the theme changes the colours).
+  // Redraw whenever anything visible changes (the theme changes the colors).
   $effect(() => {
     void app.theme;
     draw(app.peaks, app.position, app.loop.a_sec, app.loop.b_sec, app.loop.enabled, app.downbeats, width, height);
@@ -89,13 +89,13 @@
       for (let i = 0; i < downbeats.length; i++) {
         const bar = i + 1;
         const x = Math.round(tToX(downbeats[i])) + 0.5;
-        const labelled = (bar - 1) % step === 0;
-        ctx.strokeStyle = labelled ? cssVar("--grid-line") : cssVar("--grid-line-faint");
+        const labeled = (bar - 1) % step === 0;
+        ctx.strokeStyle = labeled ? cssVar("--grid-line") : cssVar("--grid-line-faint");
         ctx.beginPath();
-        ctx.moveTo(x, labelled ? 4 : top);
+        ctx.moveTo(x, labeled ? 4 : top);
         ctx.lineTo(x, h);
         ctx.stroke();
-        if (labelled) {
+        if (labeled) {
           ctx.fillStyle = cssVar("--faint");
           ctx.fillText(String(bar), x + 3, RULER / 2);
         }

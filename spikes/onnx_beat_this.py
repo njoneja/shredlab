@@ -352,7 +352,7 @@ def _snr(ref_, x):
 
 
 def _match(a, b):
-    """count diff and max |offset| (s) after nearest-neighbour matching."""
+    """count diff and max |offset| (s) after nearest-neighbor matching."""
     if len(a) == 0 or len(b) == 0:
         return abs(len(a) - len(b)), float("nan")
     off = np.abs(b[:, None] - a[None, :]).min(1).max()

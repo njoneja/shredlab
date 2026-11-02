@@ -63,7 +63,7 @@ glue around it:
 
 | Adapter | Graph I/O | Glue |
 |---|---|---|
-| `demucs-hybrid` | waveform + magnitude spectrogram in; waveform + spectrogram out | Song normalization (mean/std of the mono mix), Demucs `apply_model` chunking: 25% overlap, triangular weights, short last chunk padded with neighbouring audio |
+| `demucs-hybrid` | waveform + magnitude spectrogram in; waveform + spectrogram out | Song normalization (mean/std of the mono mix), Demucs `apply_model` chunking: 25% overlap, triangular weights, short last chunk padded with neighboring audio |
 | `roformer-mask` | complex STFT in; complex masks out | `torch.stft(center=True)`, mask multiply, iSTFT, chunks with a symmetric Hamming window and an end-aligned tail chunk |
 
 The exact tensor shapes and chunking rules are in

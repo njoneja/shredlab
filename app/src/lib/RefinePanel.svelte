@@ -74,7 +74,7 @@
     });
   }
   function panText(c: number) {
-    if (Math.abs(c) < 0.02) return "Centre";
+    if (Math.abs(c) < 0.02) return "Center";
     return `${c < 0 ? "L" : "R"} ${Math.round(Math.abs(c) * 100)}%`;
   }
 
@@ -134,7 +134,7 @@
     const color = css(`--stem-${stem}`, c);
     const grid = css("--grid-line", c);
     const muted = css("--muted", c);
-    // centre and thirds
+    // center and thirds
     g.strokeStyle = grid;
     g.lineWidth = 1;
     for (const v of [-1 / 3, 0, 1 / 3]) {
@@ -162,7 +162,7 @@
       g.globalAlpha = 1;
     }
     // with an exception: what is heard (it flips with the switch) shaded
-    // under a line, the window's edges and centre as handles
+    // under a line, the window's edges and center as handles
     if (pan.enabled) {
       g.fillStyle = css("--accent-soft", c);
       g.strokeStyle = css("--accent", c);
@@ -180,7 +180,7 @@
         else g.lineTo(x, y);
       }
       g.stroke();
-      // handles: centre and the two −6 dB edges
+      // handles: center and the two −6 dB edges
       g.fillStyle = css("--accent", c);
       for (const v of [pan.center - pan.width / 2, pan.center, pan.center + pan.width / 2]) {
         if (v < -1.001 || v > 1.001) continue;
@@ -196,7 +196,7 @@
     g.textAlign = "left";
   }
 
-  // pointer on the field: drag the window (centre) or an edge (width)
+  // pointer on the field: drag the window (center) or an edge (width)
   let fieldDrag: "center" | "lo" | "hi" | null = null;
   function fieldDown(e: PointerEvent) {
     const r = fieldCanvas!.getBoundingClientRect();
@@ -576,8 +576,8 @@
           Stereo exception
         </label>
         <span class="except" id="{id}-except">Except:</span>
-        <div class="seg" role="group" aria-labelledby="{id}-except" aria-label="{label}: except the left, centre or right of the stereo field">
-          {#each [["left", "Left"], ["center", "Centre"], ["right", "Right"]] as [k, t] (k)}
+        <div class="seg" role="group" aria-labelledby="{id}-except" aria-label="{label}: except the left, center or right of the stereo field">
+          {#each [["left", "Left"], ["center", "Center"], ["right", "Right"]] as [k, t] (k)}
             <button aria-pressed={quick === k} aria-label="Except the {t.toLowerCase()} third of the stereo field" onclick={() => setQuick(k as PanQuick)}>{t}</button>
           {/each}
         </div>

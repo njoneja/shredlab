@@ -77,7 +77,7 @@ fn migrate_old_data_dir(data_dir: &Path) -> Option<String> {
 }
 
 /// Shrinks the window (created hidden at its configured default size) to
-/// fit the monitor's work area, centres it and shows it. A 1080p laptop at
+/// fit the monitor's work area, centers it and shows it. A 1080p laptop at
 /// 150 % scaling is only 720 logical pixels tall, less the taskbar.
 fn fit_and_show_window(app: &tauri::App) {
     let Some(window) = app.get_webview_window("main") else {

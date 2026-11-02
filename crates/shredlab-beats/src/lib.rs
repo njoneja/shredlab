@@ -435,7 +435,7 @@ where
 
 // ------------------------------------------------------- postprocessing
 
-/// Frames that are the maximum of their 7-frame neighbourhood and > 0.
+/// Frames that are the maximum of their 7-frame neighborhood and > 0.
 fn peaks(logits: &[f32]) -> Vec<usize> {
     let n = logits.len();
     (0..n)

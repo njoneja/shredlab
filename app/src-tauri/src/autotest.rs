@@ -554,7 +554,7 @@ fn wait_strength(rx: &Receiver<Event>) -> Result<f64, String> {
     let t = Instant::now();
     wait_for(rx, Duration::from_secs(120), |name, v| match name {
         "strength-done" => Some(Ok(())),
-        "strength-error" if v["cancelled"] != true => Some(Err(format!("strength failed: {v}"))),
+        "strength-error" if v["canceled"] != true => Some(Err(format!("strength failed: {v}"))),
         _ => None,
     })?;
     Ok(t.elapsed().as_secs_f64())
@@ -906,7 +906,7 @@ fn run(b: &Arc<Backend>, song: &Path, out: &Path, rx: &Receiver<Event>) -> Resul
     b.cancel_separation();
     let mut cancel_ok = false;
     wait_for(rx, Duration::from_secs(10), |name, v| match name {
-        "separation-error" if v["cancelled"] == true => {
+        "separation-error" if v["canceled"] == true => {
             cancel_ok = true;
             Some(Ok(()))
         }
@@ -926,7 +926,7 @@ fn run(b: &Arc<Backend>, song: &Path, out: &Path, rx: &Receiver<Event>) -> Resul
             "skipped (Standard was cached)"
         }
     );
-    // The cancelled run may still hold the model for a moment; the next
+    // The canceled run may still hold the model for a moment; the next
     // separation waits for it.
     let (secs, with, orig) = separate(b, rx, &mut beats_ready)?;
     if with.quality != Quality::Standard || !orig {
