@@ -2903,6 +2903,13 @@ mod tests {
             .unwrap();
         assert!(job > 0);
         wait_strength(&b);
+        // The job clears its running flag before it emits strength-done.
+        let t0 = Instant::now();
+        while !lock(&events).iter().any(|e| e == "strength-done")
+            && t0.elapsed() < Duration::from_secs(5)
+        {
+            std::thread::sleep(Duration::from_millis(10));
+        }
         assert!(lock(&events).iter().any(|e| e == "strength-done"));
         let sum_err = |b: &Arc<Backend>| {
             let st = lock(&b.st);
