@@ -7,8 +7,13 @@ removed or listen to one by itself, with speed change without pitch change,
 transposition, A–B loops and a click track with count-in. It is built with Tauri 2 and a Rust core, runs separation models with
 ONNX Runtime (DirectML / CoreML / CPU), and targets Windows and macOS.
 
-Status: works end to end on Windows (separate, beats, mixer, speed/pitch,
-loops, click, export); macOS has not been built or run yet. See
+![ShredLab: waveform with bar numbers, six stem rows with mute, solo and volume, the Refine panel for guitar (stereo position and EQ), and the transport with loop, click, count-in, speed and pitch](docs/images/screenshot.webp)
+
+**Download:** unsigned installers for Windows and macOS (Apple Silicon) are
+on the [Releases](https://github.com/njoneja/shredlab/releases) page.
+
+Status: works end to end on Windows and macOS (separate, beats, mixer,
+speed/pitch, loops, click, export). See
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for how it fits together and
 [docs/DEVELOPING.md](docs/DEVELOPING.md) for practical development notes.
 How to use it: [docs/HELP.md](docs/HELP.md).
@@ -117,8 +122,6 @@ tauri dev` prints `AUTOTEST PASS`. Other environment overrides are listed in
 [docs/DEVELOPING.md](docs/DEVELOPING.md).
 
 ### macOS notes
-
-Not built or run yet; expect some fixing on the first try:
 
 - There is no `DirectML.dll`; GPU inference goes through CoreML (with a
   self-test and CPU fallback). The Windows-only DLL is added to the bundle by
