@@ -272,7 +272,7 @@
   .wave {
     flex: 1 1 140px;
     min-height: 0;
-    max-height: 300px;
+    max-height: 180px;
     display: flex;
     flex-direction: column;
     gap: 6px;

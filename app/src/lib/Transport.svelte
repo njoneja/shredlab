@@ -97,8 +97,8 @@
         </div>
       </div>
       <div class="pill" class:inactive={!app.click.count_in_enabled}>
-        <button class="btn toggle" aria-pressed={app.click.count_in_enabled} onclick={() => app.toggleCountIn()} disabled={noSong || noGrid} title="Count-in before playback starts">
-          <Icon name="countin" /> Count-in
+        <button class="btn toggle icon-only" aria-pressed={app.click.count_in_enabled} aria-label="Count-in" onclick={() => app.toggleCountIn()} disabled={noSong || noGrid} title="Count-in: clicks before playback starts">
+          <Icon name="countin" />
         </button>
         <button class="btn small icon-only ghost" onclick={() => app.stepCountIn(-1)} disabled={noGrid || app.click.count_in_beats <= app.countInMin} aria-label="Shorter count-in">
           <Icon name="minus" size={14} />
@@ -230,11 +230,11 @@
   }
   .bar.narrow {
     grid-template-columns: 1fr 1fr;
-    grid-template-areas: "center center" "left right";
+    grid-template-areas: "left right" "center center";
   }
   .bar.stacked {
     grid-template-columns: 1fr;
-    grid-template-areas: "center" "left" "right";
+    grid-template-areas: "left" "right" "center";
   }
   .zone {
     display: flex;

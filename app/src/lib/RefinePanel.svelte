@@ -997,9 +997,4 @@
     border: 1px solid var(--border);
     border-radius: 4px;
   }
-  @media (max-width: 960px) {
-    .cols {
-      grid-template-columns: 1fr;
-    }
-  }
 </style>
