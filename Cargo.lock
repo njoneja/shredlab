@@ -3502,7 +3502,7 @@ checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
 name = "shredlab"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -3519,7 +3519,7 @@ dependencies = [
 
 [[package]]
 name = "shredlab-audio"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "cc",
  "cpal",
@@ -3535,7 +3535,7 @@ dependencies = [
 
 [[package]]
 name = "shredlab-beats"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ort",
  "realfft",
@@ -3546,7 +3546,7 @@ dependencies = [
 
 [[package]]
 name = "shredlab-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -3560,7 +3560,7 @@ dependencies = [
 
 [[package]]
 name = "shredlab-dsp"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "hound",
  "realfft",
@@ -3570,7 +3570,7 @@ dependencies = [
 
 [[package]]
 name = "shredlab-io"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "hound",
  "rubato",
@@ -3580,7 +3580,7 @@ dependencies = [
 
 [[package]]
 name = "shredlab-library"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "flacenc",
  "mp3lame-encoder",
@@ -3595,7 +3595,7 @@ dependencies = [
 
 [[package]]
 name = "shredlab-separation"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "num_cpus",
  "ort",
