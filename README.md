@@ -7,7 +7,7 @@ removed or listen to one by itself, with speed change without pitch change,
 transposition, A–B loops and a click track with count-in. It is built with Tauri 2 and a Rust core, runs separation models with
 ONNX Runtime (DirectML / CoreML / CPU), and targets Windows and macOS.
 
-![ShredLab: waveform with bar numbers, six stem rows with mute, solo and volume, the Refine panel for guitar (stereo position and EQ), and the transport with loop, click, count-in, speed and pitch](docs/images/screenshot.webp)
+![ShredLab: waveform with bar numbers and an A–B loop, six stem rows with on/off switch, Refine, solo and volume, the Refine panel for guitar (stereo exception and EQ), and the transport with click, count-in, play, A–B loop, speed and pitch](docs/images/screenshot.webp)
 
 **Download:** unsigned installers for Windows and macOS (Apple Silicon) are
 on the [Releases](https://github.com/njoneja/shredlab/releases) page.
