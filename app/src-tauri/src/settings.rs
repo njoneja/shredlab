@@ -2,7 +2,7 @@
 //! separation model, separation quality, UI theme and "count in to where
 //! the music starts". `None` means "use the default" (default model; High
 //! on GPU, Standard on CPU; Stage; on). Env overrides
-//! (`STEMX_MODEL`, `STEMX_DEVICE`) still win at runtime for development.
+//! (`SHREDLAB_MODEL`, `SHREDLAB_DEVICE`) still win at runtime for development.
 
 use std::path::{Path, PathBuf};
 
@@ -146,7 +146,8 @@ mod tests {
     use super::*;
 
     fn dir(name: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("stemx-settings-{}-{name}", std::process::id()));
+        let d =
+            std::env::temp_dir().join(format!("shredlab-settings-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         d
     }

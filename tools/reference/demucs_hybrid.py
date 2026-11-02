@@ -196,7 +196,7 @@ def max_shift(sample_rate=44100):
 def shift_offsets(shifts, sample_rate=44100):
     """Deterministic offsets round(k * max_shift / shifts), half up, k in 0..shifts
     (upstream draws random.randint(0, max_shift)). shifts=2 @ 44.1 kHz: [0, 11025].
-    Same as stemx_separation::shift_offsets."""
+    Same as shredlab_separation::shift_offsets."""
     ms = max_shift(sample_rate)
     return [(2 * k * ms + shifts) // (2 * shifts) for k in range(shifts)]
 

@@ -3,20 +3,20 @@
 //! Separation models (folders with `model.json`), in priority order:
 //! 1. bundled: `<resource_dir>/models` (Tauri `bundle.resources`)
 //! 2. personal: `<app_data_dir>/models`
-//! 3. `STEMX_MODELS_DIR` (dev override, `;`-separated on Windows)
+//! 3. `SHREDLAB_MODELS_DIR` (dev override, `;`-separated on Windows)
 //! 4. debug builds only: the repo's `models/registry` and `models/personal`
 //!
-//! The beat model file `beat_this_final0.onnx`: `STEMX_BEAT_MODEL`, then
+//! The beat model file `beat_this_final0.onnx`: `SHREDLAB_BEAT_MODEL`, then
 //! `<resource_dir>/models/`, `<app_data_dir>/models/`, each
-//! `STEMX_MODELS_DIR` entry, and in debug builds the repo's `models/onnx/`.
+//! `SHREDLAB_MODELS_DIR` entry, and in debug builds the repo's `models/onnx/`.
 
 use std::path::{Path, PathBuf};
 
-use stemx_separation::registry::env_dirs;
-use stemx_separation::{ModelRegistry, ModelSource};
+use shredlab_separation::registry::env_dirs;
+use shredlab_separation::{ModelRegistry, ModelSource};
 
 pub const BEAT_MODEL_FILE: &str = "beat_this_final0.onnx";
-pub const BEAT_MODEL_ENV: &str = "STEMX_BEAT_MODEL";
+pub const BEAT_MODEL_ENV: &str = "SHREDLAB_BEAT_MODEL";
 /// Preferred separation model id.
 pub const DEFAULT_MODEL: &str = "htdemucs_6s";
 
@@ -71,10 +71,10 @@ pub fn find_beat_model(resource_dir: Option<&Path>, data_dir: &Path) -> Option<P
         .find(|p| p.is_file())
 }
 
-/// The model to separate with: `STEMX_MODEL` if set and present, else
+/// The model to separate with: `SHREDLAB_MODEL` if set and present, else
 /// [`DEFAULT_MODEL`], else the first non-personal model, else the first.
-pub fn pick_model(reg: &ModelRegistry) -> Option<&stemx_separation::ModelEntry> {
-    if let Ok(id) = std::env::var("STEMX_MODEL") {
+pub fn pick_model(reg: &ModelRegistry) -> Option<&shredlab_separation::ModelEntry> {
+    if let Ok(id) = std::env::var("SHREDLAB_MODEL") {
         if let Some(e) = reg.get(&id) {
             return Some(e);
         }

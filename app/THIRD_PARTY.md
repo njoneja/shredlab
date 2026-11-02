@@ -1,7 +1,7 @@
 # Third-party components in the desktop app (ShredLab)
 
 Bundled with the app UI (`app/src`). Audio components are listed in
-[`crates/stemx-audio/THIRD_PARTY.md`](../crates/stemx-audio/THIRD_PARTY.md);
+[`crates/shredlab-audio/THIRD_PARTY.md`](../crates/shredlab-audio/THIRD_PARTY.md);
 model weights in [`docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md).
 
 ## Fonts

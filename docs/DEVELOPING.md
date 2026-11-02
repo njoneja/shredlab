@@ -10,13 +10,13 @@ the [README](../README.md); how the pieces fit together is in
 pnpm --dir app tauri dev
 ```
 
-Logs go to stderr and `<app data>/stemx.log`.
+Logs go to stderr and `<app data>/shredlab.log`.
 
 Headless end-to-end check (separates a song, detects beats and plays a few
 seconds of audio):
 
 ```bash
-STEMX_AUTOTEST=<song> STEMX_AUTOTEST_EXIT=1 pnpm --dir app tauri dev
+SHREDLAB_AUTOTEST=<song> SHREDLAB_AUTOTEST_EXIT=1 pnpm --dir app tauri dev
 ```
 
 It prints `AUTOTEST PASS`.
@@ -25,14 +25,14 @@ It prints `AUTOTEST PASS`.
 
 | Variable | Effect |
 |---|---|
-| `STEMX_DATA_DIR` | Library location (song folders, stem cache) |
-| `STEMX_MODELS_DIR` | Extra model folders (`;`-separated on Windows, `:` elsewhere) |
-| `STEMX_MODEL` | Separation model id, e.g. a personal model such as `bs-roformer-sw` |
-| `STEMX_DEVICE` | `auto`, `cpu` or `gpu` |
-| `STEMX_BEAT_MODEL` | Beat model id |
-| `STEMX_BEATS_DEVICE` | Device for beat detection |
-| `STEMX_NO_PRELOAD` | Skip loading the model at startup |
-| `STEMX_AUTOTEST`, `STEMX_AUTOTEST_EXIT` | Headless end-to-end check (above) |
+| `SHREDLAB_DATA_DIR` | Library location (song folders, stem cache) |
+| `SHREDLAB_MODELS_DIR` | Extra model folders (`;`-separated on Windows, `:` elsewhere) |
+| `SHREDLAB_MODEL` | Separation model id, e.g. a personal model such as `bs-roformer-sw` |
+| `SHREDLAB_DEVICE` | `auto`, `cpu` or `gpu` |
+| `SHREDLAB_BEAT_MODEL` | Beat model id |
+| `SHREDLAB_BEATS_DEVICE` | Device for beat detection |
+| `SHREDLAB_NO_PRELOAD` | Skip loading the model at startup |
+| `SHREDLAB_AUTOTEST`, `SHREDLAB_AUTOTEST_EXIT` | Headless end-to-end check (above) |
 
 ## Python environments
 
@@ -64,7 +64,7 @@ Python reference implementations are described in
   performance and efficiency cores; set intra-op threads explicitly (8–16).
 - The statically linked ORT (pyke's build) differs from Microsoft's official
   build at around −80 dB, which is inaudible. The `load-dynamic` feature of
-  `stemx-separation` can load the official DLLs for exact comparisons.
+  `shredlab-separation` can load the official DLLs for exact comparisons.
 
 ## Windows tips
 

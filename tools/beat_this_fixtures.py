@@ -1,4 +1,4 @@
-"""Reference fixtures for the Rust port of the Beat This! glue (crates/stemx-beats).
+"""Reference fixtures for the Rust port of the Beat This! glue (crates/shredlab-beats).
 
 Writes raw little-endian arrays plus a meta.json to tests/fixtures/local/beat_this/
 (gitignored), using the NumPy reference in spikes/onnx_beat_this.py:

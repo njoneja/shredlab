@@ -14,7 +14,7 @@ keep the source file's bytes, so it never needs re-encoding).
 
 Writes listening excerpts (OUT/listen/) and decoded stem dirs per setting
 (OUT/<setting>/stems/, WAV) for rendering slowed playback with
-`cargo run -p stemx-audio --example play -- DIR --only guitar --speed 0.6 --render X.wav`.
+`cargo run -p shredlab-audio --example play -- DIR --only guitar --speed 0.6 --render X.wav`.
 
 Usage:
     python spikes/mp3_cache_test.py MIX.mp3 STEMS_DIR OUT_DIR

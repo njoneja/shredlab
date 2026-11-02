@@ -173,14 +173,14 @@ function otherComponents(crates) {
       what: "Time stretching and pitch shifting (vendored C++).",
       license: "MIT",
       notes: 'Copyright (c) 2022 Geraint Luff / Signalsmith Audio Ltd. <a href="https://github.com/Signalsmith-Audio/signalsmith-stretch">Source</a>.',
-      texts: [["Signalsmith Stretch licence", join(ROOT, "crates", "stemx-audio", "third_party", "signalsmith-stretch", "LICENSE.txt")]],
+      texts: [["Signalsmith Stretch licence", join(ROOT, "crates", "shredlab-audio", "third_party", "signalsmith-stretch", "LICENSE.txt")]],
     },
     {
       name: "Signalsmith Linear",
       what: "FFT used by Signalsmith Stretch (vendored C++).",
       license: "MIT",
       notes: '<a href="https://github.com/Signalsmith-Audio/linear">Source</a>.',
-      texts: [["Signalsmith Linear licence", join(ROOT, "crates", "stemx-audio", "third_party", "signalsmith-linear", "LICENSE.txt")]],
+      texts: [["Signalsmith Linear licence", join(ROOT, "crates", "shredlab-audio", "third_party", "signalsmith-linear", "LICENSE.txt")]],
     },
     {
       name: "Demucs v4 (htdemucs_6s model weights)",

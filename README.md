@@ -23,13 +23,13 @@ How to use it: [docs/HELP.md](docs/HELP.md).
 | Path | What |
 |---|---|
 | `app/` | Tauri app: Svelte 5 + TypeScript + Vite frontend (`app/src`), Rust shell (`app/src-tauri`) |
-| `crates/stemx-dsp` | STFT/iSTFT, chunking, overlap-add |
-| `crates/stemx-io` | Decode, encode, resample |
-| `crates/stemx-separation` | ONNX Runtime sessions, model registry, adapters |
-| `crates/stemx-audio` | Real-time audio engine, offline render, WAV/FLAC/MP3 export |
-| `crates/stemx-beats` | Beat/downbeat detection (Beat This! ONNX) |
-| `crates/stemx-library` | Song folders, JSON manifest, stem cache |
-| `crates/stemx-cli` | `stemx`, headless CLI |
+| `crates/shredlab-dsp` | STFT/iSTFT, chunking, overlap-add |
+| `crates/shredlab-io` | Decode, encode, resample |
+| `crates/shredlab-separation` | ONNX Runtime sessions, model registry, adapters |
+| `crates/shredlab-audio` | Real-time audio engine, offline render, WAV/FLAC/MP3 export |
+| `crates/shredlab-beats` | Beat/downbeat detection (Beat This! ONNX) |
+| `crates/shredlab-library` | Song folders, JSON manifest, stem cache |
+| `crates/shredlab-cli` | `shredlab-cli`, headless CLI |
 | `tools/` | Python tooling: model setup/export, model folders, fixtures ([tools/README.md](tools/README.md)) |
 | `spikes/`, `scripts/` | Python reference implementations (Rust ports are validated against them; [spikes/README.md](spikes/README.md)) |
 | `docs/` | User help, architecture, development notes, model manifest format |
@@ -116,7 +116,7 @@ Note: the Tauri crate embeds the built frontend, so `cargo build`/`clippy`/
 creates it). They also need the models from step 3.
 
 Headless end-to-end check (separates a song, detects beats and plays a few
-seconds of audio): `STEMX_AUTOTEST=<song> STEMX_AUTOTEST_EXIT=1 pnpm --dir app
+seconds of audio): `SHREDLAB_AUTOTEST=<song> SHREDLAB_AUTOTEST_EXIT=1 pnpm --dir app
 tauri dev` prints `AUTOTEST PASS`. Other environment overrides are listed in
 [docs/DEVELOPING.md](docs/DEVELOPING.md).
 
@@ -131,39 +131,39 @@ tauri dev` prints `AUTOTEST PASS`. Other environment overrides are listed in
 
 ## Developer notes
 
-### Separation CLI (`stemx`)
+### Separation CLI (`shredlab-cli`)
 
 ```sh
-cargo build --release -p stemx-cli
-target/release/stemx models                                   # list models (+ license, personal flag)
-target/release/stemx selftest [--model ID] [--device auto|cpu|gpu]
-target/release/stemx separate song.mp3 --model htdemucs_6s --out out/song [--device auto|cpu|gpu]
-target/release/stemx decode song.mp3 song.wav                 # decoder check (44.1 kHz float WAV)
+cargo build --release -p shredlab-cli
+target/release/shredlab-cli models                                   # list models (+ license, personal flag)
+target/release/shredlab-cli selftest [--model ID] [--device auto|cpu|gpu]
+target/release/shredlab-cli separate song.mp3 --model htdemucs_6s --out out/song [--device auto|cpu|gpu]
+target/release/shredlab-cli decode song.mp3 song.wav                 # decoder check (44.1 kHz float WAV)
 ```
 
 Models are looked up in `--models-dir DIR` (repeatable), else in
-`$STEMX_MODELS_DIR` (`;`-separated on Windows, `:` elsewhere), else in
+`$SHREDLAB_MODELS_DIR` (`;`-separated on Windows, `:` elsewhere), else in
 `models/registry` and `models/personal` of the repo. `--device auto` uses
 the GPU (DirectML on Windows, CoreML on macOS, CUDA with the `cuda` cargo
 feature) only if its self-test passes, else the CPU. Self-test results are
-cached in `target/stemx-cache/` (`--cache-dir`).
+cached in `target/shredlab-cache/` (`--cache-dir`).
 
 Slow golden tests against the Python reference (need
 `tests/fixtures/local/` and the model folders):
 
 ```sh
-cargo test --release -p stemx-separation --test golden -- --ignored --nocapture --test-threads 1
+cargo test --release -p shredlab-separation --test golden -- --ignored --nocapture --test-threads 1
 ```
 
 ### ONNX Runtime binaries
 
-`stemx-separation` uses the `ort` crate with `download-binaries`: at build
+`shredlab-separation` uses the `ort` crate with `download-binaries`: at build
 time it downloads pyke's prebuilt ONNX Runtime (1.31, with DirectML on
 Windows) into the user cache (`%LOCALAPPDATA%\ort.pyke.io`) and links it
 **statically**. The only runtime DLL is `DirectML.dll`, which `copy-dylibs`
 copies next to the built binaries (`target/debug`, `target/release`); ship
 it next to the app executable. Set `ORT_LIB_LOCATION` to link a local ORT
-build instead. The `load-dynamic` feature of `stemx-separation` loads
+build instead. The `load-dynamic` feature of `shredlab-separation` loads
 `onnxruntime.dll` at runtime instead (`ORT_DYLIB_PATH`, or next to the
 executable), e.g. to test against Microsoft's official builds.
 
@@ -177,5 +177,5 @@ and logo are not covered by the GPL; see [TRADEMARKS.md](TRADEMARKS.md).
 Bundled model weights carry their own licenses (see
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)).
 Third-party notices: [app/THIRD_PARTY.md](app/THIRD_PARTY.md) (fonts) and
-[crates/stemx-audio/THIRD_PARTY.md](crates/stemx-audio/THIRD_PARTY.md)
+[crates/shredlab-audio/THIRD_PARTY.md](crates/shredlab-audio/THIRD_PARTY.md)
 (audio).

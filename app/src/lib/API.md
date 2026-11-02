@@ -85,7 +85,7 @@ AppSettingsInfo {
   models: ModelInfo[],         // all installed models
   model_id: string | null,     // model the next separation uses (null: none installed)
   model_choice: string | null, // saved choice; null = default model
-  model_from_env: boolean,     // STEMX_MODEL overrides the choice (dev builds)
+  model_from_env: boolean,     // SHREDLAB_MODEL overrides the choice (dev builds)
   quality: Quality,            // quality the next separation uses
   quality_choice: Quality | null, // saved choice; null = default for the device
   default_quality: Quality,    // "high" when model_id runs on the GPU, else "standard"
@@ -231,7 +231,7 @@ StrengthSetting { level: number, smooth: boolean }
 | `set_master_volume` | `volume: f32, save: bool` | `AppSettingsInfo` | Master playback volume (linear, clamped to 0..1), applied at once to everything played (music and click, smoothed). Playback only: exports are not affected. `save` also stores it with the app settings; the UI saves when a slider drag ends. Applied at startup from the saved value. `Err` for a non-finite value. |
 | `set_click_volume` | `volume: f32` | `AppSettingsInfo` | Saves the click and count-in volume (linear, clamped to 0..1) with the app settings and applies it to playback at once. While the slider is dragged the UI sends `set_click` with the new `volume` instead (heard at once, not saved). `Err` for a non-finite value. |
 | `set_theme` | `theme: String` | `AppSettingsInfo` | Saves the UI theme with the app settings (`<data dir>/settings.json`). `Err` for an unknown theme. The UI applies the theme itself and mirrors it in `localStorage` for the next start (no flash before `get_app_settings` returns). |
-| `get_refine_presets` | – | `RefinePreset[]` | The Refine panel's EQ presets (stemx-dsp `presets.rs`). A preset sets the EQ and keeps the stereo selection. |
+| `get_refine_presets` | – | `RefinePreset[]` | The Refine panel's EQ presets (shredlab-dsp `presets.rs`). A preset sets the EQ and keeps the stereo selection. |
 | `set_refine` | `update: { stem: StemName, params: RefineParams }` | `()` | Live: heard at once (smoothed, no clicks), also during playback; turning an exception on or off on an off row also makes it audible or silent; saved in the song's `song.json` about 600 ms after the last change (and on song switch). Identity params = unrefined. `Err` for an unknown stem or no song. |
 | `set_refine_analysis` | `stem: Option<String>` | `()` | Turns the stereo-field analysis on for this stem only (the open Refine panel) or off (`null`). Data comes as `refine-field` events while playing. |
 | `set_strength` | `strength: StrengthSetting` | `{ job: number }` | Saves the song's strength at once and re-derives the stems on a background thread (re-reads the cached set, about 1–2 s for a 5-min song; a newer call cancels the older job), then swaps the stems in with the usual crossfade. `job` 0 = nothing to compute (same as loaded, or not separated yet: applied after separation). |

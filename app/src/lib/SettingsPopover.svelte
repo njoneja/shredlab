@@ -101,7 +101,7 @@
             <option value={m.id}>{modelLabel(m)}</option>
           {/each}
         </select>
-        {#if st.model_from_env}<p class="muted note">STEMX_MODEL is set and overrides this choice.</p>{/if}
+        {#if st.model_from_env}<p class="muted note">SHREDLAB_MODEL is set and overrides this choice.</p>{/if}
       </div>
     {/if}
 

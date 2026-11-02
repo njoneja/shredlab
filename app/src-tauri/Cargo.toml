@@ -24,9 +24,9 @@ tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 serde.workspace = true
 serde_json.workspace = true
-stemx-io.workspace = true
-stemx-separation.workspace = true
-stemx-beats.workspace = true
-stemx-library.workspace = true
-stemx-audio.workspace = true
-stemx-dsp.workspace = true
+shredlab-io.workspace = true
+shredlab-separation.workspace = true
+shredlab-beats.workspace = true
+shredlab-library.workspace = true
+shredlab-audio.workspace = true
+shredlab-dsp.workspace = true

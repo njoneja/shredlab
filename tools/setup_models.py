@@ -190,7 +190,7 @@ def setup_venv(venv, force):
     if venv.resolve() == (REPO / ".venv").resolve():
         fail(".venv is the DirectML dev environment; use a separate venv (default .venv-models).")
     py = venv_python(venv)
-    marker = venv / ".stemx-requirements.sha256"
+    marker = venv / ".shredlab-requirements.sha256"
     fp = env_fingerprint()
     if not force and py.exists() and marker.exists() and marker.read_text().strip() == fp:
         info(f"up to date: {venv}")
@@ -373,8 +373,8 @@ def main():
     if out != (REPO / "models").resolve():
         print("\nThis is not the repo's models/ folder, which the app bundle and debug builds use.")
         print("To run the app against these models:")
-        print(f"  STEMX_MODELS_DIR={out / 'registry'}")
-        print(f"  STEMX_BEAT_MODEL={out / BEAT_ONNX}")
+        print(f"  SHREDLAB_MODELS_DIR={out / 'registry'}")
+        print(f"  SHREDLAB_BEAT_MODEL={out / BEAT_ONNX}")
 
 
 # ------------------------------------------------- worker (model venv)

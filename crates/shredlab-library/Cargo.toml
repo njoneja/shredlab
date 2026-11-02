@@ -1,0 +1,17 @@
+[package]
+name = "shredlab-library"
+description = "Song library, manifests and stem cache for Stem Extractor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+symphonia.workspace = true
+thiserror.workspace = true
+shredlab-dsp.workspace = true

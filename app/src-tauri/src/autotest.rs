@@ -2,7 +2,7 @@
 //! backend calls the commands use:
 //!
 //! ```text
-//! STEMX_AUTOTEST=<song> [STEMX_AUTOTEST_OUT=<dir>] [STEMX_AUTOTEST_EXIT=1] pnpm --dir app tauri dev
+//! SHREDLAB_AUTOTEST=<song> [SHREDLAB_AUTOTEST_OUT=<dir>] [SHREDLAB_AUTOTEST_EXIT=1] pnpm --dir app tauri dev
 //! ```
 //!
 //! quality High -> open -> separate (unless cached) -> beats -> play 3 s ->
@@ -22,7 +22,7 @@
 //! is logged with its timing; the last line is `AUTOTEST PASS` or
 //! `AUTOTEST FAIL: ...`. The saved settings (app settings, and the song's
 //! refine and strength) are restored at the end. Use a
-//! fresh `STEMX_DATA_DIR` to time both separations.
+//! fresh `SHREDLAB_DATA_DIR` to time both separations.
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver, Sender};
@@ -40,7 +40,7 @@ static RX: OnceLock<Mutex<Option<Receiver<Event>>>> = OnceLock::new();
 
 /// Event observer for the sink, if the autotest is enabled.
 pub fn event_tap() -> Option<Tap> {
-    std::env::var_os("STEMX_AUTOTEST")?;
+    std::env::var_os("SHREDLAB_AUTOTEST")?;
     let (tx, rx): (Sender<Event>, Receiver<Event>) = channel();
     RX.get_or_init(|| Mutex::new(Some(rx)));
     let tx = Mutex::new(tx);
@@ -59,18 +59,18 @@ pub fn event_tap() -> Option<Tap> {
 }
 
 pub fn maybe_start(backend: Arc<Backend>, app: tauri::AppHandle) {
-    let Some(song) = std::env::var_os("STEMX_AUTOTEST") else {
+    let Some(song) = std::env::var_os("SHREDLAB_AUTOTEST") else {
         return;
     };
     let Some(rx) = RX.get().and_then(|m| m.lock().ok()?.take()) else {
         return;
     };
-    let out = std::env::var_os("STEMX_AUTOTEST_OUT")
+    let out = std::env::var_os("SHREDLAB_AUTOTEST_OUT")
         .map(PathBuf::from)
         .unwrap_or_else(|| backend.data_dir().join("autotest"));
-    let exit = std::env::var_os("STEMX_AUTOTEST_EXIT").is_some();
+    let exit = std::env::var_os("SHREDLAB_AUTOTEST_EXIT").is_some();
     let _ = std::thread::Builder::new()
-        .name("stemx-autotest".into())
+        .name("shredlab-autotest".into())
         .spawn(move || {
             std::thread::sleep(Duration::from_secs(2));
             let saved = backend.app_settings();
@@ -204,7 +204,7 @@ fn export_wait(b: &Arc<Backend>, rx: &Receiver<Event>, req: ExportRequest) -> Re
 }
 
 fn read_wav(path: &Path) -> Result<[Vec<f32>; 2], String> {
-    let a = stemx_io::decode_file(path).map_err(|e| e.to_string())?;
+    let a = shredlab_io::decode_file(path).map_err(|e| e.to_string())?;
     let mut ch = a.channels.into_iter();
     let l = ch.next().unwrap_or_default();
     let r = ch.next().unwrap_or_else(|| l.clone());
@@ -608,7 +608,7 @@ fn check_refine_strength(
     out: &Path,
     plain: &[Vec<f32>; 2],
 ) -> Result<(), String> {
-    use stemx_dsp::refine::{eq_preset, PanParams, RefineParams};
+    use shredlab_dsp::refine::{eq_preset, PanParams, RefineParams};
     for stem in STEMS {
         b.set_refine(stem, RefineParams::default())?;
     }

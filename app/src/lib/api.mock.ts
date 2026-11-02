@@ -34,17 +34,17 @@ function emit<E extends EventName>(event: E, payload: EventMap[E]) {
   handlers.get(event)?.forEach((h) => h(payload));
 }
 
-const LS_LIB = "stemx.mock.library";
-const LS_SETTINGS = "stemx.mock.settings.";
+const LS_LIB = "shredlab.mock.library";
+const LS_SETTINGS = "shredlab.mock.settings.";
 // Cached stem sets, most recent last: "<song_id>|<model_id>|<quality>".
-const LS_CACHED = "stemx.mock.cached_sets";
-const LS_APP = "stemx.mock.app_settings";
-const LS_THEME = "stemx.mock.theme";
-const LS_REFINE = "stemx.mock.refine.";
-const LS_STRENGTH = "stemx.mock.strength.";
+const LS_CACHED = "shredlab.mock.cached_sets";
+const LS_APP = "shredlab.mock.app_settings";
+const LS_THEME = "shredlab.mock.theme";
+const LS_REFINE = "shredlab.mock.refine.";
+const LS_STRENGTH = "shredlab.mock.strength.";
 // Song ids removed from the recent list, and demo songs whose data was deleted.
-const LS_HIDDEN = "stemx.mock.hidden";
-const LS_GONE = "stemx.mock.deleted";
+const LS_HIDDEN = "shredlab.mock.hidden";
+const LS_GONE = "shredlab.mock.deleted";
 
 function lsGet<T>(key: string, fallback: T): T {
   try {
@@ -97,11 +97,11 @@ const DEFAULT_QUALITY: Quality = "high";
 
 let appChoice: AppSettingsUpdate = lsGet<AppSettingsUpdate>(LS_APP, { model_id: null, quality: null });
 let themeChoice: Theme = lsGet<Theme>(LS_THEME, THEMES[0]);
-const LS_MUSIC_START = "stemx.mock.countInToMusicStart";
+const LS_MUSIC_START = "shredlab.mock.countInToMusicStart";
 let toMusicStart: boolean = lsGet<boolean>(LS_MUSIC_START, true);
-const LS_CLICK_VOLUME = "stemx.mock.clickVolume";
+const LS_CLICK_VOLUME = "shredlab.mock.clickVolume";
 let clickVolume: number = lsGet<number>(LS_CLICK_VOLUME, 0.8);
-const LS_MASTER_VOLUME = "stemx.mock.masterVolume";
+const LS_MASTER_VOLUME = "shredlab.mock.masterVolume";
 let masterVolume: number = lsGet<number>(LS_MASTER_VOLUME, 1);
 
 function appSettings(): AppSettingsInfo {

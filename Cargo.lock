@@ -3506,15 +3506,101 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
- "stemx-audio",
- "stemx-beats",
- "stemx-dsp",
- "stemx-io",
- "stemx-library",
- "stemx-separation",
+ "shredlab-audio",
+ "shredlab-beats",
+ "shredlab-dsp",
+ "shredlab-io",
+ "shredlab-library",
+ "shredlab-separation",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
+]
+
+[[package]]
+name = "shredlab-audio"
+version = "0.1.0"
+dependencies = [
+ "cc",
+ "cpal",
+ "flacenc",
+ "hound",
+ "mp3lame-encoder",
+ "rtrb",
+ "rubato",
+ "shredlab-dsp",
+ "shredlab-io",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "shredlab-beats"
+version = "0.1.0"
+dependencies = [
+ "ort",
+ "realfft",
+ "rubato",
+ "symphonia",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "shredlab-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "hound",
+ "shredlab-audio",
+ "shredlab-dsp",
+ "shredlab-io",
+ "shredlab-library",
+ "shredlab-separation",
+]
+
+[[package]]
+name = "shredlab-dsp"
+version = "0.1.0"
+dependencies = [
+ "hound",
+ "realfft",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "shredlab-io"
+version = "0.1.0"
+dependencies = [
+ "hound",
+ "rubato",
+ "symphonia",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "shredlab-library"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2",
+ "shredlab-dsp",
+ "symphonia",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "shredlab-separation"
+version = "0.1.0"
+dependencies = [
+ "num_cpus",
+ "ort",
+ "serde",
+ "serde_json",
+ "sha2",
+ "shredlab-dsp",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -3616,92 +3702,6 @@ name = "static_vcruntime"
 version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ff7589a1859b09232522bb9edf076ca7fcf14ded96685d3fa629db73023ffbb7"
-
-[[package]]
-name = "stemx-audio"
-version = "0.1.0"
-dependencies = [
- "cc",
- "cpal",
- "flacenc",
- "hound",
- "mp3lame-encoder",
- "rtrb",
- "rubato",
- "stemx-dsp",
- "stemx-io",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "stemx-beats"
-version = "0.1.0"
-dependencies = [
- "ort",
- "realfft",
- "rubato",
- "symphonia",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "stemx-cli"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "hound",
- "stemx-audio",
- "stemx-dsp",
- "stemx-io",
- "stemx-library",
- "stemx-separation",
-]
-
-[[package]]
-name = "stemx-dsp"
-version = "0.1.0"
-dependencies = [
- "hound",
- "realfft",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "stemx-io"
-version = "0.1.0"
-dependencies = [
- "hound",
- "rubato",
- "symphonia",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "stemx-library"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "sha2",
- "stemx-dsp",
- "symphonia",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "stemx-separation"
-version = "0.1.0"
-dependencies = [
- "num_cpus",
- "ort",
- "serde",
- "serde_json",
- "sha2",
- "stemx-dsp",
- "thiserror 2.0.21",
-]
 
 [[package]]
 name = "strength_reduce"

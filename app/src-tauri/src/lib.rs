@@ -3,15 +3,15 @@
 //! and is Tauri-free.
 //!
 //! Environment variables (all optional):
-//! - `STEMX_DATA_DIR`: data directory instead of the app data dir.
-//! - `STEMX_MODELS_DIR`: extra model directories (dev).
-//! - `STEMX_BEAT_MODEL`: path of `beat_this_final0.onnx`.
-//! - `STEMX_DEVICE`: `auto` (default), `cpu` or `gpu` for separation.
-//! - `STEMX_BEATS_DEVICE`: `cpu` (default), `auto` or `gpu` for beats.
-//! - `STEMX_MODEL`: separation model id; overrides the model chosen in
+//! - `SHREDLAB_DATA_DIR`: data directory instead of the app data dir.
+//! - `SHREDLAB_MODELS_DIR`: extra model directories (dev).
+//! - `SHREDLAB_BEAT_MODEL`: path of `beat_this_final0.onnx`.
+//! - `SHREDLAB_DEVICE`: `auto` (default), `cpu` or `gpu` for separation.
+//! - `SHREDLAB_BEATS_DEVICE`: `cpu` (default), `auto` or `gpu` for beats.
+//! - `SHREDLAB_MODEL`: separation model id; overrides the model chosen in
 //!   Settings (`<data dir>/settings.json`).
-//! - `STEMX_NO_PRELOAD`: don't load the model at startup.
-//! - debug builds: `STEMX_AUTOTEST=<song>` runs the headless flow in
+//! - `SHREDLAB_NO_PRELOAD`: don't load the model at startup.
+//! - debug builds: `SHREDLAB_AUTOTEST=<song>` runs the headless flow in
 //!   `autotest.rs`.
 
 pub mod audio;
@@ -30,7 +30,7 @@ mod win_icon;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use stemx_separation::DevicePref;
+use shredlab_separation::DevicePref;
 use tauri::{Emitter, Manager};
 
 use backend::{Backend, Config, Sink};
@@ -75,7 +75,7 @@ fn migrate_old_data_dir(data_dir: &Path) -> Option<String> {
 
 fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let mut migrated = None;
-    let data_dir = match std::env::var_os("STEMX_DATA_DIR") {
+    let data_dir = match std::env::var_os("SHREDLAB_DATA_DIR") {
         Some(d) => PathBuf::from(d),
         None => match app.path().app_data_dir() {
             Ok(d) => {
@@ -97,7 +97,7 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         if audio::IS_STUB {
             "STUB (silent)"
         } else {
-            "stemx-audio"
+            "shredlab-audio"
         }
     );
     if let Some(m) = migrated {
@@ -112,8 +112,8 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let cfg = Config {
         model_dirs: models::model_dirs(resource_dir.as_deref(), &data_dir),
         beat_model: models::find_beat_model(resource_dir.as_deref(), &data_dir),
-        device: device_env("STEMX_DEVICE", DevicePref::Auto),
-        beat_device: device_env("STEMX_BEATS_DEVICE", DevicePref::Cpu),
+        device: device_env("SHREDLAB_DEVICE", DevicePref::Auto),
+        beat_device: device_env("SHREDLAB_BEATS_DEVICE", DevicePref::Cpu),
         data_dir,
     };
     let engine = match audio::Engine::new() {

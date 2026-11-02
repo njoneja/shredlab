@@ -215,30 +215,31 @@ mod tests {
         assert!(ms > 7.5, "{ms}");
     }
 
-    /// Real songs: `STEMX_MUSIC_START_SONGS="a.mp3;b.mp3" cargo test -p
+    /// Real songs: `SHREDLAB_MUSIC_START_SONGS="a.mp3;b.mp3" cargo test -p
     /// shredlab --lib music_start::tests::real_songs -- --ignored --nocapture`
     /// (beats from `models/onnx/beat_this_final0.onnx` on the CPU).
     #[test]
     #[ignore]
     fn real_songs() {
-        use stemx_separation::{BeatModel, DevicePref};
-        let songs = std::env::var("STEMX_MUSIC_START_SONGS").expect("STEMX_MUSIC_START_SONGS");
+        use shredlab_separation::{BeatModel, DevicePref};
+        let songs =
+            std::env::var("SHREDLAB_MUSIC_START_SONGS").expect("SHREDLAB_MUSIC_START_SONGS");
         let model = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../models/onnx/beat_this_final0.onnx");
         let mut m = BeatModel::load(&model, DevicePref::Cpu, Some(8), &mut |_| {}).unwrap();
         for path in songs.split(';').filter(|p| !p.trim().is_empty()) {
-            let audio = stemx_io::decode_file(std::path::Path::new(path)).unwrap();
-            let audio = stemx_io::resample(&audio, SR).unwrap();
+            let audio = shredlab_io::decode_file(std::path::Path::new(path)).unwrap();
+            let audio = shredlab_io::resample(&audio, SR).unwrap();
             let l = audio.channels[0].clone();
             let r = audio.channels.get(1).cloned().unwrap_or_else(|| l.clone());
             #[derive(Debug)]
             struct E(#[allow(dead_code)] String);
-            impl From<stemx_beats::Error> for E {
-                fn from(e: stemx_beats::Error) -> Self {
+            impl From<shredlab_beats::Error> for E {
+                fn from(e: shredlab_beats::Error) -> Self {
                     Self(e.to_string())
                 }
             }
-            let grid = stemx_beats::track(&[&l, &r], SR, |inp: &[f32], shape| {
+            let grid = shredlab_beats::track(&[&l, &r], SR, |inp: &[f32], shape| {
                 m.run(inp, shape).map_err(|e| E(e.to_string()))
             })
             .unwrap();

@@ -20,9 +20,9 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
-use stemx_library::{BeatData, Library, SongMeta, StemsInfo};
-use stemx_separation::selftest::Cache;
-use stemx_separation::{
+use shredlab_library::{BeatData, Library, SongMeta, StemsInfo};
+use shredlab_separation::selftest::Cache;
+use shredlab_separation::{
     BeatModel, DevicePref, Ep, LoadOptions, ModelEntry, ModelRegistry, ModelSource, Separator,
 };
 
@@ -31,13 +31,13 @@ use crate::log;
 use crate::music_start;
 use crate::settings::{self, AppSettings};
 use crate::types::*;
-use stemx_dsp::strength::{apply_strength, StrengthOptions};
+use shredlab_dsp::strength::{apply_strength, StrengthOptions};
 
 /// Event sink: `(event name, JSON payload)`.
 pub type Sink = Arc<dyn Fn(&str, serde_json::Value) + Send + Sync>;
 
 /// Sample rate everything is played and cached at (the model rate).
-pub const RATE: u32 = stemx_io::MODEL_SAMPLE_RATE;
+pub const RATE: u32 = shredlab_io::MODEL_SAMPLE_RATE;
 const ORIGINAL: &str = "original";
 const RECENT_MAX: usize = 20;
 /// Mask exponent per strength level (0 = Natural: the cached stems).
@@ -408,8 +408,8 @@ impl Throttle {
 
 #[derive(Debug)]
 struct BeatErr(String);
-impl From<stemx_beats::Error> for BeatErr {
-    fn from(e: stemx_beats::Error) -> Self {
+impl From<shredlab_beats::Error> for BeatErr {
+    fn from(e: shredlab_beats::Error) -> Self {
         Self(e.to_string())
     }
 }
@@ -538,7 +538,7 @@ impl Backend {
     /// fast).
     pub fn start_background(self: &Arc<Self>) {
         let weak = Arc::downgrade(self);
-        spawn("stemx-position", move || {
+        spawn("shredlab-position", move || {
             let mut was_active = false;
             let mut field = [0.0f32; audio::FIELD_LEN];
             loop {
@@ -573,9 +573,9 @@ impl Backend {
                 was_active = active;
             }
         });
-        if std::env::var_os("STEMX_NO_PRELOAD").is_none() {
+        if std::env::var_os("SHREDLAB_NO_PRELOAD").is_none() {
             let b = self.clone();
-            spawn("stemx-preload", move || {
+            spawn("shredlab-preload", move || {
                 let Some(entry) = b.current_model() else {
                     return;
                 };
@@ -592,10 +592,10 @@ impl Backend {
 
     // ------------------------------------------------------------ settings
 
-    /// The model for the next separation: `STEMX_MODEL` (dev override) if
+    /// The model for the next separation: `SHREDLAB_MODEL` (dev override) if
     /// present, else the saved choice if installed, else the default.
     fn current_model(&self) -> Option<ModelEntry> {
-        if let Some(e) = std::env::var("STEMX_MODEL")
+        if let Some(e) = std::env::var("SHREDLAB_MODEL")
             .ok()
             .and_then(|id| self.registry.get(&id))
         {
@@ -635,7 +635,7 @@ impl Backend {
                 .collect(),
             model_id: entry.as_ref().map(|e| e.id().to_string()),
             model_choice: saved.model_id.clone(),
-            model_from_env: std::env::var("STEMX_MODEL")
+            model_from_env: std::env::var("SHREDLAB_MODEL")
                 .ok()
                 .is_some_and(|id| self.registry.get(&id).is_some()),
             quality,
@@ -754,7 +754,7 @@ impl Backend {
             "loading model {} ({:?}, ONNX Runtime {})",
             entry.id(),
             self.cfg.device,
-            stemx_separation::runtime::ort_version()
+            shredlab_separation::runtime::ort_version()
         );
         let opts = LoadOptions {
             device: self.cfg.device,
@@ -794,7 +794,7 @@ impl Backend {
         let key = Cache::selftest_key(
             &entry.manifest.sha256,
             ep.key(),
-            &stemx_separation::runtime::ort_version(),
+            &shredlab_separation::runtime::ort_version(),
             "",
         );
         match cache.get_selftest(&key) {
@@ -920,7 +920,7 @@ impl Backend {
         // Song id from the content; if the file is gone, from a library
         // entry with cached stems (the cache has everything needed).
         let song_id = if source_exists {
-            stemx_library::song_id_for(&path_buf).map_err(|e| e.to_string())?
+            shredlab_library::song_id_for(&path_buf).map_err(|e| e.to_string())?
         } else {
             self.library
                 .entries()
@@ -995,12 +995,12 @@ impl Backend {
         let mut new_original_info = None;
         if original.is_none() && source_exists {
             let td = Instant::now();
-            let audio = stemx_io::decode_file(&path_buf).map_err(|e| e.to_string())?;
+            let audio = shredlab_io::decode_file(&path_buf).map_err(|e| e.to_string())?;
             if audio.is_empty() {
                 return Err(format!("No audio in {path}"));
             }
             let (rate, nch) = (audio.sample_rate, audio.channels.len() as u32);
-            let audio = stemx_io::resample(&audio, RATE).map_err(|e| e.to_string())?;
+            let audio = shredlab_io::resample(&audio, RATE).map_err(|e| e.to_string())?;
             let mut ch = audio.channels.into_iter();
             let l = ch.next().unwrap_or_default();
             let r = ch.next().unwrap_or_else(|| l.clone());
@@ -1039,7 +1039,7 @@ impl Backend {
             None => SongMeta::new(
                 &song_id,
                 &path_buf,
-                stemx_library::read_tags(&path_buf),
+                shredlab_library::read_tags(&path_buf),
                 duration,
             ),
         };
@@ -1051,7 +1051,7 @@ impl Backend {
             m.sample_rate = rate;
             m.channels = nch;
         }
-        m.last_opened_ms = stemx_library::now_ms();
+        m.last_opened_ms = shredlab_library::now_ms();
         m.hidden = false;
         if stems.is_none() {
             m.stem_sets.clear();
@@ -1344,7 +1344,7 @@ impl Backend {
             }
         );
         let b = self.clone();
-        spawn("stemx-separation", move || {
+        spawn("shredlab-separation", move || {
             b.run_separation(entry, shifts, cached, song_id, mix, generation, cancel);
         });
         Ok(started)
@@ -1562,7 +1562,7 @@ impl Backend {
                 (n.as_str(), [ch[0], ch[1]])
             })
             .collect();
-        let dir = stemx_library::stem_set_dir(entry.id(), shifts);
+        let dir = shredlab_library::stem_set_dir(entry.id(), shifts);
         let files = self
             .library
             .write_stems(song_id, &dir, RATE, &views)
@@ -1639,7 +1639,7 @@ impl Backend {
             return;
         };
         let b = self.clone();
-        spawn("stemx-beats", move || {
+        spawn("shredlab-beats", move || {
             let t0 = Instant::now();
             match b.track_beats(&model_path, &mix) {
                 Ok(data) => {
@@ -1691,7 +1691,7 @@ impl Backend {
         }
         let model = guard.as_mut().ok_or("beat model not loaded")?;
         let run = |model: &mut BeatModel| {
-            stemx_beats::track(&[&mix[0], &mix[1]], RATE, |inp: &[f32], shape| {
+            shredlab_beats::track(&[&mix[0], &mix[1]], RATE, |inp: &[f32], shape| {
                 model.run(inp, shape).map_err(|e| BeatErr(e.to_string()))
             })
         };
@@ -1956,7 +1956,7 @@ impl Backend {
                 .join(", ")
         );
         let b = self.clone();
-        spawn("stemx-export", move || {
+        spawn("shredlab-export", move || {
             let t0 = Instant::now();
             let res = b.run_export(&render_req, &path, format, &cancel);
             let cancelled = cancel.load(Ordering::Relaxed);
@@ -2059,7 +2059,7 @@ impl Backend {
 
     /// The Refine panel's EQ presets.
     pub fn refine_presets(&self) -> Vec<RefinePresetInfo> {
-        stemx_dsp::refine::EQ_PRESETS
+        shredlab_dsp::refine::EQ_PRESETS
             .iter()
             .map(|p| RefinePresetInfo {
                 id: p.id.into(),
@@ -2185,7 +2185,7 @@ impl Backend {
             }
         );
         let b = self.clone();
-        spawn("stemx-strength", move || {
+        spawn("shredlab-strength", move || {
             b.run_strength(id, song_id, info, original, want, generation, cancel);
         });
         id
@@ -2369,7 +2369,7 @@ impl Backend {
     /// `original + Σ_rows refine(stem, switch) − Σ_all stem`.
     #[cfg(debug_assertions)]
     pub fn debug_refine_reference(&self, rows: &[(&str, bool)]) -> Option<[Vec<f32>; 2]> {
-        use stemx_dsp::refine::refine_offline;
+        use shredlab_dsp::refine::refine_offline;
         let st = lock(&self.st);
         let song = st.song.as_ref()?;
         let o = song.original.as_ref()?;
@@ -2437,7 +2437,7 @@ mod tests {
         p.eq.low_cut.enabled = true;
         refine.insert("bass".to_string(), p);
         assert_eq!(gains_for(&mix, &refine, &names)[1].1, 0.0);
-        p.pan = stemx_dsp::refine::PanParams::left();
+        p.pan = shredlab_dsp::refine::PanParams::left();
         refine.insert("bass".to_string(), p);
         assert_eq!(gains_for(&mix, &refine, &names)[1].1, 1.0);
         // The engine gets the window inverted on rows that are on.
@@ -2519,7 +2519,8 @@ mod tests {
     }
 
     fn test_backend(name: &str) -> (Arc<Backend>, Arc<Mutex<Vec<String>>>) {
-        let dir = std::env::temp_dir().join(format!("stemx-backend-{}-{name}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("shredlab-backend-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let events = Arc::new(Mutex::new(Vec::new()));
         let ev = events.clone();
@@ -2581,7 +2582,7 @@ mod tests {
         let tone: Vec<f32> = (0..RATE * 2)
             .map(|i| (i as f32 * 0.05).sin() * 0.5)
             .collect();
-        stemx_io::write_wav(&wav, RATE, &[&tone, &tone], stemx_io::WavFormat::F32).unwrap();
+        shredlab_io::write_wav(&wav, RATE, &[&tone, &tone], shredlab_io::WavFormat::F32).unwrap();
         let info = b.open_song(wav.to_str().unwrap()).unwrap();
         assert_eq!(info.title, "tone");
         assert!((info.duration_sec - 2.0).abs() < 1e-3);
@@ -2674,7 +2675,7 @@ mod tests {
                 a * (i as f32 * 0.05).sin()
             })
             .collect();
-        stemx_io::write_wav(&wav, RATE, &[&x, &x], stemx_io::WavFormat::F32).unwrap();
+        shredlab_io::write_wav(&wav, RATE, &[&x, &x], shredlab_io::WavFormat::F32).unwrap();
         b.open_song(wav.to_str().unwrap()).unwrap();
         let beats: Vec<f64> = (0..24).map(|i| 0.25 + i as f64 * 0.5).collect();
         {
@@ -2707,7 +2708,7 @@ mod tests {
         let out = b.data_dir().join("whole.wav");
         b.export_mix(export_req(&out, true, None, None)).unwrap();
         wait_export(&b);
-        let len = |p: &Path| stemx_io::decode_file(p).unwrap().channels[0].len();
+        let len = |p: &Path| shredlab_io::decode_file(p).unwrap().channels[0].len();
         let lead = 4.0 * 0.5 - (4.25 - ms);
         let want =
             ((12.0 - ms) * RATE as f64).round() as usize + (lead * RATE as f64).round() as usize;
@@ -2763,10 +2764,10 @@ mod tests {
         let ol: Vec<f32> = (0..n).map(|i| gl[i] + ba[i] + dr[i] + res[i]).collect();
         let or: Vec<f32> = (0..n).map(|i| gr[i] + ba[i] + dr[i] + res[i]).collect();
         let wav = b.data_dir().join("song.wav");
-        stemx_io::write_wav(&wav, RATE, &[&ol, &or], stemx_io::WavFormat::F32).unwrap();
+        shredlab_io::write_wav(&wav, RATE, &[&ol, &or], shredlab_io::WavFormat::F32).unwrap();
         let info = b.open_song(wav.to_str().unwrap()).unwrap();
         let id = info.song_id.clone();
-        let dir = stemx_library::stem_set_dir("test", 1);
+        let dir = shredlab_library::stem_set_dir("test", 1);
         let files = b
             .library
             .write_stems(
@@ -2809,7 +2810,7 @@ mod tests {
     #[test]
     #[allow(clippy::needless_range_loop)]
     fn refine_and_strength_persist_and_export_what_you_hear() {
-        use stemx_dsp::refine::{pan_offline, PanParams};
+        use shredlab_dsp::refine::{pan_offline, PanParams};
         let (b, events) = test_backend("refine");
         let (id, wav) = song_with_stems(&b);
         let info = b.open_song(wav.to_str().unwrap()).unwrap();
@@ -2851,7 +2852,7 @@ mod tests {
             req.stems = stems;
             b.export_mix(req).unwrap();
             wait_export(&b);
-            stemx_io::decode_file(&out).unwrap()
+            shredlab_io::decode_file(&out).unwrap()
         };
         let got = export(
             "allbut.wav",

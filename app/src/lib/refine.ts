@@ -1,5 +1,5 @@
 // Refine panel helpers (P5): defaults, quick stereo presets, the stereo
-// window and the EQ curve. Mirrors crates/stemx-dsp/src/refine (pan.rs,
+// window and the EQ curve. Mirrors crates/shredlab-dsp/src/refine (pan.rs,
 // eq.rs); the curve uses the same RBJ formulas, so it is what you hear.
 import type { BandParams, EndParams, EqParams, PanParams, RefineParams, RefinePreset } from "./types";
 
@@ -171,7 +171,7 @@ export function formatHz(f: number): string {
   return f >= 1000 ? `${(f / 1000).toFixed(f >= 10000 ? 0 : 1)} kHz` : `${Math.round(f)} Hz`;
 }
 
-/** Fallback presets (browser mock); the app gets them from the backend (stemx-dsp presets.rs). */
+/** Fallback presets (browser mock); the app gets them from the backend (shredlab-dsp presets.rs). */
 export function mockPresets(): RefinePreset[] {
   const off = (f: number): EndParams => ({ enabled: false, freq: f, mode: "cut", gain_db: 0 });
   const cut = (f: number): EndParams => ({ enabled: true, freq: f, mode: "cut", gain_db: 0 });

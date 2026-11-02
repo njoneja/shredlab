@@ -129,7 +129,7 @@ export interface AppSettingsInfo {
   models: ModelInfo[];
   model_id: string | null; // model the next separation uses (null: none installed)
   model_choice: string | null; // saved choice; null = default model
-  model_from_env: boolean; // STEMX_MODEL overrides the choice
+  model_from_env: boolean; // SHREDLAB_MODEL overrides the choice
   quality: Quality; // quality the next separation uses
   quality_choice: Quality | null; // saved choice; null = default for the device
   default_quality: Quality;

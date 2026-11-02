@@ -36,7 +36,7 @@ allow = [
 ]
 confidence-threshold = 0.9
 exceptions = [
-    # LAME, statically linked; see crates/stemx-audio/THIRD_PARTY.md.
+    # LAME, statically linked; see crates/shredlab-audio/THIRD_PARTY.md.
     { crate = "mp3lame-encoder", allow = ["LGPL-3.0"] },
     { crate = "mp3lame-sys", allow = ["LGPL-3.0"] },
     # Mozilla's CA certificate data.

@@ -1,13 +1,13 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/stemx-dsp",
-    "crates/stemx-io",
-    "crates/stemx-separation",
-    "crates/stemx-beats",
-    "crates/stemx-audio",
-    "crates/stemx-library",
-    "crates/stemx-cli",
+    "crates/shredlab-dsp",
+    "crates/shredlab-io",
+    "crates/shredlab-separation",
+    "crates/shredlab-beats",
+    "crates/shredlab-audio",
+    "crates/shredlab-library",
+    "crates/shredlab-cli",
     "app/src-tauri",
 ]
 
@@ -19,12 +19,12 @@ authors = ["Navneet Joneja"]
 rust-version = "1.92"
 
 [workspace.dependencies]
-stemx-dsp = { path = "crates/stemx-dsp" }
-stemx-io = { path = "crates/stemx-io" }
-stemx-separation = { path = "crates/stemx-separation" }
-stemx-beats = { path = "crates/stemx-beats" }
-stemx-audio = { path = "crates/stemx-audio" }
-stemx-library = { path = "crates/stemx-library" }
+shredlab-dsp = { path = "crates/shredlab-dsp" }
+shredlab-io = { path = "crates/shredlab-io" }
+shredlab-separation = { path = "crates/shredlab-separation" }
+shredlab-beats = { path = "crates/shredlab-beats" }
+shredlab-audio = { path = "crates/shredlab-audio" }
+shredlab-library = { path = "crates/shredlab-library" }
 
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
@@ -52,20 +52,20 @@ strip = true
 [profile.dev.package."*"]
 opt-level = 3
 
-[profile.dev.package.stemx-dsp]
+[profile.dev.package.shredlab-dsp]
 opt-level = 3
 
-[profile.dev.package.stemx-io]
+[profile.dev.package.shredlab-io]
 opt-level = 3
 
-[profile.dev.package.stemx-beats]
+[profile.dev.package.shredlab-beats]
 opt-level = 3
 
-[profile.dev.package.stemx-separation]
+[profile.dev.package.shredlab-separation]
 opt-level = 3
 
-[profile.dev.package.stemx-library]
+[profile.dev.package.shredlab-library]
 opt-level = 3
 
-[profile.dev.package.stemx-audio]
+[profile.dev.package.shredlab-audio]
 opt-level = 3

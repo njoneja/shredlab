@@ -14,25 +14,25 @@ Svelte UI (app/src)                 mixer, waveform, transport, export dialog
    │  Tauri commands / events
 app/src-tauri                       commands → backend (state, background jobs)
    │
-   ├─ stemx-separation   ONNX Runtime sessions, model registry, adapters, self-test
-   │    └─ stemx-dsp     STFT/iSTFT, chunking, overlap-add
-   ├─ stemx-beats        Beat This! pre/post-processing (ORT-free)
-   ├─ stemx-audio        real-time engine, offline render, WAV/FLAC/MP3 export
-   ├─ stemx-library      song folders, song.json, stem cache
-   └─ stemx-io           decode, resample, WAV writing
+   ├─ shredlab-separation   ONNX Runtime sessions, model registry, adapters, self-test
+   │    └─ shredlab-dsp     STFT/iSTFT, chunking, overlap-add
+   ├─ shredlab-beats        Beat This! pre/post-processing (ORT-free)
+   ├─ shredlab-audio        real-time engine, offline render, WAV/FLAC/MP3 export
+   ├─ shredlab-library      song folders, song.json, stem cache
+   └─ shredlab-io           decode, resample, WAV writing
 ```
 
 ## Repository layout
 
 | Path | Owns |
 |---|---|
-| `crates/stemx-dsp` | `torch.stft`-compatible STFT/iSTFT, the Demucs hybrid spectrogram glue, chunking schedules, overlap-add, song normalization; Refine DSP (stereo-position mask, EQ with cut/shelf ends, presets, stereo-field analysis) and separation strength |
-| `crates/stemx-io` | Decoding (symphonia: MP3, FLAC, WAV, OGG Vorbis, M4A AAC/ALAC), resampling (rubato), WAV writing (hound). Returns planar f32 stereo |
-| `crates/stemx-separation` | ONNX Runtime (`ort`) environment and execution providers, `model.json` parsing, model registry, the two adapters, device self-test, the `Separator` entry point, and the ORT session for the beat model |
-| `crates/stemx-beats` | Beat This! log-mel preprocessing, chunking and peak picking; tempo and meter helpers |
-| `crates/stemx-audio` | Real-time playback engine, mixer, Signalsmith Stretch wrapper, click/count-in, safety limiter, offline render and export encoders |
-| `crates/stemx-library` | One folder per song with a JSON manifest and cached stems |
-| `crates/stemx-cli` | `stemx`, a headless CLI: list models, run self-tests, separate, decode |
+| `crates/shredlab-dsp` | `torch.stft`-compatible STFT/iSTFT, the Demucs hybrid spectrogram glue, chunking schedules, overlap-add, song normalization; Refine DSP (stereo-position mask, EQ with cut/shelf ends, presets, stereo-field analysis) and separation strength |
+| `crates/shredlab-io` | Decoding (symphonia: MP3, FLAC, WAV, OGG Vorbis, M4A AAC/ALAC), resampling (rubato), WAV writing (hound). Returns planar f32 stereo |
+| `crates/shredlab-separation` | ONNX Runtime (`ort`) environment and execution providers, `model.json` parsing, model registry, the two adapters, device self-test, the `Separator` entry point, and the ORT session for the beat model |
+| `crates/shredlab-beats` | Beat This! log-mel preprocessing, chunking and peak picking; tempo and meter helpers |
+| `crates/shredlab-audio` | Real-time playback engine, mixer, Signalsmith Stretch wrapper, click/count-in, safety limiter, offline render and export encoders |
+| `crates/shredlab-library` | One folder per song with a JSON manifest and cached stems |
+| `crates/shredlab-cli` | `shredlab-cli`, a headless CLI: list models, run self-tests, separate, decode |
 | `app/src-tauri` | Tauri shell: commands, events, background jobs, settings, model discovery |
 | `app/src` | Svelte 5 + TypeScript + Vite frontend |
 | `tools/` | Python tooling: model setup and export, registry builder, reference implementations, fixture generators |
@@ -46,9 +46,9 @@ app, the CLI and tests.
 ## Separation pipeline
 
 ```
-file ─ decode (stemx-io) ─ resample to 44.1 kHz stereo
-     ─ chunking + STFT (stemx-dsp)            outside the ONNX graph
-     ─ ONNX model (stemx-separation, ort)     network core only
+file ─ decode (shredlab-io) ─ resample to 44.1 kHz stereo
+     ─ chunking + STFT (shredlab-dsp)            outside the ONNX graph
+     ─ ONNX model (shredlab-separation, ort)     network core only
      ─ iSTFT / mask multiply + overlap-add    outside the ONNX graph
      ─ stems (planar f32, one per model output)
 ```
@@ -99,18 +99,18 @@ the only runtime DLL is `DirectML.dll`. See the README for build details.
 
 ## Beats
 
-Beat and downbeat tracking uses Beat This! (CPJKU, MIT). `stemx-beats` holds
+Beat and downbeat tracking uses Beat This! (CPJKU, MIT). `shredlab-beats` holds
 the model-agnostic parts: downmix to mono, resample to 22.05 kHz, log-mel
 spectrogram, 1500-frame chunks, then peak picking and snapping downbeats to
 beats. It has no ONNX Runtime dependency; inference is a closure, which the
-app backs with `stemx_separation::BeatModel`. The app runs beats on CPU by
+app backs with `shredlab_separation::BeatModel`. The app runs beats on CPU by
 default because this model has no self-test. When detection is wrong, the
 user can mark which beat is "one" and change beats per bar from any beat
 onward; the overrides are saved with the song.
 
 ## Audio engine
 
-`stemx-audio` plays a set of tracks (stems, plus the original mix) on the
+`shredlab-audio` plays a set of tracks (stems, plus the original mix) on the
 default output device via cpal.
 
 - A producer thread runs the pipeline: refine → mix → Signalsmith Stretch →
@@ -139,7 +139,7 @@ default output device via cpal.
   latency (4096 samples) is hidden by feeding it ahead of the play
   position; chains re-prime whenever playback jumps (seek, loop, pre-roll).
 - **Separation strength** re-derives the stems from the original with a
-  sharper ratio mask (`stemx-dsp` `strength`) on a background thread in
+  sharper ratio mask (`shredlab-dsp` `strength`) on a background thread in
   the app; the derived set replaces the cached one in memory.
 - Click and count-in are generated from the beat grid, with accented
   downbeats. The count-in tempo comes from the beats after the start (the
@@ -159,7 +159,7 @@ final sum keeps peaks below −0.1 dBFS.
 
 ## Library and stem cache
 
-`stemx-library` stores one folder per song under `<data dir>/library`,
+`shredlab-library` stores one folder per song under `<data dir>/library`,
 keyed by a hash of the file content:
 
 ```
@@ -191,7 +191,7 @@ per-song UI settings.
   `export-progress`, `playback-position`, `refine-field` and
   `strength-progress`/`-done`.
 - `models.rs`: finds models (bundled resources, then the user models folder,
-  then `STEMX_MODELS_DIR`, then repo folders in debug builds).
+  then `SHREDLAB_MODELS_DIR`, then repo folders in debug builds).
 - `settings.rs`: `settings.json` with the chosen model, quality, theme and
   "count in to where the music starts".
 - `music_start.rs`: finds where the music starts after a quiet intro
@@ -231,14 +231,14 @@ The Python code in `spikes/` and `tools/reference/` is the reference for the
 Rust port; each Rust component is checked against it:
 
 - `tests/fixtures/` (committed, generated by `tools/make_fixtures.py`):
-  model-free STFT, iSTFT and chunking vectors, used by `stemx-dsp` tests.
+  model-free STFT, iSTFT and chunking vectors, used by `shredlab-dsp` tests.
 - `tests/fixtures/local/` (not committed, `tools/make_goldens.py`):
   full-model outputs on a real excerpt, used by the ignored golden tests in
-  `stemx-separation`.
-- `stemx-beats/tests/reference.rs`: log-mel and peak picking against the
+  `shredlab-separation`.
+- `shredlab-beats/tests/reference.rs`: log-mel and peak picking against the
   Python reference.
 
-The debug app also has a headless end-to-end check (`STEMX_AUTOTEST`); see
+The debug app also has a headless end-to-end check (`SHREDLAB_AUTOTEST`); see
 the README.
 
 ## Licensing
@@ -252,4 +252,4 @@ the README.
 - Signalsmith Stretch and Signalsmith Linear are vendored (MIT).
 - MP3 export uses LAME (LGPL), compiled from source and statically linked.
   Publishing the full source satisfies the relinking requirement. Details in
-  [crates/stemx-audio/THIRD_PARTY.md](../crates/stemx-audio/THIRD_PARTY.md).
+  [crates/shredlab-audio/THIRD_PARTY.md](../crates/shredlab-audio/THIRD_PARTY.md).

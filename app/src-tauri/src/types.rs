@@ -6,8 +6,8 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 pub use crate::settings::Quality;
-pub use stemx_dsp::refine::{EqParams, RefineParams};
-pub use stemx_library::StrengthSetting;
+pub use shredlab_dsp::refine::{EqParams, RefineParams};
+pub use shredlab_library::StrengthSetting;
 
 pub const STEMS: [&str; 6] = ["vocals", "guitar", "bass", "drums", "piano", "other"];
 
@@ -71,7 +71,7 @@ pub struct AppSettingsInfo {
     pub model_id: Option<String>,
     /// The user's saved choice (null = default model).
     pub model_choice: Option<String>,
-    /// True when `STEMX_MODEL` overrides the choice (dev).
+    /// True when `SHREDLAB_MODEL` overrides the choice (dev).
     pub model_from_env: bool,
     /// Quality used for the next separation.
     pub quality: Quality,

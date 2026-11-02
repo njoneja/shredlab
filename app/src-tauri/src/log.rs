@@ -1,4 +1,4 @@
-//! Minimal logging: stderr plus `<data_dir>/stemx.log` (the release exe has
+//! Minimal logging: stderr plus `<data_dir>/shredlab.log` (the release exe has
 //! no console).
 
 use std::fs::{File, OpenOptions};
@@ -14,10 +14,10 @@ static START: OnceLock<Instant> = OnceLock::new();
 pub fn init(data_dir: &Path) {
     START.get_or_init(Instant::now);
     let file = std::fs::create_dir_all(data_dir).ok().and_then(|_| {
-        let path = data_dir.join("stemx.log");
+        let path = data_dir.join("shredlab.log");
         // Keep the log from growing forever.
         if std::fs::metadata(&path).is_ok_and(|m| m.len() > 5 * 1024 * 1024) {
-            let _ = std::fs::rename(&path, data_dir.join("stemx.old.log"));
+            let _ = std::fs::rename(&path, data_dir.join("shredlab.old.log"));
         }
         OpenOptions::new().create(true).append(true).open(path).ok()
     });
