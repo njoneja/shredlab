@@ -21,7 +21,6 @@ one are out of scope.
 - Automatic updates.
 - Clearer first-run experience: GPU detection and what happens when the
   app falls back to the CPU.
-- More testing on macOS.
 
 ## Being considered
 
@@ -57,7 +56,7 @@ one are out of scope.
 - **Tuning detection**: notice that a song is a half step down or not at
   A = 440 Hz and retune it in one click.
 - Key and chord detection.
-- Note readout for the bass stem.
+- Note readout for the bass stem (and possibly single-note guitar parts).
 - Spectrogram or pitch view of a stem.
 - Repeat a tiny slice while held, for fast licks.
 - Drum hits shown as kick, snare and hi-hat lanes.
