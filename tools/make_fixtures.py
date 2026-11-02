@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-FileCopyrightText: 2026 Navneet Joneja
+
 """Generate the small, committed golden fixtures in tests/fixtures/.
 
 Usage: .venv\\Scripts\\python.exe tools/make_fixtures.py

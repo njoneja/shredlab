@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 Navneet Joneja
+
 //! End-to-end check: decode a song, run the full pipeline with ONNX Runtime
 //! (CPU EP) and compare with the Python reference fixtures.
 //!

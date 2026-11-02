@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-FileCopyrightText: 2026 Navneet Joneja
+
 """`demucs-hybrid` adapter reference (htdemucs-style ONNX core, DSP outside).
 
 Ported from spikes/onnx_demucs_own.py (STFT glue) and spikes/onnx_demucs.py

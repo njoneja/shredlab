@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 Navneet Joneja
+
 //! The playback pipeline at the song's sample rate: transport (play, pause,
 //! seek, loop, end), count-in, mix -> time-stretch/pitch-shift, crossfades and
 //! the click track. Shared by the real-time engine (on its producer thread)

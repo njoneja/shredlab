@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-FileCopyrightText: 2026 Navneet Joneja
+
 """Generate large end-to-end goldens into tests/fixtures/local/ (gitignored).
 
 Usage:

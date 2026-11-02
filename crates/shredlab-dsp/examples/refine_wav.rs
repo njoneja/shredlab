@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 Navneet Joneja
+
 //! Applies a RefineChain to a stereo WAV so you can listen to it.
 //!
 //! cargo run --release -p shredlab-dsp --example refine_wav -- <input.wav | --song "<title>" --stem <name>>

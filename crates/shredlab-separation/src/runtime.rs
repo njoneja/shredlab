@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 Navneet Joneja
+
 //! ONNX Runtime environment, execution providers and session construction.
 
 use std::path::{Path, PathBuf};

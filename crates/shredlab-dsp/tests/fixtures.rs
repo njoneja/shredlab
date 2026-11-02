@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 Navneet Joneja
+
 //! Golden tests against `tests/fixtures/` (Python reference vectors, see
 //! `tests/fixtures/README.md`). Skipped with a message if absent.
 

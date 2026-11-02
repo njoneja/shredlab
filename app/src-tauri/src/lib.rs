@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 Navneet Joneja
+
 //! Tauri shell for ShredLab. Commands (`commands.rs`) are thin
 //! wrappers over `backend.rs`, which holds the state and background jobs
 //! and is Tauri-free.

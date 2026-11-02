@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 Navneet Joneja
+
 // Minimal C ABI around Signalsmith Stretch (MIT, vendored in third_party/).
 // Planar float buffers: inputs[channel][frame].
 

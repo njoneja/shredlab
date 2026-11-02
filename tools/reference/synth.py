@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-FileCopyrightText: 2026 Navneet Joneja
+
 """Deterministic self-test input "synth-v1" (see docs/MODEL_MANIFEST.md).
 
 All arithmetic is float64, evaluated in the documented order, then cast to

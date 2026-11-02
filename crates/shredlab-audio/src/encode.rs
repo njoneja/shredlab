@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 Navneet Joneja
+
 //! Export encoders: WAV 16/24-bit (hound), FLAC 24-bit (flacenc, pure Rust)
 //! and MP3 CBR (LAME via mp3lame-encoder, LGPL). Peaks above -0.1 dBFS go
 //! through a look-ahead peak limiter first, so nothing clips.

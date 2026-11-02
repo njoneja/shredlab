@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-FileCopyrightText: 2026 Navneet Joneja
+
 """BS-RoFormer checkpoint -> ONNX export (network core only).
 
 Cleaned-up, parameterized copy of the export code in spikes/onnx_roformer.py

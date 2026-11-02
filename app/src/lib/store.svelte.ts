@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 Navneet Joneja
+
 // App state (Svelte 5 runes). All backend calls go through `api`.
 import { api } from "./api";
 import type {

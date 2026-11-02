@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 Navneet Joneja
+
 //! Crisp window and taskbar icons on Windows.
 //!
 //! Tauri gives Windows one RGBA image for the window icon (the largest entry

@@ -1,3 +1,6 @@
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!-- SPDX-FileCopyrightText: 2026 Navneet Joneja -->
+
 <script lang="ts" module>
   // Inline SVG icons (24x24, stroke-based). Hand-drawn simple shapes.
   const PATHS: Record<string, string> = {

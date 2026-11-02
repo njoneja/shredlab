@@ -1,4 +1,7 @@
-﻿//! STFT glue of the `demucs-hybrid` adapter (== `HTDemucs._spec` / `_ispec`).
+// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 Navneet Joneja
+
+//! STFT glue of the `demucs-hybrid` adapter (== `HTDemucs._spec` / `_ispec`).
 //! Reference: `spec` / `ispec` in `tools/reference/demucs_hybrid.py`.
 
 use std::sync::Arc;

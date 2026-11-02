@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-FileCopyrightText: 2026 Navneet Joneja
+
 """Listening test: multichannel Wiener post-filter on separated stems.
 
 Uses norbert (MIT, sigsep) the way Open-Unmix does: the stems' magnitudes

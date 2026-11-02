@@ -1,3 +1,6 @@
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!-- SPDX-FileCopyrightText: 2026 Navneet Joneja -->
+
 <script lang="ts">
   import { app, QUALITY_TEXT, STAGE_TEXT } from "./store.svelte";
 

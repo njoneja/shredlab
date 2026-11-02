@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-FileCopyrightText: 2026 Navneet Joneja
+
 """Spike: export BS-RoFormer (SW, 6 stems) to ONNX and compare with PyTorch.
 
 The ONNX graph contains only the network core: real-valued STFT in, complex

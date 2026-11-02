@@ -14,6 +14,14 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  spdx:
+    name: SPDX headers
+    if: github.repository == 'njoneja/shredlab'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sh tools/check_spdx.sh
+
   build:
     name: ${{ matrix.os }}
     # Only on the public repo: Actions minutes are free there, not on the

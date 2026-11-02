@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 Navneet Joneja
+
 //! Model registry: scans model folders (`<dir>/<id>/model.json`).
 //!
 //! Directories are passed in by the caller, in priority order: the bundled

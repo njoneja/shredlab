@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 Navneet Joneja
+
 //! Compressed cache files: 16-bit FLAC (flacenc) and MP3 VBR V0 (LAME via
 //! mp3lame-encoder), both written with the same per-file `scale` as the WAV
 //! cache, and decoded with symphonia (shredlab-io).

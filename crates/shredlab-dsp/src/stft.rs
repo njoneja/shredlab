@@ -1,4 +1,7 @@
-﻿//! `torch.stft` / `torch.istft` equivalent (center=True, reflect padding,
+// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 Navneet Joneja
+
+//! `torch.stft` / `torch.istft` equivalent (center=True, reflect padding,
 //! periodic Hann, not normalized). Reference: `stft` / `istft` in
 //! `tools/reference/roformer_separate.py`.
 //!

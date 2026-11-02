@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-FileCopyrightText: 2026 Navneet Joneja
+
 """Convert a model checkpoint to ONNX and install it as a personal model.
 
 Usage (from the repo root):

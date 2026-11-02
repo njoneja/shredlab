@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 Navneet Joneja
+
 //! Model adapters: STFT glue + chunking around an ONNX network core.
 //!
 //! - `demucs-hybrid`: `tools/reference/demucs_hybrid.py`

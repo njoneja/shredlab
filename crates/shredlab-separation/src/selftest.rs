@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 Navneet Joneja
+
 //! Device self-test (`docs/MODEL_MANIFEST.md`): run a deterministic input
 //! through one model segment and compare probes/RMS with `selftest.json`.
 //! Detects GPU backends that silently produce wrong output (e.g. DirectML

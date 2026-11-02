@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 Navneet Joneja
+
 //! DSP primitives for separation, ported from the Python reference
 //! implementations (`tools/reference/`, `spikes/`):
 //!

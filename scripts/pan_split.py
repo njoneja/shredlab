@@ -1,4 +1,7 @@
-﻿"""Split a stereo stem into left / center / right parts by stereo position.
+# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-FileCopyrightText: 2026 Navneet Joneja
+
+"""Split a stereo stem into left / center / right parts by stereo position.
 
 Each time-frequency bin of the STFT gets a pan estimate in [-1, 1]
 (-1 = hard left, +1 = hard right) from the relative magnitudes of the two

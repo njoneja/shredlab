@@ -1,3 +1,6 @@
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!-- SPDX-FileCopyrightText: 2026 Navneet Joneja -->
+
 <script lang="ts">
   // Header split button: "Open" shows the file dialog; the chevron opens a menu of recent
   // songs (same data as the start screen's list) plus "Open file…".

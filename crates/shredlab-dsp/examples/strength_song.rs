@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 Navneet Joneja
+
 //! Separation strength on a cached library song: timing, p = 1 deviation
 //! from the cached stems, and the sum check. Reads the library, never writes
 //! to it.

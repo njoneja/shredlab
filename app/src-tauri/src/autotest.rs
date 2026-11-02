@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 Navneet Joneja
+
 //! Debug-only headless check of the whole flow, driven through the same
 //! backend calls the commands use:
 //!

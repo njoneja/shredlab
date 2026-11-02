@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 Navneet Joneja
+
 //! Refined stems in the mixer, playback pipeline and export (M5c).
 //!
 //! The mix rule (crate `mix` docs): `out = w·original + Σ (g_i·r_i − w·s_i)`

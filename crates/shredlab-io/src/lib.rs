@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 Navneet Joneja
+
 //! Audio I/O: decoding (symphonia: MP3, FLAC, WAV, OGG Vorbis, M4A AAC/ALAC),
 //! resampling (rubato) and WAV writing (hound).
 //!

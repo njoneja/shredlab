@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 Navneet Joneja
+
 //! End-to-end golden tests against the Python reference outputs in
 //! `tests/fixtures/local/` (gitignored; `tools/make_goldens.py`) using the
 //! model folders in `models/registry` and `models/personal`.

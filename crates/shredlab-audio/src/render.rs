@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 Navneet Joneja
+
 //! Offline render for export: the same mix and stretch path as playback,
 //! the whole song or a time range (played once), optionally with the click
 //! track and a count-in.

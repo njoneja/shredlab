@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 Navneet Joneja
+
 //! App state and jobs, independent of Tauri (events go through a [`Sink`]),
 //! so the same code runs in the app, the debug autotest and unit tests.
 //!

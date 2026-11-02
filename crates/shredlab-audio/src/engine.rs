@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 Navneet Joneja
+
 //! Real-time playback: a producer thread renders the [`Pipeline`] into a
 //! lock-free ring buffer; the cpal callback only copies frames out.
 

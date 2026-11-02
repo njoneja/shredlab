@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 Navneet Joneja
+
 //! Library: one folder per song (keyed by a content hash) holding a JSON
 //! manifest (`song.json`) and the cached stems.
 //!

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 Navneet Joneja
+
 //! Chunking and overlap-add for full-song separation.
 //!
 //! - demucs `apply_model` (split=True, transition_power=1, shifts=0):

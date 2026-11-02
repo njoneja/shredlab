@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 Navneet Joneja
+
 //! Safe wrapper around the vendored Signalsmith Stretch (MIT) via a tiny C ABI
 //! (`cpp/stretch_wrapper.cpp`). Planar stereo.
 

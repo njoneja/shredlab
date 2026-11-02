@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 Navneet Joneja
+
 //! Click track: synthesized click sounds and beat/count-in scheduling (pure functions).
 
 use crate::ClickConfig;

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-FileCopyrightText: 2026 Navneet Joneja
+
 """Reference fixtures for the Rust port of the Beat This! glue (crates/shredlab-beats).
 
 Writes raw little-endian arrays plus a meta.json to tests/fixtures/local/beat_this/

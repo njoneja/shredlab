@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 Navneet Joneja
+
 //! Source separation: ONNX Runtime sessions, model registry (`model.json`
 //! manifests), adapters (`demucs-hybrid`, `roformer-mask`) and the device
 //! self-test.

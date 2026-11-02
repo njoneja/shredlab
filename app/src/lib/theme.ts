@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 Navneet Joneja
+
 // Theme handling (from the brand guide). The theme is saved with the app
 // settings in the backend; localStorage keeps a mirror that
 // public/theme-init.js applies before first paint (no flash).

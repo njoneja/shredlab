@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 Navneet Joneja
+
 //! Playback safety limiter: linked-stereo, soft-knee, short look-ahead.
 //!
 //! Real-time safe (fixed buffers, no allocation after construction, O(L)

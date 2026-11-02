@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 Navneet Joneja
+
 // Runs before first paint (a plain blocking script in <head>, so the CSP's
 // script-src 'self' allows it): applies the theme mirrored in localStorage,
 // so there is no flash of the wrong theme while the app settings load.

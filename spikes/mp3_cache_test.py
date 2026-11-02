@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-FileCopyrightText: 2026 Navneet Joneja
+
 """Would MP3 be good enough for the stem cache? Encodes the stems with LAME
 (via ffmpeg) at several settings and measures what the app would suffer:
 

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 Navneet Joneja
+
 //! Comparison against the NumPy reference (`spikes/onnx_beat_this.py`).
 //!
 //! Fixtures are generated locally (gitignored) with

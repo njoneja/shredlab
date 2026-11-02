@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-FileCopyrightText: 2026 Navneet Joneja
+
 """`roformer-mask` adapter reference (BS/Mel-Band RoFormer core, DSP outside).
 
 STFT glue ported from spikes/onnx_roformer.py. Chunking replicates

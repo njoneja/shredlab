@@ -1,3 +1,6 @@
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!-- SPDX-FileCopyrightText: 2026 Navneet Joneja -->
+
 <script lang="ts">
   import { tick } from "svelte";
   import Icon from "./Icon.svelte";

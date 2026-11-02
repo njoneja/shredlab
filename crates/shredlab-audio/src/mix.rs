@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 Navneet Joneja
+
 //! Summing gained tracks into a stereo mix, with click-free gain ramps and a
 //! crossfade when the track set is replaced.
 //!

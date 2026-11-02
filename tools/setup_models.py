@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-FileCopyrightText: 2026 Navneet Joneja
+
 """Download the model checkpoints and build the ONNX models the app bundles.
 
 Run from anywhere with any Python 3.9+ (or via scripts/setup-models.ps1 / .sh):

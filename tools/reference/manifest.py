@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-FileCopyrightText: 2026 Navneet Joneja
+
 """model.json / selftest.json helpers (format: docs/MODEL_MANIFEST.md)."""
 
 import hashlib

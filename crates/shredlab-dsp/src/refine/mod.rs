@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 Navneet Joneja
+
 //! Refine panel DSP (SPEC §5.4 P5): per-stem pan/width mask, then EQ.
 //!
 //! [`RefineChain`] is what the audio engine runs per stem. It has a constant

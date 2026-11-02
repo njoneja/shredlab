@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 Navneet Joneja
+
 // Browser mock of the backend so `pnpm dev` works without Tauri. Fakes a
 // song, separation progress, a beat grid, playback position and export.
 // Audio: a soft WebAudio click when the click track / count-in is on;

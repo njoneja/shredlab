@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-FileCopyrightText: 2026 Navneet Joneja
+
 """Spike: export the Beat This! beat/downbeat tracker (CPJKU, MIT) to ONNX.
 
 The ONNX graph contains only the network: log-mel spectrogram chunk in

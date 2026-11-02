@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-FileCopyrightText: 2026 Navneet Joneja
+
 """Reference implementations of the app's separation pipeline.
 
 numpy + scipy + onnxruntime only (no torch). These are the ground truth the

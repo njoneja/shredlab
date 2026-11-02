@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 Navneet Joneja
+
 //! Real-time audio engine and offline export renderer for Stem Extractor.
 //!
 //! - [`Engine`]: plays a set of [`Track`]s (stems or the original mix) on the

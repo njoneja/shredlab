@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 Navneet Joneja
+
 //! Tauri commands: thin wrappers over [`Backend`]. Names and parameters
 //! follow `app/src/lib/API.md` exactly (camelCase JS keys map to these
 //! snake_case parameter names).

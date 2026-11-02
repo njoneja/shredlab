@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 Navneet Joneja
+
 //! Streaming stereo pan/width mask (Refine panel, SPEC §5.4 P5).
 //!
 //! Each STFT bin gets a pan estimate from the channel magnitudes,

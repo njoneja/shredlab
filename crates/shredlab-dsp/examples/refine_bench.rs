@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 Navneet Joneja
+
 //! CPU cost of one RefineChain (one stereo stem) in real-time-sized blocks.
 //!
 //! cargo run --release -p shredlab-dsp --example refine_bench [seconds]

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 Navneet Joneja
+
 //! App-wide settings persisted as `<data dir>/settings.json`: the chosen
 //! separation model, separation quality, UI theme and "count in to where
 //! the music starts". `None` means "use the default" (default model; High

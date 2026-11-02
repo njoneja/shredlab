@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-FileCopyrightText: 2026 Navneet Joneja
+
 """Builds the ShredLab app icon as an SVG with the clefs as paths.
 
 Treble clef (accent) and bass clef (light) from Noto Music side by side on

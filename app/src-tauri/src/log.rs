@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 Navneet Joneja
+
 //! Minimal logging: stderr plus `<data_dir>/shredlab.log` (the release exe has
 //! no console).
 

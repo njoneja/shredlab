@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-FileCopyrightText: 2026 Navneet Joneja
+
 """Spike: export htdemucs_6s to ONNX ourselves, STFT/iSTFT outside the graph.
 
 The ONNX graph is the network core only:

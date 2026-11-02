@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 Navneet Joneja
+
 // Shared by the start screen's recent list, the header's Open menu and the storage dialogs.
 import type { LibraryEntry } from "./types";
 

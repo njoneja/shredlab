@@ -1,3 +1,6 @@
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!-- SPDX-FileCopyrightText: 2026 Navneet Joneja -->
+
 <script lang="ts">
   // The ShredLab wordmark (from the brand guide): built from text so it
   // takes the theme accent. Written "Shredlab" (lower-case l); the clefs

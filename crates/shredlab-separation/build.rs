@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 Navneet Joneja
+
 //! macOS: ONNX Runtime's CoreML code uses `@available`, which needs
 //! `___isPlatformVersionAtLeast` from clang's runtime. Rust's own builtins do
 //! not provide it in LTO (release) builds, so link `libclang_rt.osx.a`.

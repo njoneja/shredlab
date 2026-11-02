@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-FileCopyrightText: 2026 Navneet Joneja
+
 """Build and verify model folders (model.json + onnx + selftest.json).
 
 Usage (from the repo root, venv python):

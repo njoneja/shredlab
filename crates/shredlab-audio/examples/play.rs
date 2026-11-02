@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 Navneet Joneja
+
 //! Plays a folder of stem WAVs through the engine, or renders an export.
 //!
 //! ```text

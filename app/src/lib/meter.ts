@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 Navneet Joneja
+
 // Meter = beats per bar on top of a detected beat grid. Overrides are kept in
 // the frontend; this module turns raw beats + downbeats + overrides into the
 // effective downbeats sent to the backend (set_meter_overrides).

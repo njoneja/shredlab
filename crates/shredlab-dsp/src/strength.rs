@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 Navneet Joneja
+
 //! Separation strength (SPEC §5.4 P4), offline.
 //!
 //! Every stem is re-derived from the original mix with a sharpened ratio

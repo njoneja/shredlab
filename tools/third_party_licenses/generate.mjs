@@ -1,4 +1,7 @@
 #!/usr/bin/env node
+// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 Navneet Joneja
+
 // Generates app/public/THIRD_PARTY_LICENSES.html: the third-party notices
 // shipped inside ShredLab (shown by About > Third-party licences, and copied
 // next to the executable by the installer).
@@ -34,7 +37,7 @@ const TARGETS = ["x86_64-pc-windows-msvc", "aarch64-apple-darwin", "x86_64-apple
 // Placeholder until a public repository exists.
 const SOURCE_URL = "https://github.com/njoneja/shredlab";
 
-const read = (p) => readFileSync(p, "utf8").replace(/^﻿/, "").replace(/\r\n?/g, "\n").trimEnd() + "\n";
+const read = (p) => readFileSync(p, "utf8").replace(/^/, "").replace(/\r\n?/g, "\n").trimEnd() + "\n";
 const rel = (p) => relative(ROOT, p).replace(/\\/g, "/");
 const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 const hash = (s) => createHash("sha256").update(s.replace(/\s+/g, " ").trim()).digest("hex").slice(0, 10);

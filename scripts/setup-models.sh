@@ -1,4 +1,7 @@
 #!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-FileCopyrightText: 2026 Navneet Joneja
+
 # Download checkpoints and build the bundled ONNX models (macOS / Linux).
 # All arguments are passed to tools/setup_models.py (--out DIR, --force, ...).
 set -e

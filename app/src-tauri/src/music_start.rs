@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 Navneet Joneja
+
 //! "Count in to where the music starts": finds where the music really
 //! starts in a song that opens with a quiet intro (studio talk, a count-off,
 //! silence), so a count-in from the song start can lead straight into the

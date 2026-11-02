@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 Navneet Joneja
+
 //! Serde types of the UI <-> backend contract (`app/src/lib/API.md`).
 //! Field names are the exact snake_case JSON names.
 

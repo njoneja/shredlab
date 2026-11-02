@@ -1,4 +1,7 @@
-﻿"""Model comparison harness: separate songs with several models and build
+# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-FileCopyrightText: 2026 Navneet Joneja
+
+"""Model comparison harness: separate songs with several models and build
 practice mixes.
 
 For every input song and model, writes to out/<song>/<model>/:

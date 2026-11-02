@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 Navneet Joneja
+
 // Pure helpers for the mixer: dB <-> linear gain, the volume slider law, and
 // the "backing track built from the original" rule (API.md, P1).
 

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 Navneet Joneja
+
 //! Beat This! (CPJKU, MIT) beat/downbeat tracking glue for Stem Extractor.
 //!
 //! The ONNX graph (`models/onnx/beat_this_final0.onnx`) contains only the

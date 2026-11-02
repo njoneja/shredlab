@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 Navneet Joneja
+
 //! ONNX session for the Beat This! beat/downbeat model.
 //!
 //! The model glue (log-mel preprocessing, chunking, peak picking) lives in

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 Navneet Joneja
+
 // `pnpm bundle`: release build + installers.
 //
 // The frontend and the release binary are built before `tauri build` so that

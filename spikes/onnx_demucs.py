@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-FileCopyrightText: 2026 Navneet Joneja
+
 """Spike: our own ONNX inference for htdemucs_6s (community export).
 
 Model file: StemSplitio/htdemucs-6s-onnx (MIT), downloaded to

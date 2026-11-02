@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 Navneet Joneja
+
 // Real backend: Tauri commands + events. Command and argument names follow
 // API.md. Tauri converts camelCase JS argument keys to snake_case Rust
 // parameters, so `{ nPoints }` here arrives as `n_points` in Rust.
