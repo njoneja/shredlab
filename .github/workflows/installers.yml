@@ -17,6 +17,9 @@ env:
 jobs:
   bundle:
     name: ${{ matrix.os }}
+    # Only on the public repo: Actions minutes are free there, not on the
+    # private dev repo it is published from.
+    if: github.repository == 'njoneja/shredlab'
     strategy:
       fail-fast: false
       matrix:
