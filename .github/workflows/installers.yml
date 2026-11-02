@@ -97,5 +97,10 @@ jobs:
 
       - uses: softprops/action-gh-release@v2
         with:
-          files: dist/*
+          # The Windows artifact keeps its nsis/ and msi/ folders; dist/*
+          # would match those folders, which the action skips.
+          files: |
+            dist/**/*.exe
+            dist/**/*.msi
+            dist/**/*.dmg
           fail_on_unmatched_files: true
