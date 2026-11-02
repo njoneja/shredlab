@@ -122,6 +122,11 @@
     flex-direction: column;
     gap: var(--gap);
   }
+  /* Keep the transport at the bottom of the window, wherever the mixer
+     ends (a Refine panel opening or closing doesn't move it). */
+  main > :global(.transport) {
+    margin-top: auto;
+  }
   .mixer-scroll {
     flex: 0 1 auto;
     min-height: 120px;

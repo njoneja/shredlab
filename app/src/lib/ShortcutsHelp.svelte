@@ -67,9 +67,9 @@
           <h3 id="help-practice" tabindex="-1" class:flash={flash === "practice"}>Practice a part</h3>
           <ul>
             <li><b>Loop:</b> drag across the waveform to loop a section, or press <kbd>[</kbd> and <kbd>]</kbd> to set A and B at the playhead.</li>
-            <li><b>Speed</b> slows down without changing the key. <b>Pitch</b> moves the key in semitones (fine-tune in cents) without changing the speed.</li>
-            <li><b>Volume:</b> the speaker slider next to Play is the master volume (stems and click; exports are not affected). The slider inside Click sets only the click and count-in level. Double-click resets either.</li>
-            <li><b>Count-in</b> length is in bars. For a pickup, set A on the pickup note and use a fractional count-in, e.g. 1¾ bars.</li>
+            <li><b>Speed</b> slows down without changing the key. <b>Pitch</b> moves the key in semitones (click the cents value to fine-tune) without changing the speed.</li>
+            <li><b>Volume:</b> the speaker next to Play is the master volume (stems and click; exports are not affected). Click it for a slider or scroll over it. The slider inside Click sets only the click and count-in level. Double-click resets either.</li>
+            <li><b>Count-in</b> length is in beats (hover for bars). For a pickup, set A on the pickup note and count in the beats before it, e.g. 7 in 4/4. The cog in Click can count in before every loop repeat.</li>
             <li><b>Count in to where the music starts:</b> playing from the top skips a quiet intro (studio talk, silence) and counts you into the music. Turn it off in Settings.</li>
           </ul>
         </section>
@@ -85,7 +85,7 @@
 
         <section>
           <h3 id="help-click" tabindex="-1" class:flash={flash === "click"}>When the click is off</h3>
-          <p>The click follows the detected beats. To fix it, open the <b>beats per bar</b> menu in the transport (fixes are saved per song):</p>
+          <p>The click follows the detected beats. To fix it, open the <b>cog</b> in the Click control (fixes are saved per song):</p>
           <ul>
             <li><b>This is beat 1:</b> put the playhead on a downbeat and press it to move the bar lines there.</li>
             <li><b>Beats per bar from bar…:</b> for a meter change, or a song detected in the wrong meter.</li>

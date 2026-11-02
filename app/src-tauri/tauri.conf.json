@@ -13,10 +13,11 @@
     "windows": [
       {
         "title": "ShredLab",
-        "width": 1100,
+        "width": 1200,
         "height": 720,
-        "minWidth": 800,
-        "minHeight": 500
+        "minWidth": 940,
+        "minHeight": 500,
+        "visible": false
       }
     ],
     "security": {

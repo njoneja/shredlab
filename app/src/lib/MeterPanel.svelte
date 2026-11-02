@@ -38,14 +38,30 @@
 
 <svelte:window onpointerdown={onWindowDown} onkeydown={(e) => e.key === "Escape" && onclose()} />
 
-<div class="panel" bind:this={panel} role="dialog" aria-label="Beat grid">
+<div class="panel" bind:this={panel} role="dialog" aria-label="Click and beat grid">
   <div class="head">
-    <strong>Beat grid</strong>
+    <strong>Click</strong>
     <span class="muted">
       {app.grid?.bpm ? `${Math.round(app.grid.bpm)} BPM · ` : ""}{app.beatsPerBar} beats per bar · bar {currentBar}
     </span>
     <button class="btn ghost small icon-only" onclick={onclose} aria-label="Close"><Icon name="close" size={14} /></button>
   </div>
+
+  <div class="sect row">
+    <span>Click subdivision</span>
+    <div class="seg" role="radiogroup" aria-label="Click subdivision">
+      {#each SUBDIVS as s (s.v)}
+        <button role="radio" aria-checked={app.click.subdivision === s.v} onclick={() => app.setSubdivision(s.v)}>{s.label}</button>
+      {/each}
+    </div>
+  </div>
+
+  <label class="check" title="With the A–B loop and count-in on, the loop stops at B and counts in again before A">
+    <input type="checkbox" checked={app.click.count_in_each_repeat} onchange={() => app.toggleCountInEachRepeat()} />
+    Count in before each loop repeat
+  </label>
+
+  <div class="sub">Beat grid</div>
 
   <div class="sect">
     <button class="btn" onclick={() => app.beatOneHere()} title="Make the beat nearest the playhead the first beat of a bar">
@@ -61,15 +77,6 @@
     </label>
     <input class="num" type="number" min="1" max={app.downbeats.length || 1} bind:value={fromBar} />
     <button class="btn small" onclick={() => app.beatsPerBarFrom(fromBar, bpb)}>Apply</button>
-  </div>
-
-  <div class="sect row">
-    <span>Click subdivision</span>
-    <div class="seg" role="radiogroup" aria-label="Click subdivision">
-      {#each SUBDIVS as s (s.v)}
-        <button role="radio" aria-checked={app.click.subdivision === s.v} onclick={() => app.setSubdivision(s.v)}>{s.label}</button>
-      {/each}
-    </div>
   </div>
 
   {#if app.overrides.length}
@@ -131,6 +138,21 @@
     align-items: center;
     gap: 8px;
     flex-wrap: wrap;
+  }
+  .check {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .sub {
+    width: 100%;
+    padding-top: 10px;
+    border-top: 1px solid var(--border);
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
   }
   .between {
     justify-content: space-between;

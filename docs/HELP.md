@@ -12,20 +12,21 @@ obvious. The same text, shorter, is in the app under **Help & shortcuts**
   the playhead where you want and press `[` to set A and `]` to set B.
   `L` turns the loop on and off.
 - **Speed and pitch.** Speed (50–150 %) slows the song down without
-  changing the key. Pitch moves the key in semitones, with a cents slider
-  for fine tuning, without changing the speed. Use pitch to match a
+  changing the key. Pitch moves the key in semitones, without changing the
+  speed. Click the cents value next to it for fine tuning. Use pitch to match a
   detuned recording or a guitar tuned down a half step.
 - **Count-in.** Turn on Count-in to hear clicks before playback starts. Its
-  length is in bars, in one-beat steps. The count-in always ends exactly
-  where playback (or the loop) starts.
-- **Volume.** The slider with the speaker, next to Play, is the master
-  volume: everything you hear, stems and click. Exports are not affected.
-  The slider inside the Click button sets only the click and count-in
-  level. Both are remembered for every song; double-click to reset (100 %
-  and 80 %).
+  length is in beats (hover it to see the bars). The count-in always ends
+  exactly where playback (or the loop) starts. To count in again before
+  every loop repeat, turn that on under the cog in the Click control.
+- **Volume.** The speaker next to Play is the master
+  volume: everything you hear, stems and click. Click it for a slider, or
+  scroll over it. Exports are not affected. The slider inside the Click
+  control sets only the click and count-in level. Both are remembered for
+  every song; double-click a slider to reset it (100 % and 80 %).
 - **Pickups.** If the part starts on a pickup before the bar, set A on the
-  pickup note and use a fractional count-in. In 4/4 with a one-beat pickup,
-  1¾ bars counts you in for 7 beats, so you come in on the pickup.
+  pickup note and set the count-in to the beats before it. In 4/4 with a
+  one-beat pickup, 7 beats (1¾ bars) brings you in on the pickup.
 - **Count in to where the music starts.** Many recordings start with
   studio talk or a few seconds of silence. With the count-in on, playing
   from the top skips that quiet intro and counts you straight into the
@@ -51,7 +52,7 @@ obvious. The same text, shorter, is in the app under **Help & shortcuts**
 
 The click follows the beats detected in the song, so tempo changes and
 meter changes work. Detection is good but not perfect. To fix it, open the
-**beats per bar** menu in the transport. Fixes are saved with the song.
+cog in the Click control. Fixes are saved with the song.
 
 - **This is beat 1.** Put the playhead on a downbeat and press it. The bar
   lines move so that beat is beat 1.

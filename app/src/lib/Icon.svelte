@@ -6,6 +6,8 @@
     back: '<path d="M6 5v14"/><path d="M19 5.5v13L9 12z" fill="currentColor"/>',
     loop: '<path d="M4 12a5 5 0 0 1 5-5h9"/><path d="M15 4l3 3-3 3"/><path d="M20 12a5 5 0 0 1-5 5H6"/><path d="M9 20l-3-3 3-3"/>',
     volume: '<path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z" fill="currentColor"/><path d="M15.5 9a4 4 0 0 1 0 6"/><path d="M18 6.5a7.5 7.5 0 0 1 0 11"/>',
+    "volume-low": '<path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z" fill="currentColor"/><path d="M15.5 9a4 4 0 0 1 0 6"/>',
+    "volume-mute": '<path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z" fill="currentColor"/><path d="M16 9.5l5 5M21 9.5l-5 5"/>',
     metronome: '<path d="M8 3h8l3.5 18h-15z"/><path d="M12 15l5-9"/><path d="M7 15h10"/>',
     countin: '<circle cx="5" cy="12" r="1.6" fill="currentColor"/><circle cx="10" cy="12" r="1.6" fill="currentColor"/><circle cx="15" cy="12" r="1.6" fill="currentColor"/><path d="M19 7v10"/>',
     open: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',

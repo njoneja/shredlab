@@ -73,7 +73,32 @@ fn migrate_old_data_dir(data_dir: &Path) -> Option<String> {
     })
 }
 
+/// Shrinks the window (created hidden at its configured default size) to
+/// fit the monitor's work area, centres it and shows it. A 1080p laptop at
+/// 150 % scaling is only 720 logical pixels tall, less the taskbar.
+fn fit_and_show_window(app: &tauri::App) {
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    if let (Ok(Some(monitor)), Ok(size)) = (window.current_monitor(), window.inner_size()) {
+        let scale = monitor.scale_factor();
+        let area = monitor.work_area().size.to_logical::<f64>(scale);
+        let size = size.to_logical::<f64>(window.scale_factor().unwrap_or(scale));
+        // Leave room for the title bar and borders.
+        let fit = tauri::LogicalSize::new(
+            size.width.min(area.width * 0.95),
+            size.height.min(area.height * 0.92),
+        );
+        if fit != size {
+            let _ = window.set_size(fit);
+        }
+        let _ = window.center();
+    }
+    let _ = window.show();
+}
+
 fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+    fit_and_show_window(app);
     let mut migrated = None;
     let data_dir = match std::env::var_os("SHREDLAB_DATA_DIR") {
         Some(d) => PathBuf::from(d),
