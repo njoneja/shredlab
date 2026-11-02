@@ -16,7 +16,8 @@ Status: works end to end on Windows and macOS (separate, beats, mixer,
 speed/pitch, loops, click, export). See
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for how it fits together and
 [docs/DEVELOPING.md](docs/DEVELOPING.md) for practical development notes.
-How to use it: [docs/HELP.md](docs/HELP.md).
+How to use it: [docs/HELP.md](docs/HELP.md). What's planned:
+[ROADMAP.md](ROADMAP.md).
 
 ## Repository layout
 
