@@ -1,0 +1,53 @@
+name: Feature request
+description: An idea for something ShredLab could do.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please check the [roadmap](https://github.com/njoneja/shredlab/blob/main/ROADMAP.md) first; if your idea is listed there, adding how you'd use it is still helpful. ShredLab is a practice and transcription tool, not a DAW, so recording, multitrack editing and effects are out of scope.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: The practice or transcription situation, not the solution yet. For example "I learn songs with a lot of tempo changes and the click drifts".
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would help?
+      description: How you imagine it working.
+    validations:
+      required: false
+  - type: textarea
+    id: today
+    attributes:
+      label: How do you do it today?
+      description: Other apps, workarounds, or not at all.
+    validations:
+      required: false
+  - type: dropdown
+    id: instrument
+    attributes:
+      label: Instrument
+      multiple: true
+      options:
+        - Guitar
+        - Bass
+        - Drums
+        - Vocals
+        - Keys
+        - Other
+    validations:
+      required: false
+  - type: dropdown
+    id: roadmap
+    attributes:
+      label: Is it on the roadmap?
+      options:
+        - "No"
+        - "Yes, adding detail"
+        - Not sure
+    validations:
+      required: false

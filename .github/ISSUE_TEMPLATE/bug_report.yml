@@ -1,0 +1,84 @@
+name: Bug report
+description: Something doesn't work or sounds wrong.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Please don't attach copyrighted audio files; the artist and title are enough, or a short clip of something you made yourself.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: Include any error message shown in the app.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open a song
+        2. Turn the guitar off and set the speed to 70%
+        3. ...
+    validations:
+      required: false
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect instead?
+    validations:
+      required: false
+  - type: input
+    id: version
+    attributes:
+      label: ShredLab version
+      description: Settings → About ShredLab.
+      placeholder: "0.1.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Windows 11
+        - Windows 10
+        - macOS (Apple Silicon)
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: hardware
+    attributes:
+      label: Graphics card or chip
+      description: For example "AMD RX 7900 XT", "NVIDIA RTX 3060", "Apple M2" or "none".
+    validations:
+      required: false
+  - type: input
+    id: song
+    attributes:
+      label: Song
+      description: File format and length, and the artist and title if the problem only happens with some songs.
+      placeholder: "MP3, 5:30, Led Zeppelin - The Ocean"
+    validations:
+      required: false
+  - type: textarea
+    id: log
+    attributes:
+      label: Log
+      description: |
+        Paste the end of `shredlab.log`, or attach the file.
+        Windows: `%APPDATA%\io.github.njoneja.shredlab\shredlab.log`
+        macOS: `~/Library/Application Support/io.github.njoneja.shredlab/shredlab.log`
+        It contains file paths from your computer; remove any you'd rather not share.
+      render: text
+    validations:
+      required: false
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
+      description: Screenshots, a recording, or other details.
+    validations:
+      required: false

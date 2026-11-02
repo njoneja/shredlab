@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: How to use ShredLab
+    url: https://github.com/njoneja/shredlab/blob/main/docs/HELP.md
+    about: The user guide, including what to do when the click is off.
+  - name: Security issue
+    url: https://github.com/njoneja/shredlab/blob/main/SECURITY.md
+    about: Please report security problems privately, as described here.
