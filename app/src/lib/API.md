@@ -220,7 +220,7 @@ StrengthSetting { level: number, smooth: boolean }
 | `set_speed` | `percent: u32` | `()` | 50..150, multiple of 5. Tempo change without pitch change. |
 | `set_pitch` | `semitones: i32, cents: i32` | `()` | −12..12 and −50..50. Total shift = semitones + cents/100. Independent of speed. |
 | `set_loop` | `loop_state: LoopState` | `()` | JS key is `loopState` (avoids the `loop` keyword). |
-| `set_click` | `click: ClickState` | `()` | |
+| `set_click` | `click: ClickState` | `()` | Click track and count-in settings. `count_in_each_repeat` (missing = false): with an A–B loop and the count-in on, each loop repeat stops at B and counts in again before A (`F_WRAP` still marks the wrap; `count_in_beats_left` counts down as for Play). Exports ignore it. |
 | `set_meter_overrides` | `payload: MeterOverridesPayload` | `()` | `{ overrides: MeterOverride[], downbeats: number[] }`. See Meter. |
 | `get_waveform` | `n_points: u32` | `Waveform` | Of the original mix. UI asks for 1200. `Err` if no song. |
 | `get_beats` | – | `BeatGrid \| null` | `null` until beat analysis is done for the current song. |

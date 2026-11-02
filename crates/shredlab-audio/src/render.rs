@@ -346,6 +346,7 @@ mod tests {
             beats_per_bar: 4,
             volume: 0.8,
             music_start: None,
+            count_in_each_repeat: false,
         }
     }
 

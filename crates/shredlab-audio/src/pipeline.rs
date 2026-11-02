@@ -436,6 +436,13 @@ impl Pipeline {
             return self.position();
         }
         let start = resolve_play_start(self.paused_pos, self.duration(), self.loop_region);
+        self.start_at(start);
+        self.position()
+    }
+
+    /// Starts the voice at song time `start` (moved to the music start if
+    /// configured), with the count-in first if there is one.
+    fn start_at(&mut self, start: f64) {
         let limit = self
             .loop_region
             .map_or(self.duration(), |(_, b)| b.min(self.duration()));
@@ -463,7 +470,6 @@ impl Pipeline {
             }
             None => self.begin_audio(),
         }
-        self.position()
     }
 
     /// Keeps count-in clicks `from..` to fire after the audio starts at wall
@@ -836,7 +842,17 @@ impl Pipeline {
                     self.mix_tail(tl, tr);
                     off += m;
                     if let Some(a) = wrap_to {
-                        self.transition(a);
+                        let a_secs = a / sr;
+                        if self.click.count_in_each_repeat
+                            && click::plan_count_in(&self.click, a_secs, self.speed).is_some()
+                        {
+                            // Stop at the loop end (fading out), count in again.
+                            self.lead.clear();
+                            self.begin_tail();
+                            self.start_at(a_secs);
+                        } else {
+                            self.transition(a);
+                        }
                         self.pending_flags |= F_WRAP;
                     } else if end {
                         self.paused_pos = self.duration();
@@ -956,6 +972,49 @@ mod tests {
     }
 
     #[test]
+    fn count_in_each_repeat_stops_at_b_and_counts_in_again() {
+        let len = 4 * SR;
+        let mut p = Pipeline::new(vec![ramp_track(len)], &unity(), true);
+        p.set_loop(Some((1.0, 1.5)));
+        p.set_click(ClickConfig {
+            beats: (0..8).map(|i| i as f64 * 0.5).collect(),
+            downbeats: vec![0.0, 2.0],
+            count_in_beats: 2,
+            beats_per_bar: 2,
+            count_in_each_repeat: true,
+            ..ClickConfig::default()
+        });
+        p.seek(1.0);
+        assert_eq!(p.play().count_in_beats_left, 2);
+        // Count-in (2 x 0.5 s), loop pass (0.5 s), count-in again, pass again.
+        let (_, _, m) = run(&mut p, 3 * SR + SR / 4, 512);
+        assert!(m.iter().all(|x| x.playing()));
+        // (count_in_left counts clicks still to come: 1 during the first beat.)
+        assert!(m[SR / 4].count_in_left() == 1 && m[SR - 10].pos == 1.0);
+        assert!(m[SR + 100].count_in_left() == 0 && m[SR + 100].pos > 1.0);
+        // At b: wrap flag, then a second count-in sitting at a.
+        let b = SR + SR / 2;
+        assert!(m[b - 1].pos > 1.49 && m[b].flags & F_WRAP != 0);
+        assert!(m[b + SR / 4].count_in_left() == 1 && m[b + SR - 10].pos == 1.0);
+        // Then the loop plays again from a.
+        let again = b + SR;
+        assert!((m[again].pos - 1.0).abs() < 1e-9);
+        assert!(m[again + 1000].pos > 1.0 && m[again + 1000].count_in_left() == 0);
+        // Without the option the wrap is seamless (no count-in at b).
+        let mut q = Pipeline::new(vec![ramp_track(len)], &unity(), true);
+        q.set_loop(Some((1.0, 1.5)));
+        q.set_click(ClickConfig {
+            beats: (0..8).map(|i| i as f64 * 0.5).collect(),
+            count_in_beats: 2,
+            ..ClickConfig::default()
+        });
+        q.seek(1.0);
+        q.play();
+        let (_, _, m) = run(&mut q, 2 * SR, 512);
+        assert!(m[b + SR / 4].count_in_left() == 0 && m[b + SR / 4].pos > 1.0);
+    }
+
+    #[test]
     fn count_in_then_audio_exactly_one_interval_after_last_click() {
         let len = 4 * SR;
         // No gains: the music is silent and only clicks remain.
@@ -970,6 +1029,7 @@ mod tests {
             beats_per_bar: 2,
             volume: 1.0,
             music_start: None,
+            count_in_each_repeat: false,
         });
         p.set_speed(0.8);
         p.seek(1.0);
@@ -1038,6 +1098,7 @@ mod tests {
             beats_per_bar: 4,
             volume: 1.0,
             music_start: None,
+            count_in_each_repeat: false,
         });
         p
     }
@@ -1139,6 +1200,7 @@ mod tests {
             beats_per_bar: 4,
             volume: 0.5,
             music_start: None,
+            count_in_each_repeat: false,
         });
         p.set_speed(0.5);
         p.seek(0.5);

@@ -86,6 +86,10 @@ pub struct ClickConfig {
     /// [`click::effective_start`]). `None` = never skip. The crate does not
     /// detect this itself; the caller decides.
     pub music_start: Option<f64>,
+    /// With a loop and a count-in: each time playback reaches the loop end
+    /// it stops there and counts in again before repeating from the loop
+    /// start, instead of jumping straight back.
+    pub count_in_each_repeat: bool,
 }
 
 impl Default for ClickConfig {
@@ -99,6 +103,7 @@ impl Default for ClickConfig {
             beats_per_bar: 4,
             volume: 0.8,
             music_start: None,
+            count_in_each_repeat: false,
         }
     }
 }

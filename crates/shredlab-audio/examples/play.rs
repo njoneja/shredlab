@@ -250,6 +250,7 @@ fn main() {
         beats_per_bar: 4,
         volume: 0.7,
         music_start: None,
+        count_in_each_repeat: false,
     });
     engine.set_on_end(Box::new(|| println!("[end of song]")));
     engine.set_on_loop_wrap(Box::new(|| println!("[loop wrap]")));

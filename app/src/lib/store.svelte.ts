@@ -108,7 +108,15 @@ class AppState {
   semitones = $state(0);
   cents = $state(0);
   loop = $state<LoopState>({ a_sec: null, b_sec: null, enabled: false });
-  click = $state<ClickState>({ enabled: false, count_in_enabled: false, count_in_beats: 4, subdivision: 1, beats_per_bar: 4, volume: 0.8 });
+  click = $state<ClickState>({
+    enabled: false,
+    count_in_enabled: false,
+    count_in_beats: 4,
+    subdivision: 1,
+    beats_per_bar: 4,
+    volume: 0.8,
+    count_in_each_repeat: false,
+  });
   countInSet = false; // count_in_beats came from saved settings
 
   // help dialog (ShortcutsHelp.svelte): open, and the section to scroll to
@@ -506,12 +514,14 @@ class AppState {
     this.overrides = [];
     this.loop = { a_sec: null, b_sec: null, enabled: false };
     this.click.count_in_enabled = false;
+    this.click.count_in_each_repeat = false;
     this.click.subdivision = 1;
     this.countInSet = false;
     if (!s || s.version !== 1) return;
     this.loop = { ...s.loop };
     this.overrides = normaliseOverrides(s.overrides ?? []);
     this.click.count_in_enabled = !!s.count_in_enabled;
+    this.click.count_in_each_repeat = !!s.count_in_each_repeat;
     this.click.subdivision = s.subdivision ?? 1;
     if (s.count_in_beats != null) {
       this.click.count_in_beats = s.count_in_beats;
@@ -546,6 +556,7 @@ class AppState {
       loop: $state.snapshot(this.loop),
       count_in_enabled: this.click.count_in_enabled,
       count_in_beats: this.countInSet || this.grid ? this.click.count_in_beats : null,
+      count_in_each_repeat: this.click.count_in_each_repeat,
       subdivision: this.click.subdivision,
       overrides: $state.snapshot(this.overrides),
       mix: STEMS.map((s) => ({ stem: s, on: this.mix[s].on, volume: this.mix[s].volume })),
@@ -810,6 +821,12 @@ class AppState {
 
   async toggleCountIn() {
     this.click.count_in_enabled = !this.click.count_in_enabled;
+    await this.pushClick();
+  }
+
+  /** With a loop: count in again before each repeat (saved with the song). */
+  async toggleCountInEachRepeat() {
+    this.click.count_in_each_repeat = !this.click.count_in_each_repeat;
     await this.pushClick();
   }
 

@@ -180,6 +180,9 @@ pub struct ClickState {
     pub subdivision: u32,
     pub beats_per_bar: u32,
     pub volume: f32,
+    /// With a loop and the count-in on: count in again before each repeat.
+    #[serde(default)]
+    pub count_in_each_repeat: bool,
 }
 
 impl Default for ClickState {
@@ -191,6 +194,7 @@ impl Default for ClickState {
             subdivision: 1,
             beats_per_bar: 4,
             volume: crate::settings::DEFAULT_CLICK_VOLUME,
+            count_in_each_repeat: false,
         }
     }
 }

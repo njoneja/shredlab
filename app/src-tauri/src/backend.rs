@@ -880,6 +880,7 @@ impl Backend {
                 settings::DEFAULT_CLICK_VOLUME
             },
             music_start,
+            count_in_each_repeat: c.count_in_each_repeat,
         }
     }
 
@@ -1924,6 +1925,8 @@ impl Backend {
         } else {
             0
         };
+        // An export plays its range once.
+        click.count_in_each_repeat = false;
         let format = match req.format {
             ExportFormat::Wav => audio::ExportFormat::Wav24,
             ExportFormat::Flac => audio::ExportFormat::Flac,
@@ -2720,6 +2723,7 @@ mod tests {
             subdivision: 1,
             beats_per_bar: 4,
             volume: 0.5,
+            count_in_each_repeat: false,
         });
         // On by default: the playback click config carries it.
         assert!(b.app_settings().count_in_to_music_start);

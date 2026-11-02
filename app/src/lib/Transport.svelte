@@ -74,6 +74,16 @@
       <button class="btn small icon-only" onclick={() => app.stepCountIn(1)} disabled={noGrid || app.click.count_in_beats >= app.countInMax} aria-label="Longer count-in">
         <Icon name="plus" size={14} />
       </button>
+      <button
+        class="btn small icon-only toggle"
+        aria-pressed={app.click.count_in_each_repeat}
+        onclick={() => app.toggleCountInEachRepeat()}
+        disabled={noSong || noGrid}
+        aria-label="Count in before each loop repeat"
+        title="Count in before each loop repeat: the loop stops at B and counts in again before A (with the A–B loop and count-in on)"
+      >
+        <Icon name="loop" size={14} />
+      </button>
     </div>
     <div class="meter-anchor">
       <button class="btn small" onclick={() => (meterOpen = !meterOpen)} disabled={noGrid} aria-expanded={meterOpen} title="Beat grid and meter overrides">

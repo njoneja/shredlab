@@ -285,6 +285,7 @@ fn check_click_export(
         subdivision: 1,
         beats_per_bar: 4,
         volume: 0.5,
+        count_in_each_repeat: false,
     });
     let req = |file: &Path, speed: f64, click: bool| ExportRequest {
         path: file.display().to_string(),
@@ -417,6 +418,7 @@ fn check_range_export(
         subdivision: 1,
         beats_per_bar: 4,
         volume: 0.5,
+        count_in_each_repeat: false,
     });
     let cfg = crate::audio::ClickConfig {
         beats: grid.beats.clone(),
@@ -836,6 +838,7 @@ fn run(b: &Arc<Backend>, song: &Path, out: &Path, rx: &Receiver<Event>) -> Resul
         subdivision: 1,
         beats_per_bar: 4,
         volume: 0.5,
+        count_in_each_repeat: false,
     });
 
     // Play a few seconds (with count-in) from 30 s: "All but guitar"

@@ -232,6 +232,7 @@ export interface ClickState {
   subdivision: Subdivision;
   beats_per_bar: number; // most common beats per bar (for count-in accents)
   volume: number; // linear gain 0..1
+  count_in_each_repeat: boolean; // with a loop and the count-in on: count in again before each repeat
 }
 
 export type MeterOverride =
@@ -298,6 +299,7 @@ export interface SongSettings {
   loop: LoopState;
   count_in_enabled: boolean;
   count_in_beats: number | null;
+  count_in_each_repeat?: boolean; // missing = false
   subdivision: Subdivision;
   overrides: MeterOverride[];
   mix: { stem: StemName; on: boolean; volume: number }[];

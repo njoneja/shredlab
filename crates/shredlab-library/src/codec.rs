@@ -210,7 +210,11 @@ mod tests {
         let mut l = vec![0.0; n];
         let mut r = vec![0.0; n];
         for i in 0..n {
-            let env = if (i / 4410).is_multiple_of(2) { 0.8 } else { 0.05 };
+            let env = if (i / 4410).is_multiple_of(2) {
+                0.8
+            } else {
+                0.05
+            };
             let tone = (2.0 * std::f32::consts::PI * 220.0 * i as f32 / 44_100.0).sin();
             l[i] = env * (rnd() + tone);
             r[i] = env * (0.5 * rnd() + tone);
@@ -244,7 +248,13 @@ mod tests {
     /// shift already costs a lot at 5 kHz), at up to 1.6x full scale.
     fn tones(n: usize) -> [Vec<f32>; 2] {
         let w = |f: f32, i: usize| (2.0 * std::f32::consts::PI * f * i as f32 / 44_100.0).sin();
-        let gate = |i: usize| if (i / 4410).is_multiple_of(2) { 0.4 } else { 0.1 };
+        let gate = |i: usize| {
+            if (i / 4410).is_multiple_of(2) {
+                0.4
+            } else {
+                0.1
+            }
+        };
         let l = (0..n)
             .map(|i| gate(i) * (w(440.0, i) + w(1250.0, i) + w(3100.0, i) + w(5300.0, i)))
             .collect();
