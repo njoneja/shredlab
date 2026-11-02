@@ -3,6 +3,7 @@
   import { STEMS, type StemName } from "./types";
   import { SLIDER_MAX, formatDb, gainToSlider, sliderToGain } from "./mix";
   import { STRENGTH_NAMES, exceptionSide, hasException, switchText } from "./refine";
+  import Icon from "./Icon.svelte";
   import RefinePanel from "./RefinePanel.svelte";
 
   /** Full names: tooltips and every accessible name (never the tape abbreviation). */
@@ -53,9 +54,9 @@
 <svelte:window onclick={() => (menu = null)} onkeydown={(e) => e.key === "Escape" && (menu = null)} />
 
 <section class="mixer" class:disabled aria-label="Stem mixer">
-  <!-- Same columns as the rows: the heading above the switches, All on above S and ⊘. -->
+  <!-- Same columns as the rows: All on above the switches, the heading above
+       the names, separation strength at the end of the line. -->
   <div class="head">
-    <h2>Stems</h2>
     <button
       class="btn small all-on"
       aria-pressed={app.allOnAlready}
@@ -67,40 +68,45 @@
     >
       All on
     </button>
-  </div>
-  <div class="strength" class:busy={app.strengthBusy}>
-    <label class="s-label" for="strength-slider" title="How strictly each stem keeps only its own sound. Tighter: less bleed from other instruments, but thinner and more watery.">Separation</label>
-    <span class="end">Natural</span>
-    <input
-      id="strength-slider"
-      type="range"
-      min="0"
-      max={STRENGTH_NAMES.length - 1}
-      step="1"
-      value={app.strength.level}
-      disabled={!app.strengthAvailable}
-      aria-valuetext={app.strengthLabel}
-      title={app.strengthAvailable
-        ? "Natural: the stems as separated. Tighter: less bleed, thinner sound. Takes a few seconds to apply."
-        : "Available once the song is separated (needs the original file)"}
-      oninput={(e) => app.setStrength({ level: Number(e.currentTarget.value) })}
-      onkeydown={sliderKeys}
-    />
-    <span class="end">Tight</span>
-    <span class="s-val mono" aria-live="polite">
-      {#if app.strengthBusy}Applying… {Math.round(app.strengthFraction * 100)}%{:else}{app.strengthLabel}{/if}
-    </span>
-    <label class="smooth" title="Smooth: gentler first steps, but the stems no longer add up exactly to the original, so “All but this” may leave a faint trace or gap.">
+    <h2>Stems</h2>
+    <div class="strength" class:busy={app.strengthBusy}>
+      <label class="s-label" for="strength-slider" title="How strictly each stem keeps only its own sound. Tighter: less bleed from other instruments, but thinner and more watery.">Separation</label>
+      <span class="end">Natural</span>
       <input
-        type="checkbox"
-        checked={app.strength.smooth}
+        id="strength-slider"
+        type="range"
+        min="0"
+        max={STRENGTH_NAMES.length - 1}
+        step="1"
+        value={app.strength.level}
         disabled={!app.strengthAvailable}
-        onchange={(e) => app.setStrength({ smooth: e.currentTarget.checked })}
+        aria-valuetext={app.strengthLabel}
+        title={app.strengthAvailable
+          ? "Natural: the stems as separated. Tighter: less bleed, thinner sound. Takes a few seconds to apply."
+          : "Available once the song is separated (needs the original file)"}
+        oninput={(e) => app.setStrength({ level: Number(e.currentTarget.value) })}
+        onkeydown={sliderKeys}
       />
-      Smooth
-    </label>
-    <span class="s-note">Gentler first steps, but stems no longer add up exactly, so “All but this” may leave a faint trace.</span>
-    {#if app.strengthError}<span class="s-err" role="alert">{app.strengthError}</span>{/if}
+      <span class="end">Tight</span>
+      <span class="s-val mono" aria-live="polite">
+        {#if app.strengthBusy}Applying… {Math.round(app.strengthFraction * 100)}%{:else}{app.strengthLabel}{/if}
+      </span>
+      <label class="smooth" title="Smooth: gentler first steps, but the stems no longer add up exactly to the original, so “All but this” may leave a faint trace or gap.">
+        <input
+          type="checkbox"
+          checked={app.strength.smooth}
+          disabled={!app.strengthAvailable}
+          onchange={(e) => app.setStrength({ smooth: e.currentTarget.checked })}
+        />
+        Smooth
+      </label>
+      {#if app.strength.smooth}
+        <span class="s-note" title="Smooth gives gentler first steps, but the stems no longer add up exactly, so “All but this” may leave a faint trace.">
+          <Icon name="info" size={14} /><span class="sr-only">Smooth: the stems no longer add up exactly, so “All but this” may leave a faint trace.</span>
+        </span>
+      {/if}
+      {#if app.strengthError}<span class="s-err" role="alert">{app.strengthError}</span>{/if}
+    </div>
   </div>
   {#if disabled}
     <div class="notice">
@@ -128,17 +134,32 @@
     >
       <!-- With a stereo exception the switch is half lit: the excepted part
            (hatched, on its side of the track) does the opposite of the switch,
-           and the thumb is hollow. -->
-      <label class="switch" class:partial={ex} title={ex ? `${swText} (${i + 1})` : `Turn ${LABEL[stem]} on/off (${i + 1})`}>
-        <input
-          type="checkbox"
-          checked={m.on}
+           and the thumb is hollow. Refine sits with the switch because its
+           stereo exception changes what the switch does. -->
+      <div class="sw-pill">
+        <label class="switch" class:partial={ex} title={ex ? `${swText} (${i + 1})` : `Turn ${LABEL[stem]} on/off (${i + 1})`}>
+          <input
+            type="checkbox"
+            checked={m.on}
+            {disabled}
+            aria-label={ex ? swText : `${LABEL[stem]} on`}
+            onchange={(e) => app.setStemOn(stem, e.currentTarget.checked)}
+          />
+          <span class="track">{#if ex}<span class="part {ex}"></span>{/if}<span class="thumb"></span></span>
+        </label>
+        <button
+          class="btn small refine-btn"
+          aria-expanded={app.refineOpen === stem}
+          aria-controls="refine-{stem}"
+          aria-label="Refine {LABEL[stem]}{app.refined(stem) ? ' (refined)' : ''}"
+          title="Refine {LABEL[stem]}: except part of the stereo field, shape the tone{app.refined(stem) ? '. Refined.' : ''}"
           {disabled}
-          aria-label={ex ? swText : `${LABEL[stem]} on`}
-          onchange={(e) => app.setStemOn(stem, e.currentTarget.checked)}
-        />
-        <span class="track">{#if ex}<span class="part {ex}"></span>{/if}<span class="thumb"></span></span>
-      </label>
+          onclick={() => app.toggleRefine(stem)}
+        >
+          <span class="led" class:on={app.refined(stem)} aria-hidden="true"></span>
+          Refine
+        </button>
+      </div>
       <button
         class="btn small solo"
         aria-pressed={m.solo}
@@ -165,9 +186,6 @@
         <span class="dot" aria-hidden="true"></span>
         <span class="tape" style:--tilt="{TILT[stem]}deg" title={LABEL[stem]} aria-hidden="true">{SHORT[stem]}</span>
         <span class="sr-only">{LABEL[stem]}</span>
-        {#if app.refined(stem)}
-          <span class="refined" title="{LABEL[stem]} is refined (stereo exception or EQ)"><span class="sr-only">(refined)</span></span>
-        {/if}
         <kbd class="key" aria-hidden="true">{i + 1}</kbd>
       </span>
       <!-- dB-linear from −40 to +6 dB in 0.5 dB steps; the bottom position is off (−∞). -->
@@ -187,17 +205,6 @@
         onkeydown={sliderKeys}
       />
       <span class="readout mono">{formatDb(m.volume)}</span>
-      <button
-        class="btn small refine-btn"
-        aria-expanded={app.refineOpen === stem}
-        aria-controls="refine-{stem}"
-        aria-label="Refine {LABEL[stem]}"
-        title="Refine {LABEL[stem]}: except part of the stereo field, shape the tone"
-        {disabled}
-        onclick={() => app.toggleRefine(stem)}
-      >
-        Refine
-      </button>
     </div>
     {#if app.refineOpen === stem && !disabled}
       <RefinePanel {stem} label={LABEL[stem]} />
@@ -231,16 +238,14 @@
   }
   .head {
     display: grid;
-    grid-template-columns: 40px 24px 24px minmax(120px, 160px) minmax(80px, 1fr) 62px 58px;
+    grid-template-columns: 124px 24px 24px minmax(120px, 160px) minmax(80px, 1fr) 62px;
     align-items: center;
     gap: 10px;
     /* Rows have a 3px stem-colour border plus 8px padding. */
     padding: 0 8px 2px 11px;
   }
   .all-on {
-    grid-column: 2 / 4;
-    justify-content: center;
-    padding: 0;
+    justify-self: start;
   }
   /* Lit like a hardware button while every stem is on. */
   .all-on[aria-pressed="true"] {
@@ -253,7 +258,10 @@
     background: color-mix(in srgb, var(--lit) 22%, transparent);
   }
   h2 {
+    grid-column: 4;
     margin: 0;
+    /* Lines up with the scribble strips, past the dot (8px + 8px gap). */
+    padding-left: 16px;
     white-space: nowrap;
     font-size: 12px;
     font-weight: 600;
@@ -261,14 +269,18 @@
     letter-spacing: 0.06em;
     color: var(--muted);
   }
-  /* Separation strength: one compact line, label left, control right. */
+  /* Separation strength: at the end of the header line, wrapping below
+     only on a window too narrow for it. */
   .strength {
+    grid-column: 5 / -1;
+    justify-self: end;
     display: flex;
     align-items: center;
     flex-wrap: wrap;
+    justify-content: flex-end;
     column-gap: 8px;
-    row-gap: 0;
-    padding: 0 8px 4px 11px;
+    row-gap: 4px;
+    min-width: 0;
     font-size: 12px;
   }
   .s-label {
@@ -307,26 +319,46 @@
     accent-color: var(--accent);
   }
   .s-note {
-    flex: 1 1 260px;
-    font-size: 11.5px;
-    color: var(--faint);
+    display: inline-flex;
+    color: var(--muted);
+    cursor: help;
   }
   .s-err {
     flex-basis: 100%;
+    text-align: right;
     font-size: 11.5px;
     color: var(--danger);
   }
-  .refined {
-    flex: none;
-    width: 7px;
-    height: 7px;
-    border-radius: 50%;
-    background: var(--accent);
-    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 25%, transparent);
+  .sw-pill {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 4px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface);
   }
   .refine-btn {
-    justify-content: center;
-    padding: 0 6px;
+    gap: 5px;
+    height: 22px;
+    padding: 0 7px 0 6px;
+    font-size: 12px;
+  }
+  /* Lit like a hardware "EQ in" LED while the stem is refined, so it reads
+     apart from the open state (filled button). */
+  .led {
+    flex: none;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--faint);
+    opacity: 0.6;
+  }
+  .led.on {
+    background: var(--lit);
+    opacity: 1;
+    box-shadow: 0 0 6px color-mix(in srgb, var(--lit) 70%, transparent);
   }
   .refine-btn[aria-expanded="true"] {
     background: var(--accent-soft);
@@ -340,7 +372,7 @@
   }
   .row {
     display: grid;
-    grid-template-columns: 40px 24px 24px minmax(120px, 160px) minmax(80px, 1fr) 62px 58px;
+    grid-template-columns: 124px 24px 24px minmax(120px, 160px) minmax(80px, 1fr) 62px;
     align-items: center;
     gap: 10px;
     padding: 5px 8px;
@@ -557,7 +589,7 @@
   @media (max-width: 960px) {
     .row,
     .head {
-      grid-template-columns: 40px 24px 24px minmax(100px, 130px) minmax(60px, 1fr) 58px 58px;
+      grid-template-columns: 124px 24px 24px minmax(100px, 130px) minmax(60px, 1fr) 58px;
       gap: 8px;
     }
     .key {
