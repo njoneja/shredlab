@@ -1,0 +1,39 @@
+name: Audit
+
+# Known vulnerabilities in dependencies, and Rust licences/sources.
+# Weekly as well, since advisories appear without any change on our side.
+on:
+  push:
+    branches: [main]
+    paths: ['**/Cargo.toml', 'Cargo.lock', 'deny.toml', 'app/package.json', 'app/pnpm-lock.yaml', '.github/workflows/audit.yml']
+  pull_request:
+    paths: ['**/Cargo.toml', 'Cargo.lock', 'deny.toml', 'app/package.json', 'app/pnpm-lock.yaml', '.github/workflows/audit.yml']
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+jobs:
+  cargo-deny:
+    # Only on the public repo, like CI.
+    if: github.repository == 'njoneja/shredlab'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories licenses bans sources
+
+  pnpm-audit:
+    if: github.repository == 'njoneja/shredlab'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: pnpm audit
+        working-directory: app
+        run: pnpm audit --prod
