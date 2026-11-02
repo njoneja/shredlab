@@ -36,9 +36,8 @@ How to use it: [docs/HELP.md](docs/HELP.md).
 
 ## Building from scratch
 
-Windows 11 x64 is the tested platform. macOS (Apple Silicon) should work but
-is **untested**: the CoreML code path compiles but has never run on a Mac
-(see [macOS notes](#macos-notes)).
+Tested on Windows 11 x64 and macOS (Apple Silicon); see
+[macOS notes](#macos-notes) for the differences on a Mac.
 
 ### 1. Prerequisites
 
