@@ -54,6 +54,26 @@ impl Quality {
     }
 }
 
+/// How new stems are stored in the library. MP3 VBR V0 by default (about
+/// half the size of FLAC; listening-tested, `spikes/mp3_cache_test.py`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StemFormat {
+    #[default]
+    Mp3,
+    /// Lossless.
+    Flac,
+}
+
+impl StemFormat {
+    pub fn cache_format(self) -> shredlab_library::CacheFormat {
+        match self {
+            Self::Mp3 => shredlab_library::CacheFormat::Mp3,
+            Self::Flac => shredlab_library::CacheFormat::Flac,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct AppSettings {
     /// Chosen model id (`None` = default model).
@@ -75,6 +95,9 @@ pub struct AppSettings {
     /// Master playback volume, linear 0..1 (`None` = 1).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub master_volume: Option<f32>,
+    /// Format of newly written stems (`None` = MP3).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stem_format: Option<StemFormat>,
 }
 
 impl AppSettings {
@@ -104,6 +127,11 @@ impl AppSettings {
         self.master_volume
             .filter(|v| v.is_finite())
             .map_or(DEFAULT_MASTER_VOLUME, |v| v.clamp(0.0, 1.0))
+    }
+
+    /// Format of newly written stems (MP3 by default).
+    pub fn stem_format(&self) -> StemFormat {
+        self.stem_format.unwrap_or_default()
     }
 
     pub fn path(data_dir: &Path) -> PathBuf {
@@ -163,11 +191,14 @@ mod tests {
             count_in_to_music_start: Some(false),
             click_volume: Some(0.5),
             master_volume: Some(0.7),
+            stem_format: Some(StemFormat::Flac),
         };
         s.save(&d).unwrap();
         assert_eq!(AppSettings::load(&d).0, s);
         let text = std::fs::read_to_string(AppSettings::path(&d)).unwrap();
         assert!(text.contains("\"standard\""), "{text}");
+        assert!(text.contains("\"stem_format\": \"flac\""), "{text}");
+        assert_eq!(AppSettings::default().stem_format(), StemFormat::Mp3);
         // Back to defaults.
         AppSettings::default().save(&d).unwrap();
         assert_eq!(AppSettings::load(&d).0, AppSettings::default());

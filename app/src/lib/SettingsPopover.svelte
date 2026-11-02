@@ -1,7 +1,7 @@
 <script lang="ts">
   import { tick } from "svelte";
   import { app } from "./store.svelte";
-  import { THEMES, type ModelInfo, type Quality } from "./types";
+  import { THEMES, type ModelInfo, type Quality, type StemFormat } from "./types";
   import { THEME_NAME, isTheme } from "./theme";
 
   let { onclose }: { onclose: () => void } = $props();
@@ -104,6 +104,19 @@
         {#if st.model_from_env}<p class="muted note">SHREDLAB_MODEL is set and overrides this choice.</p>{/if}
       </div>
     {/if}
+
+    <div class="row" title="MP3 (V0) takes about half the space of FLAC and sounds the same for practice, also slowed down. FLAC is lossless. Songs already separated keep their files.">
+      <label class="label" for="stem-format">Save stems as</label>
+      <select
+        id="stem-format"
+        class="compact"
+        value={st.stem_format}
+        onchange={(e) => app.setStemFormat(e.currentTarget.value as StemFormat)}
+      >
+        <option value="mp3">MP3 (smaller)</option>
+        <option value="flac">FLAC (lossless)</option>
+      </select>
+    </div>
 
     <p class="muted note">Applies to the next separation. Results are kept per model and quality, so switching back is instant.</p>
   {/if}

@@ -14,8 +14,8 @@ cpal = "0.16"
 rtrb = "0.3"
 rubato = "0.16"
 hound = "3.5"
-flacenc = { version = "0.5", default-features = false, features = ["par"] }
-mp3lame-encoder = "0.2"
+flacenc.workspace = true
+mp3lame-encoder.workspace = true
 thiserror = "2"
 shredlab-dsp.workspace = true
 

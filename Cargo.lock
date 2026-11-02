@@ -3582,10 +3582,13 @@ dependencies = [
 name = "shredlab-library"
 version = "0.1.0"
 dependencies = [
+ "flacenc",
+ "mp3lame-encoder",
  "serde",
  "serde_json",
  "sha2",
  "shredlab-dsp",
+ "shredlab-io",
  "symphonia",
  "thiserror 2.0.21",
 ]

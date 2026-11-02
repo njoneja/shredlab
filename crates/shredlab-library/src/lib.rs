@@ -5,24 +5,33 @@
 //!
 //! ```text
 //! <root>/songs/<song_id>/song.json
-//! <root>/songs/<song_id>/original.wav               copy of the original mix
-//! <root>/songs/<song_id>/stems/<model_id>_s<shifts>/<stem>.wav
+//! <root>/songs/<song_id>/original.<ext>             copy of the original mix
+//! <root>/songs/<song_id>/stems/<model_id>_s<shifts>/<stem>.<mp3|flac|wav>
 //! <root>/songs/<song_id>/stems/<stem>.wav           (schema 1 entries)
 //! ```
 //!
 //! Stems are cached per (model, shifts), so switching model or separation
-//! quality back is instant. The original mix is cached too (44.1 kHz, same
-//! format as the stems), so the backing track can be built from it even
-//! when the source file has moved.
+//! quality back is instant. The original mix is cached too, so the backing
+//! track can be built from it even when the source file has moved.
 //!
-//! Stems are stored as **16-bit PCM WAV with a per-stem gain** (`scale` in
-//! `song.json`): samples are divided by `scale` (= max(peak, 1)) before
-//! quantization, so loud stems never clip, and multiplied back on load.
-//! That halves the disk footprint of float WAV (a 5 min song is ~300 MB for
-//! 6 stems instead of ~600 MB); 16-bit noise (-96 dBFS) is inaudible for
-//! practice playback and export.
+//! Stems are stored in a [`CacheFormat`] with a **per-stem gain** (`scale`
+//! in `song.json`): samples are divided by `scale` (= max(peak, 1)) before
+//! encoding, so loud stems never clip, and multiplied back on load.
+//! - MP3 VBR V0 (default for new stems): ~75 MB for 6 stems of a 7 min
+//!   song. Listening-tested for playback, slowed playback and "All but
+//!   this" (`spikes/mp3_cache_test.py`).
+//! - FLAC 16-bit: lossless, ~135 MB.
+//! - WAV 16-bit: caches written before 2026-11-02 (~440 MB); still read.
+//!
+//! The original is never stored lossy-on-lossy: subtracting a stem from a
+//! re-encoded original exposes the original's coding noise (measured
+//! 22.8 dB vs 38.5 dB backing SNR). A lossy source (MP3, AAC, Vorbis) is
+//! copied as-is (`original.mp3` etc., decoded and resampled on load like
+//! the source); anything else is stored as 16-bit FLAC.
 //!
 //! This crate has no Tauri dependency; the app passes the root directory.
+
+mod codec;
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -73,6 +82,33 @@ impl Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// File format of cached stems.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CacheFormat {
+    /// 16-bit PCM WAV (caches written before 2026-11-02).
+    #[default]
+    Wav,
+    /// 16-bit FLAC (lossless).
+    Flac,
+    /// MP3 VBR V0 (LAME).
+    Mp3,
+}
+
+impl CacheFormat {
+    pub fn ext(self) -> &'static str {
+        match self {
+            Self::Wav => "wav",
+            Self::Flac => "flac",
+            Self::Mp3 => "mp3",
+        }
+    }
+}
+
+/// Source formats copied as-is for the cached original (already lossy, so a
+/// copy is both exact and smaller than FLAC).
+const LOSSY_SOURCE_EXTS: [&str; 5] = ["mp3", "m4a", "aac", "mp4", "ogg"];
+
 /// Model and device used to make the cached stems.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StemsInfo {
@@ -94,6 +130,9 @@ pub struct StemsInfo {
     /// entries: `stems`.
     #[serde(default = "legacy_dir")]
     pub dir: String,
+    /// File format of the stems (missing = WAV).
+    #[serde(default)]
+    pub format: CacheFormat,
 }
 
 fn one() -> u32 {
@@ -102,6 +141,10 @@ fn one() -> u32 {
 
 fn legacy_dir() -> String {
     "stems".into()
+}
+
+fn original_wav() -> String {
+    "original.wav".into()
 }
 
 impl StemsInfo {
@@ -127,16 +170,21 @@ pub fn stem_set_dir(model_id: &str, shifts: u32) -> String {
     format!("stems/{id}_s{shifts}")
 }
 
-/// The cached copy of the original mix (`original.wav`, 16-bit stereo,
-/// multiply by `scale`), at `sample_rate`, `len` frames.
+/// The cached copy of the original mix at `sample_rate`, `len` frames:
+/// `original.wav` / `original.flac` (16-bit stereo, multiply by `scale`) or
+/// a copy of a lossy source file (`scale` 1, resampled on load).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OriginalInfo {
     pub sample_rate: u32,
     pub len: usize,
     pub scale: f32,
+    /// File name in the song folder (missing = `original.wav`).
+    #[serde(default = "original_wav")]
+    pub file: String,
 }
 
-/// One cached stem: `stems/<name>.wav`, 16-bit stereo, multiply by `scale`.
+/// One cached stem: `<dir>/<name>.<ext>` (see [`StemsInfo::format`]),
+/// multiply by `scale`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StemFile {
     pub name: String,
@@ -425,16 +473,20 @@ impl Library {
         self.song_dir(song_id).join("song.json")
     }
 
-    fn stem_path(&self, song_id: &str, dir: &str, stem: &str) -> PathBuf {
+    fn stem_path(&self, song_id: &str, dir: &str, stem: &str, format: CacheFormat) -> PathBuf {
         let mut p = self.song_dir(song_id);
         for part in dir.split('/').filter(|s| !s.is_empty() && *s != "..") {
             p.push(part);
         }
-        p.join(format!("{stem}.wav"))
+        p.join(format!("{stem}.{}", format.ext()))
     }
 
-    fn original_path(&self, song_id: &str) -> PathBuf {
-        self.song_dir(song_id).join("original.wav")
+    /// `file` inside the song folder; only a plain file name is accepted.
+    fn original_path(&self, song_id: &str, file: &str) -> Result<PathBuf> {
+        if file.is_empty() || file.contains(['/', '\\', ':']) || file.starts_with('.') {
+            return Err(Error::Input(format!("bad original file name {file:?}")));
+        }
+        Ok(self.song_dir(song_id).join(file))
     }
 
     /// Loads `song.json`, `Ok(None)` if the song is not in the library.
@@ -591,9 +643,11 @@ impl Library {
         }
     }
 
-    /// Writes stereo stems to the cache folder `dir` (relative to the song
-    /// folder, see [`stem_set_dir`]) and returns their [`StemFile`] entries
-    /// (in the given order). Does not touch `song.json`; add the set with
+    /// Writes stereo stems in `format` to the cache folder `dir` (relative
+    /// to the song folder, see [`stem_set_dir`]) and returns their
+    /// [`StemFile`] entries (in the given order). Same-named stems in other
+    /// formats there (an older cache of this set) are removed afterwards.
+    /// Does not touch `song.json`; add the set (with `format`) with
     /// [`SongMeta::put_stem_set`] and [`save`](Self::save) afterwards, so a
     /// half-written cache is never referenced.
     pub fn write_stems(
@@ -602,17 +656,28 @@ impl Library {
         dir: &str,
         sample_rate: u32,
         stems: &[(&str, [&[f32]; 2])],
+        format: CacheFormat,
     ) -> Result<Vec<StemFile>> {
-        let folder = self.stem_path(song_id, dir, "x");
+        let folder = self.stem_path(song_id, dir, "x", format);
         let folder = folder.parent().unwrap_or(&folder).to_path_buf();
         fs::create_dir_all(&folder).map_err(|e| Error::io(&folder, e))?;
         let results: Vec<Result<StemFile>> = std::thread::scope(|s| {
             let handles: Vec<_> = stems
                 .iter()
                 .map(|(name, ch)| {
-                    let path = self.stem_path(song_id, dir, name);
+                    let path = self.stem_path(song_id, dir, name, format);
                     s.spawn(move || {
-                        let scale = write_stem_wav(&path, sample_rate, *ch)?;
+                        let scale = match format {
+                            CacheFormat::Wav => write_stem_wav(&path, sample_rate, *ch)?,
+                            CacheFormat::Flac => {
+                                codec::write_flac(&path, sample_rate, *ch, stem_scale(*ch)?)?
+                            }
+                            CacheFormat::Mp3 => {
+                                let scale = stem_scale(*ch)?;
+                                codec::write_mp3(&path, sample_rate, *ch, scale)?;
+                                scale
+                            }
+                        };
                         Ok(StemFile {
                             name: name.to_string(),
                             scale,
@@ -628,7 +693,15 @@ impl Library {
                 })
                 .collect()
         });
-        results.into_iter().collect()
+        let files: Vec<StemFile> = results.into_iter().collect::<Result<_>>()?;
+        for f in &files {
+            for other in [CacheFormat::Wav, CacheFormat::Flac, CacheFormat::Mp3] {
+                if other != format {
+                    remove_if_present(&self.stem_path(song_id, dir, &f.name, other))?;
+                }
+            }
+        }
+        Ok(files)
     }
 
     /// Reads all cached stems of `info` (in parallel), as `(name, [L, R])`.
@@ -642,15 +715,26 @@ impl Library {
                 .stems
                 .iter()
                 .map(|sf| {
-                    let path = self.stem_path(song_id, &info.dir, &sf.name);
+                    let path = self.stem_path(song_id, &info.dir, &sf.name, info.format);
                     s.spawn(move || {
-                        let (rate, ch) = read_stem_wav(&path, sf.scale)?;
-                        if rate != info.sample_rate {
-                            return Err(Error::Wav {
-                                path: path.display().to_string(),
-                                msg: format!("sample rate {rate}, expected {}", info.sample_rate),
-                            });
-                        }
+                        let ch = match info.format {
+                            CacheFormat::Wav => {
+                                let (rate, ch) = read_stem_wav(&path, sf.scale)?;
+                                if rate != info.sample_rate {
+                                    return Err(Error::Wav {
+                                        path: path.display().to_string(),
+                                        msg: format!(
+                                            "sample rate {rate}, expected {}",
+                                            info.sample_rate
+                                        ),
+                                    });
+                                }
+                                ch
+                            }
+                            CacheFormat::Flac | CacheFormat::Mp3 => {
+                                codec::read(&path, info.sample_rate, info.len, sf.scale, false)?
+                            }
+                        };
                         Ok((sf.name.clone(), ch))
                     })
                 })
@@ -668,28 +752,79 @@ impl Library {
 
     /// True if every stem file of `info` exists.
     pub fn stems_present(&self, song_id: &str, info: &StemsInfo) -> bool {
-        info.stems
-            .iter()
-            .all(|s| self.stem_path(song_id, &info.dir, &s.name).is_file())
+        info.stems.iter().all(|s| {
+            self.stem_path(song_id, &info.dir, &s.name, info.format)
+                .is_file()
+        })
     }
 
-    /// Writes the cached copy of the original mix (`original.wav`, same
-    /// 16-bit + scale format as the stems). Set `meta.original` and save
-    /// afterwards.
+    /// Writes the cached copy of the original mix: a copy of `source` when
+    /// it is a lossy file that decodes (and resamples) to exactly `ch`, else
+    /// 16-bit FLAC. Older copies (`original.wav` etc.) are removed. Set
+    /// `meta.original` and save afterwards.
     pub fn write_original(
         &self,
         song_id: &str,
         sample_rate: u32,
         ch: [&[f32]; 2],
+        source: Option<&Path>,
     ) -> Result<OriginalInfo> {
         let dir = self.song_dir(song_id);
         fs::create_dir_all(&dir).map_err(|e| Error::io(&dir, e))?;
-        let scale = write_stem_wav(&self.original_path(song_id), sample_rate, ch)?;
-        Ok(OriginalInfo {
-            sample_rate,
-            len: ch[0].len(),
-            scale,
-        })
+        let len = ch[0].len();
+        let info = match source.and_then(|p| self.copy_original(song_id, p, sample_rate, ch)) {
+            Some(file) => OriginalInfo {
+                sample_rate,
+                len,
+                scale: 1.0,
+                file,
+            },
+            None => {
+                let file = "original.flac".to_string();
+                let path = self.original_path(song_id, &file)?;
+                let scale = codec::write_flac(&path, sample_rate, ch, stem_scale(ch)?)?;
+                OriginalInfo {
+                    sample_rate,
+                    len,
+                    scale,
+                    file,
+                }
+            }
+        };
+        for ext in ["wav", "flac"].into_iter().chain(LOSSY_SOURCE_EXTS) {
+            let name = format!("original.{ext}");
+            if name != info.file {
+                remove_if_present(&dir.join(name))?;
+            }
+        }
+        Ok(info)
+    }
+
+    /// Copies a lossy `source` to `original.<ext>` if it decodes to exactly
+    /// `ch`; the file name on success. Any failure means "store FLAC".
+    fn copy_original(
+        &self,
+        song_id: &str,
+        source: &Path,
+        sample_rate: u32,
+        ch: [&[f32]; 2],
+    ) -> Option<String> {
+        let ext = source.extension()?.to_str()?.to_ascii_lowercase();
+        if !LOSSY_SOURCE_EXTS.contains(&ext.as_str()) {
+            return None;
+        }
+        let file = format!("original.{ext}");
+        let path = self.original_path(song_id, &file).ok()?;
+        let bytes = fs::read(source).ok()?;
+        codec::write_atomic(&path, &bytes).ok()?;
+        let same = codec::read(&path, sample_rate, ch[0].len(), 1.0, true)
+            .is_ok_and(|d| d.iter().zip(ch).all(|(a, b)| a.as_slice() == b));
+        if same {
+            Some(file)
+        } else {
+            let _ = fs::remove_file(&path);
+            None
+        }
     }
 
     /// Reads the cached original, `None` if the file is missing.
@@ -698,18 +833,23 @@ impl Library {
         song_id: &str,
         info: &OriginalInfo,
     ) -> Result<Option<[Vec<f32>; 2]>> {
-        let path = self.original_path(song_id);
+        let path = self.original_path(song_id, &info.file)?;
         if !path.is_file() {
             return Ok(None);
         }
-        let (rate, ch) = read_stem_wav(&path, info.scale)?;
-        if rate != info.sample_rate {
-            return Err(Error::Wav {
-                path: path.display().to_string(),
-                msg: format!("sample rate {rate}, expected {}", info.sample_rate),
-            });
+        if info.file.ends_with(".wav") {
+            let (rate, ch) = read_stem_wav(&path, info.scale)?;
+            if rate != info.sample_rate {
+                return Err(Error::Wav {
+                    path: path.display().to_string(),
+                    msg: format!("sample rate {rate}, expected {}", info.sample_rate),
+                });
+            }
+            return Ok(Some(ch));
         }
-        Ok(Some(ch))
+        // FLAC is written at `sample_rate`; a copied source is resampled.
+        let resample = !info.file.ends_with(".flac");
+        codec::read(&path, info.sample_rate, info.len, info.scale, resample).map(Some)
     }
 
     /// Removes a song folder entirely.
@@ -721,11 +861,10 @@ impl Library {
 
 // ------------------------------------------------------------------ WAV
 
-/// Writes 16-bit stereo PCM; returns the scale (>= 1) the samples were
-/// divided by. Written to a temp file and renamed into place.
-fn write_stem_wav(path: &Path, sample_rate: u32, ch: [&[f32]; 2]) -> Result<f32> {
-    let len = ch[0].len();
-    if ch[1].len() != len {
+/// The gain a stem is divided by before encoding: max(peak, 1), so loud
+/// stems never clip. Errors if the channels differ in length.
+fn stem_scale(ch: [&[f32]; 2]) -> Result<f32> {
+    if ch[1].len() != ch[0].len() {
         return Err(Error::Input("stem channels differ in length".into()));
     }
     let peak = ch.iter().flat_map(|c| c.iter()).fold(0.0f32, |m, &v| {
@@ -735,7 +874,22 @@ fn write_stem_wav(path: &Path, sample_rate: u32, ch: [&[f32]; 2]) -> Result<f32>
             m
         }
     });
-    let scale = peak.max(1.0);
+    Ok(peak.max(1.0))
+}
+
+fn remove_if_present(path: &Path) -> Result<()> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(Error::io(path, e)),
+    }
+}
+
+/// Writes 16-bit stereo PCM; returns the scale (>= 1) the samples were
+/// divided by. Written to a temp file and renamed into place.
+fn write_stem_wav(path: &Path, sample_rate: u32, ch: [&[f32]; 2]) -> Result<f32> {
+    let len = ch[0].len();
+    let scale = stem_scale(ch)?;
     let inv = 32767.0 / scale;
     let data_bytes = len as u64 * 4;
     if data_bytes > u32::MAX as u64 - 36 {
@@ -946,6 +1100,7 @@ mod tests {
                 &dir,
                 44100,
                 &[("vocals", [&quiet, &loud]), ("bass", [&loud, &quiet])],
+                CacheFormat::Wav,
             )
             .unwrap();
         assert_eq!(files.len(), 2);
@@ -960,6 +1115,7 @@ mod tests {
             stems: files,
             shifts: 2,
             dir: dir.clone(),
+            format: CacheFormat::Wav,
         };
         assert!(lib.stems_present("s1", &info));
         let back = lib.read_stems("s1", &info).unwrap();
@@ -976,7 +1132,7 @@ mod tests {
         assert!(err(&back[0].1[1], &loud) < 2.0 / 32767.0 * 1.8);
         assert!(err(&back[1].1[0], &loud) < 2.0 / 32767.0 * 1.8);
         // Missing file -> not present, read fails.
-        fs::remove_file(lib.stem_path("s1", &dir, "bass")).unwrap();
+        fs::remove_file(lib.stem_path("s1", &dir, "bass", CacheFormat::Wav)).unwrap();
         assert!(!lib.stems_present("s1", &info));
         assert!(lib.read_stems("s1", &info).is_err());
         lib.remove("s1").unwrap();
@@ -996,6 +1152,7 @@ mod tests {
             stems: vec![],
             shifts,
             dir: stem_set_dir(model, shifts),
+            format: CacheFormat::Mp3,
         };
         m.put_stem_set(set("htdemucs_6s", 2));
         m.put_stem_set(set("htdemucs_6s", 1));
@@ -1037,7 +1194,7 @@ mod tests {
         let s = m.stem_set("htdemucs_6s", 1).unwrap();
         assert_eq!(s.dir, "stems");
         assert_eq!(
-            lib.stem_path("old1", &s.dir, "bass"),
+            lib.stem_path("old1", &s.dir, "bass", s.format),
             lib.song_dir("old1").join("stems").join("bass.wav")
         );
         assert!(m.original.is_none());
@@ -1053,16 +1210,133 @@ mod tests {
         let lib = Library::open(&tmpdir("orig")).unwrap();
         let a: Vec<f32> = (0..500).map(|i| (i as f32 * 0.1).sin() * 1.2).collect();
         let b: Vec<f32> = a.iter().map(|x| -x * 0.5).collect();
-        let info = lib.write_original("o1", 44100, [&a, &b]).unwrap();
+        // An old WAV copy is replaced.
+        fs::create_dir_all(lib.song_dir("o1")).unwrap();
+        fs::write(lib.song_dir("o1").join("original.wav"), b"old").unwrap();
+        // Not a lossy source: stored as FLAC.
+        let info = lib
+            .write_original("o1", 44100, [&a, &b], Some(Path::new("C:/x/song.wav")))
+            .unwrap();
+        assert_eq!(info.file, "original.flac");
         assert_eq!(info.len, 500);
         assert!((info.scale - 1.2).abs() < 1e-3);
+        assert!(!lib.song_dir("o1").join("original.wav").exists());
         let back = lib.read_original("o1", &info).unwrap().unwrap();
         assert!(back[0]
             .iter()
             .zip(&a)
-            .all(|(x, y)| (x - y).abs() < 2.0 * 1.2 / 32767.0));
-        fs::remove_file(lib.original_path("o1")).unwrap();
+            .all(|(x, y)| (x - y).abs() < info.scale / 32768.0 * 0.51));
+        fs::remove_file(lib.original_path("o1", &info.file).unwrap()).unwrap();
         assert!(lib.read_original("o1", &info).unwrap().is_none());
+        // Only plain file names inside the song folder.
+        let mut bad = info.clone();
+        bad.file = "../x.flac".into();
+        assert!(lib.read_original("o1", &bad).is_err());
+    }
+
+    #[test]
+    fn lossy_source_is_copied_as_original() {
+        let d = tmpdir("copy");
+        let lib = Library::open(&d.join("lib")).unwrap();
+        let n = 44100;
+        let a: Vec<f32> = (0..n).map(|i| (i as f32 * 0.05).sin() * 0.5).collect();
+        let src = d.join("song.mp3");
+        codec::write_mp3(&src, 44100, [&a, &a], 1.0).unwrap();
+        // What the app holds: the source decoded (and resampled) once.
+        let mix = codec::read(&src, 44100, n, 1.0, true).unwrap();
+        let info = lib
+            .write_original("c1", 44100, [&mix[0], &mix[1]], Some(&src))
+            .unwrap();
+        assert_eq!(info.file, "original.mp3");
+        assert_eq!(info.scale, 1.0);
+        assert_eq!(
+            fs::read(lib.original_path("c1", "original.mp3").unwrap()).unwrap(),
+            fs::read(&src).unwrap()
+        );
+        assert_eq!(lib.read_original("c1", &info).unwrap().unwrap(), mix);
+        // A source that doesn't decode to the given samples: FLAC instead.
+        let other: Vec<f32> = a.iter().map(|x| x * 0.5).collect();
+        let info = lib
+            .write_original("c1", 44100, [&other, &other], Some(&src))
+            .unwrap();
+        assert_eq!(info.file, "original.flac");
+        assert!(!lib.song_dir("c1").join("original.mp3").exists());
+    }
+
+    #[test]
+    fn compressed_stems_roundtrip_and_replace_older_formats() {
+        let lib = Library::open(&tmpdir("fmt")).unwrap();
+        let n = 3 * 44100;
+        let a: Vec<f32> = (0..n).map(|i| (i as f32 * 0.03).sin() * 1.5).collect();
+        let b: Vec<f32> = (0..n).map(|i| (i as f32 * 0.07).sin() * 0.3).collect();
+        let dir = stem_set_dir("m", 1);
+        lib.write_stems("f1", &dir, 44100, &[("bass", [&a, &b])], CacheFormat::Wav)
+            .unwrap();
+        for format in [CacheFormat::Flac, CacheFormat::Mp3] {
+            let files = lib
+                .write_stems("f1", &dir, 44100, &[("bass", [&a, &b])], format)
+                .unwrap();
+            assert!((files[0].scale - 1.5).abs() < 1e-3);
+            let info = StemsInfo {
+                model_id: "m".into(),
+                model_name: "M".into(),
+                device_label: "CPU".into(),
+                sample_rate: 44100,
+                len: n,
+                stems: files,
+                shifts: 1,
+                dir: dir.clone(),
+                format,
+            };
+            assert!(lib.stems_present("f1", &info));
+            let back = &lib.read_stems("f1", &info).unwrap()[0].1;
+            assert_eq!(back[0].len(), n);
+            let (mut s, mut e) = (0.0f64, 0.0f64);
+            for (x, y) in a.iter().zip(&back[0]) {
+                s += (*x as f64).powi(2);
+                e += (*x as f64 - *y as f64).powi(2);
+            }
+            let snr = 10.0 * (s / e).log10();
+            assert!(
+                snr > if format == CacheFormat::Flac {
+                    80.0
+                } else {
+                    25.0
+                },
+                "{format:?} {snr:.1} dB"
+            );
+            // Only this format's file is left.
+            for other in [CacheFormat::Wav, CacheFormat::Flac, CacheFormat::Mp3] {
+                assert_eq!(
+                    lib.stem_path("f1", &dir, "bass", other).is_file(),
+                    other == format
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn old_manifests_load_as_wav() {
+        let lib = Library::open(&tmpdir("oldfmt")).unwrap();
+        let mut m = meta("w1", 1);
+        m.original = Some(OriginalInfo {
+            sample_rate: 44100,
+            len: 5,
+            scale: 1.0,
+            file: "original.wav".into(),
+        });
+        lib.save(&mut m).unwrap();
+        // Strip the new fields, as written before 2026-11-02.
+        let text = fs::read_to_string(lib.manifest_path("w1")).unwrap();
+        let mut v: serde_json::Value = serde_json::from_str(&text).unwrap();
+        v["original"].as_object_mut().unwrap().remove("file");
+        v["stem_sets"] = serde_json::json!([{"model_id": "m", "model_name": "M",
+            "device_label": "GPU", "sample_rate": 44100, "len": 5, "shifts": 1,
+            "dir": "stems/m_s1", "stems": [{"name": "bass", "scale": 1.0}]}]);
+        fs::write(lib.manifest_path("w1"), v.to_string()).unwrap();
+        let m = lib.load("w1").unwrap().unwrap();
+        assert_eq!(m.stem_sets[0].format, CacheFormat::Wav);
+        assert_eq!(m.original.unwrap().file, "original.wav");
     }
 
     #[test]
@@ -1099,8 +1373,14 @@ mod tests {
         b.hidden = true;
         lib.save(&mut b).unwrap();
         let x = [0.1f32; 100];
-        lib.write_stems("a1", &stem_set_dir("m", 1), 44100, &[("bass", [&x, &x])])
-            .unwrap();
+        lib.write_stems(
+            "a1",
+            &stem_set_dir("m", 1),
+            44100,
+            &[("bass", [&x, &x])],
+            CacheFormat::Wav,
+        )
+        .unwrap();
         let l = lib.list();
         assert_eq!(l.len(), 2);
         let a = l.iter().find(|s| s.entry.song_id == "a1").unwrap();
@@ -1149,8 +1429,14 @@ mod tests {
         let mut m = meta("s1", 1);
         lib.save(&mut m).unwrap();
         let x = [0.5f32; 10];
-        lib.write_stems("s1", &stem_set_dir("m", 1), 44100, &[("drums", [&x, &x])])
-            .unwrap();
+        lib.write_stems(
+            "s1",
+            &stem_set_dir("m", 1),
+            44100,
+            &[("drums", [&x, &x])],
+            CacheFormat::Mp3,
+        )
+        .unwrap();
         let size = dir_size(&lib.song_dir("s1"));
         assert!(size > 0);
         assert_eq!(lib.song_size("s1").unwrap(), size);

@@ -37,6 +37,7 @@ export const tauriBackend: Backend = {
   setAppSettings: (settings) => invoke("set_app_settings", { settings }),
   setTheme: (theme) => invoke("set_theme", { theme }),
   setCountInToMusicStart: (on) => invoke("set_count_in_to_music_start", { on }),
+  setStemFormat: (format) => invoke("set_stem_format", { format }),
   setClickVolume: (volume) => invoke("set_click_volume", { volume }),
   setMasterVolume: (volume, save) => invoke("set_master_volume", { volume, save }),
   getRefinePresets: () => invoke("get_refine_presets"),

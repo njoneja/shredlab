@@ -21,6 +21,7 @@ import type {
   RefineParams,
   SongSettings,
   StemMixState,
+  StemFormat,
   StemName,
   StrengthSetting,
   Theme,
@@ -103,6 +104,8 @@ const LS_CLICK_VOLUME = "shredlab.mock.clickVolume";
 let clickVolume: number = lsGet<number>(LS_CLICK_VOLUME, 0.8);
 const LS_MASTER_VOLUME = "shredlab.mock.masterVolume";
 let masterVolume: number = lsGet<number>(LS_MASTER_VOLUME, 1);
+const LS_STEM_FORMAT = "shredlab.mock.stemFormat";
+let stemFormat: StemFormat = lsGet<StemFormat>(LS_STEM_FORMAT, "mp3");
 
 function appSettings(): AppSettingsInfo {
   const model_id = appChoice.model_id && MODELS.some((m) => m.id === appChoice.model_id) ? appChoice.model_id : DEFAULT_MODEL;
@@ -119,6 +122,7 @@ function appSettings(): AppSettingsInfo {
     count_in_to_music_start: toMusicStart,
     click_volume: clickVolume,
     master_volume: masterVolume,
+    stem_format: stemFormat,
   };
 }
 
@@ -659,6 +663,11 @@ export const mockBackend: Backend = {
   async setCountInToMusicStart(on) {
     toMusicStart = on;
     lsSet(LS_MUSIC_START, on);
+    return appSettings();
+  },
+  async setStemFormat(format) {
+    stemFormat = format;
+    lsSet(LS_STEM_FORMAT, format);
     return appSettings();
   },
   async setClickVolume(volume) {

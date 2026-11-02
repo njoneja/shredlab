@@ -241,6 +241,12 @@ pub async fn set_click_volume(b: B<'_>, volume: f32) -> R<AppSettingsInfo> {
 }
 
 #[tauri::command]
+pub async fn set_stem_format(b: B<'_>, format: StemFormat) -> R<AppSettingsInfo> {
+    let b = b.inner().clone();
+    blocking(move || b.set_stem_format(format)).await
+}
+
+#[tauri::command]
 pub async fn set_count_in_to_music_start(b: B<'_>, on: bool) -> R<AppSettingsInfo> {
     let b = b.inner().clone();
     blocking(move || b.set_count_in_to_music_start(on)).await

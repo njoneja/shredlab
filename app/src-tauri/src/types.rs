@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-pub use crate::settings::Quality;
+pub use crate::settings::{Quality, StemFormat};
 pub use shredlab_dsp::refine::{EqParams, RefineParams};
 pub use shredlab_library::StrengthSetting;
 
@@ -89,6 +89,8 @@ pub struct AppSettingsInfo {
     pub click_volume: f32,
     /// Master playback volume, linear 0..1 (default 1). Not in exports.
     pub master_volume: f32,
+    /// Format of newly written stems: "mp3" (default) or "flac".
+    pub stem_format: StemFormat,
 }
 
 /// `set_app_settings` payload. Null = use the default.

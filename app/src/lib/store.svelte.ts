@@ -16,6 +16,7 @@ import type {
   SongInfo,
   SongSettings,
   StemMixState,
+  StemFormat,
   StemName,
   StrengthSetting,
   Subdivision,
@@ -361,6 +362,17 @@ class AppState {
     if (this.appSettings) this.appSettings = { ...this.appSettings, count_in_to_music_start: on };
     try {
       this.appSettings = await api.setCountInToMusicStart(on);
+    } catch (e) {
+      this.report(e);
+      await this.loadAppSettings();
+    }
+  }
+
+  /** Saves the format of newly written stems (existing stems keep theirs). */
+  async setStemFormat(format: StemFormat) {
+    if (this.appSettings) this.appSettings = { ...this.appSettings, stem_format: format };
+    try {
+      this.appSettings = await api.setStemFormat(format);
     } catch (e) {
       this.report(e);
       await this.loadAppSettings();

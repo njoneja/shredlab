@@ -649,6 +649,7 @@ impl Backend {
             count_in_to_music_start: saved.count_in_to_music_start(),
             click_volume: saved.click_volume(),
             master_volume: saved.master_volume(),
+            stem_format: saved.stem_format(),
         }
     }
 
@@ -701,6 +702,20 @@ impl Backend {
         log!("count in to where the music starts: {on}");
         *lock(&self.app_settings) = new;
         self.apply_click(&lock(&self.st));
+        Ok(self.app_settings())
+    }
+
+    /// Saves the format of newly written stems with the app settings.
+    /// Existing stems keep their format; they are still read.
+    pub fn set_stem_format(&self, format: StemFormat) -> Result<AppSettingsInfo, String> {
+        let new = AppSettings {
+            stem_format: Some(format),
+            ..lock(&self.app_settings).clone()
+        };
+        new.save(&self.cfg.data_dir)
+            .map_err(|e| format!("Cannot save settings: {e}"))?;
+        log!("stem format: {format:?}");
+        *lock(&self.app_settings) = new;
         Ok(self.app_settings())
     }
 
@@ -1013,7 +1028,10 @@ impl Backend {
             if stems.is_some() {
                 // Old cache entry without the original: keep a copy now.
                 log!("no cached original for {song_id}; decoded the source and caching a copy");
-                match self.library.write_original(&song_id, RATE, [&l, &r]) {
+                match self
+                    .library
+                    .write_original(&song_id, RATE, [&l, &r], Some(&path_buf))
+                {
                     Ok(oi) => new_original_info = Some(oi),
                     Err(e) => log!("cannot cache the original: {e}"),
                 }
@@ -1563,26 +1581,26 @@ impl Backend {
             })
             .collect();
         let dir = shredlab_library::stem_set_dir(entry.id(), shifts);
+        let format = lock(&self.app_settings).stem_format().cache_format();
         let files = self
             .library
-            .write_stems(song_id, &dir, RATE, &views)
+            .write_stems(song_id, &dir, RATE, &views, format)
             .map_err(|e| format!("Cannot write stems: {e}"))?;
         // Keep a copy of the original next to the stems (P1 backing track
-        // even if the source file moves later).
-        let have_original = self
-            .library
-            .load(song_id)
-            .ok()
-            .flatten()
-            .and_then(|m| m.original)
-            .is_some();
+        // even if the source file moves later): the source file itself when
+        // it is lossy (exact and small), else FLAC.
+        let meta = self.library.load(song_id).ok().flatten();
+        let have_original = meta.as_ref().is_some_and(|m| m.original.is_some());
+        let source = meta.map(|m| PathBuf::from(m.source_path));
         let original_info = if have_original {
             None
         } else {
-            match self
-                .library
-                .write_original(song_id, RATE, [&mix[0], &mix[1]])
-            {
+            match self.library.write_original(
+                song_id,
+                RATE,
+                [&mix[0], &mix[1]],
+                source.as_deref().filter(|p| p.is_file()),
+            ) {
                 Ok(oi) => Some(oi),
                 Err(e) => {
                     log!("cannot cache the original: {e}");
@@ -1599,6 +1617,7 @@ impl Backend {
             stems: files,
             shifts,
             dir,
+            format,
         };
         self.library
             .update(song_id, |m| {
@@ -1608,7 +1627,10 @@ impl Backend {
                 }
             })
             .map_err(|e| format!("Cannot update library: {e}"))?;
-        log!("wrote stems in {:.2}s", tw.elapsed().as_secs_f64());
+        log!(
+            "wrote stems ({format:?}) in {:.2}s",
+            tw.elapsed().as_secs_f64()
+        );
         let tracks = (0..stems.names.len())
             .map(|i| {
                 let ch = stems.stem(i);
@@ -2779,9 +2801,13 @@ mod tests {
                     ("bass", [&ba[..], &ba[..]]),
                     ("drums", [&dr[..], &dr[..]]),
                 ],
+                shredlab_library::CacheFormat::Wav,
             )
             .unwrap();
-        let oi = b.library.write_original(&id, RATE, [&ol, &or]).unwrap();
+        let oi = b
+            .library
+            .write_original(&id, RATE, [&ol, &or], Some(&wav))
+            .unwrap();
         b.library
             .update(&id, |m| {
                 m.original = Some(oi);
@@ -2794,6 +2820,7 @@ mod tests {
                     stems: files,
                     shifts: 1,
                     dir,
+                    format: shredlab_library::CacheFormat::Wav,
                 });
             })
             .unwrap();

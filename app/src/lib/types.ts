@@ -10,6 +10,8 @@ export type Theme = (typeof THEMES)[number];
 
 /** "standard" = 1 pass, "high" = 2 passes (Demucs shifts=2). */
 export type Quality = "standard" | "high";
+/** How newly written stems are stored in the library. */
+export type StemFormat = "mp3" | "flac";
 
 export interface SeparatedWith {
   model_name: string; // e.g. "Demucs 6-stem"
@@ -138,6 +140,7 @@ export interface AppSettingsInfo {
   count_in_to_music_start: boolean; // "Count in to where the music starts" (on by default)
   click_volume: number; // click and count-in volume, linear 0..1 (0.8 by default)
   master_volume: number; // master playback volume, linear 0..1 (1 by default; not in exports)
+  stem_format: StemFormat; // format of newly written stems ("mp3" by default)
 }
 
 /** null = use the default. */
@@ -350,6 +353,7 @@ export interface Backend {
   setAppSettings(settings: AppSettingsUpdate): Promise<AppSettingsInfo>;
   setTheme(theme: Theme): Promise<AppSettingsInfo>;
   setCountInToMusicStart(on: boolean): Promise<AppSettingsInfo>;
+  setStemFormat(format: StemFormat): Promise<AppSettingsInfo>;
   setClickVolume(volume: number): Promise<AppSettingsInfo>;
   setMasterVolume(volume: number, save: boolean): Promise<AppSettingsInfo>;
   getRefinePresets(): Promise<RefinePreset[]>;

@@ -28,7 +28,9 @@ shredlab-library = { path = "crates/shredlab-library" }
 
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
+flacenc = { version = "0.5", default-features = false, features = ["par"] }
 hound = "3.5"
+mp3lame-encoder = "0.2"
 num_cpus = "1.16"
 realfft = "3.4"
 rubato = "0.16"

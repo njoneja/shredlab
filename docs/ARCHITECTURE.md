@@ -164,14 +164,22 @@ keyed by a hash of the file content:
 
 ```
 songs/<song_id>/song.json                         manifest (schema 2)
-songs/<song_id>/original.wav                      copy of the original mix
-songs/<song_id>/stems/<model_id>_s<shifts>/<stem>.wav
+songs/<song_id>/original.<ext>                    copy of the original mix
+songs/<song_id>/stems/<model_id>_s<shifts>/<stem>.<mp3|flac|wav>
 ```
 
 Stems are cached per model and quality, so switching back is instant. They
-are 16-bit WAV with a per-stem scale factor in `song.json`, so loud stems
-never clip and disk use is half that of float WAV. The original is cached
-too, so the backing track works after the source file moves. `song.json`
+are stored with a per-stem scale factor in `song.json`, so loud stems never
+clip, as MP3 VBR V0 (the default, about 75 MB for six stems of a 7-minute
+song) or 16-bit FLAC (lossless, about 135 MB), set in Settings. Caches
+written before November 2026 are 16-bit WAV and still load. MP3 stems carry
+a LAME tag, so they decode sample-aligned with the original.
+
+The original is cached too, so the backing track works after the source
+file moves. It is never re-encoded lossily: "All but this" subtracts stems
+from it, which would expose its coding noise. A lossy source (MP3, AAC,
+Vorbis) is copied as-is and decoded on load; anything else is stored as
+16-bit FLAC. `song.json`
 also holds the beat grid, the Refine settings and separation strength, and
 per-song UI settings.
 
