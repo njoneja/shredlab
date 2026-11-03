@@ -88,16 +88,19 @@ for (const doc of docs) {
 }
 
 // Missing paths are fine when git ignores them (local or generated files).
+// A directory pattern such as `dist/` only matches a path git knows is a
+// directory, which a missing one isn't, so a child path is checked too.
 if (unchecked.length) {
   let ignored = new Set();
   try {
-    const all = unchecked.flatMap(([, , c]) => c);
+    const all = unchecked.flatMap(([, , c]) => c.flatMap((p) => [p, `${p}/_`]));
     ignored = new Set(git(["check-ignore", "--no-index", "--stdin"], all.join("\n")));
   } catch {
     // check-ignore exits 1 when nothing is ignored.
   }
   for (const [doc, t, candidates] of unchecked) {
-    if (!candidates.some((p) => ignored.has(p))) problems.push(`${doc}: no such path \`${t}\``);
+    if (!candidates.some((p) => ignored.has(p) || ignored.has(`${p}/_`)))
+      problems.push(`${doc}: no such path \`${t}\``);
   }
 }
 
