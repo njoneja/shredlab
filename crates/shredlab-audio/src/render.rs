@@ -218,7 +218,7 @@ fn add_clicks_after_limiter(music: &mut [Vec<f32>; 2], clicks: &[f32], sample_ra
 #[allow(clippy::needless_range_loop)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
+    use crate::Channel;
 
     fn sine_track(name: &str, freq: f32, secs: f32) -> Track {
         let n = (secs * 44_100.0) as usize;
@@ -227,7 +227,7 @@ mod tests {
             .collect();
         Track {
             name: name.into(),
-            channels: [Arc::new(v.clone()), Arc::new(v)],
+            channels: [Channel::from(v.clone()), Channel::from(v)],
             sample_rate: 44_100,
         }
     }
@@ -254,8 +254,8 @@ mod tests {
         };
         let mut calls = 0;
         let out = render(&req, &mut |_| calls += 1, &AtomicBool::new(false)).unwrap();
-        assert_eq!(out[0], *a.channels[0]);
-        assert_eq!(out[1], *a.channels[1]);
+        assert_eq!(out[0], *a.channels[0].as_f32().unwrap());
+        assert_eq!(out[1], *a.channels[1].as_f32().unwrap());
         assert!(calls >= 2);
     }
 
@@ -284,7 +284,10 @@ mod tests {
             );
             let mid = &out[0][want / 4..want * 3 / 4];
             let r = rms(mid);
-            assert!((r / rms(&a.channels[0]) - 1.0).abs() < 0.15, "rms {r}");
+            assert!(
+                (r / rms(a.channels[0].as_f32().unwrap()) - 1.0).abs() < 0.15,
+                "rms {r}"
+            );
         }
     }
 
@@ -296,11 +299,15 @@ mod tests {
         let drums = sine_track("drums", 1000.0, 1.0);
         let n = bass.channels[0].len();
         let o: Vec<f32> = (0..n)
-            .map(|i| bass.channels[0][i] + drums.channels[0][i] + 0.01)
+            .map(|i| {
+                bass.channels[0].as_f32().unwrap()[i]
+                    + drums.channels[0].as_f32().unwrap()[i]
+                    + 0.01
+            })
             .collect();
         let orig = Track {
             name: "original".into(),
-            channels: [Arc::new(o.clone()), Arc::new(o.clone())],
+            channels: [Channel::from(o.clone()), Channel::from(o.clone())],
             sample_rate: 44_100,
         };
         let req = RenderRequest {
@@ -317,7 +324,7 @@ mod tests {
         };
         let out = render(&req, &mut |_| {}, &AtomicBool::new(false)).unwrap();
         for i in 0..n {
-            assert_eq!(out[0][i], o[i] - drums.channels[0][i]);
+            assert_eq!(out[0][i], o[i] - drums.channels[0].as_f32().unwrap()[i]);
         }
     }
 
@@ -522,7 +529,7 @@ mod tests {
     #[test]
     fn range_render_has_exact_length_and_faded_edges() {
         let req = range_req(2.0, 0.5, Some(1.25));
-        let src = req.tracks[0].channels[0].clone();
+        let src = req.tracks[0].channels[0].to_vec();
         let out = render(&req, &mut |_| {}, &AtomicBool::new(false)).unwrap();
         let (a, b) = (22_050usize, 55_125usize);
         assert_eq!(out[0].len(), b - a);
@@ -560,7 +567,7 @@ mod tests {
             out[0].len()
         );
         let mid = &out[0][want / 4..want * 3 / 4];
-        assert!((rms(mid) / rms(&req.tracks[0].channels[0]) - 1.0).abs() < 0.15);
+        assert!((rms(mid) / rms(req.tracks[0].channels[0].as_f32().unwrap()) - 1.0).abs() < 0.15);
     }
 
     #[test]
@@ -618,7 +625,7 @@ mod tests {
         let out = render(&req, &mut |_| {}, &AtomicBool::new(false)).unwrap();
         assert_eq!(out[0].len(), 4 * 22_050 + 2 * 44_100);
         // The music after the count-in is the song from 2.0 s (faded in).
-        let src = &req.tracks[0].channels[0];
+        let src = &req.tracks[0].channels[0].as_f32().unwrap();
         let fade = (EDGE_FADE_SECS * 44_100.0).round() as usize;
         assert_eq!(&out[0][4 * 22_050 + fade..], &src[88_200 + fade..]);
         // A loop range ending before the music start: no skip.
@@ -639,7 +646,7 @@ mod tests {
             .collect();
         let t = Track {
             name: "mix".into(),
-            channels: [Arc::new(v.clone()), Arc::new(v)],
+            channels: [Channel::from(v.clone()), Channel::from(v)],
             sample_rate: 44_100,
         };
         let mut c = click_cfg(vec![0.25, 0.75, 1.25, 1.75], vec![0.25]);

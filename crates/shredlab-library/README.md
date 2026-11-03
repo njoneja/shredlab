@@ -112,7 +112,9 @@ FLAC at the song rate. Older `original.*` files are removed.
   only a copied lossy original is resampled on load.
 - FLAC caches store `scale` widened by 32768/32767, because symphonia
   decodes 16-bit samples as `i / 32768` while the writer maps the peak to
-  32767.
+  32767. `Track::quantized` in `shredlab-audio` repeats the writer's
+  rounding so the app can hold reloaded stems as the same integers; change
+  both together.
 - The lossy-copy check depends on `shredlab-io` decoding deterministically
   and the caller passing that same decode at that rate. If decoding ever
   changes, the check fails and the original falls back to FLAC, which is

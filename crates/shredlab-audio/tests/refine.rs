@@ -10,11 +10,10 @@
 //! window (`invert`), off → the window alone (heard at the row's volume).
 
 use std::sync::atomic::AtomicBool;
-use std::sync::Arc;
 
 use shredlab_audio::mix::{MixMode, Mixer};
 use shredlab_audio::pipeline::{Meta, Pipeline, XFADE};
-use shredlab_audio::{render, ClickConfig, RenderRequest, Track};
+use shredlab_audio::{render, Channel, ClickConfig, RenderRequest, Track};
 use shredlab_dsp::refine::{eq_preset, pan_offline, refine_offline, PanParams, RefineParams};
 
 const SR: u32 = 44_100;
@@ -29,7 +28,7 @@ fn tone(f: f32, n: usize, a: f32, ph: f32) -> Vec<f32> {
 fn track(name: &str, l: Vec<f32>, r: Vec<f32>) -> Track {
     Track {
         name: name.into(),
-        channels: [Arc::new(l), Arc::new(r)],
+        channels: [Channel::from(l), Channel::from(r)],
         sample_rate: SR,
     }
 }
@@ -48,7 +47,13 @@ fn song(n: usize) -> (Vec<Track>, Track) {
     let res = tone(5100.0, n, 0.02, 0.0);
     let o = [0, 1].map(|c| {
         (0..n)
-            .map(|i| stems.iter().map(|t| t.channels[c][i]).sum::<f32>() + res[i])
+            .map(|i| {
+                stems
+                    .iter()
+                    .map(|t| t.channels[c].as_f32().unwrap()[i])
+                    .sum::<f32>()
+                    + res[i]
+            })
             .collect::<Vec<f32>>()
     });
     let [ol, or] = o;
@@ -132,7 +137,7 @@ fn identity_refine_is_bit_identical_to_the_plain_mix() {
         if mode == MixMode::Original && g == [1.0; 3] {
             assert!(a[0]
                 .iter()
-                .zip(orig.channels[0].iter())
+                .zip(orig.channels[0].as_f32().unwrap().iter())
                 .all(|(x, y)| x == y));
         }
     }
@@ -143,7 +148,12 @@ fn an_exception_flips_with_the_switch() {
     let n = 60_000;
     let (stems, orig) = song(n);
     let g = &stems[0];
-    let left = pan_offline(&PanParams::left(), SR, &g.channels[0], &g.channels[1]);
+    let left = pan_offline(
+        &PanParams::left(),
+        SR,
+        g.channels[0].as_f32().unwrap(),
+        g.channels[1].as_f32().unwrap(),
+    );
     let mid = 10_000..n - 10_000;
     let resid = |out: &[f32], want: &dyn Fn(usize) -> f32| {
         rms(&mid.clone().map(|i| out[i] - want(i)).collect::<Vec<_>>())
@@ -157,12 +167,16 @@ fn an_exception_flips_with_the_switch() {
     m.load_with_original(stems.clone(), Some(orig.clone()), false);
     let out = mix_all(&mut m, n, 512);
     for c in 0..2 {
-        let want: Vec<f32> = (0..n).map(|i| orig.channels[c][i] - left[c][i]).collect();
+        let want: Vec<f32> = (0..n)
+            .map(|i| orig.channels[c].as_f32().unwrap()[i] - left[c][i])
+            .collect();
         assert!(max_diff(&out[c], &want) < 1e-5, "on except left, ch {c}");
     }
-    let r = resid(&out[0], &|i| orig.channels[0][i] - g.channels[0][i]);
+    let r = resid(&out[0], &|i| {
+        orig.channels[0].as_f32().unwrap()[i] - g.channels[0].as_f32().unwrap()[i]
+    });
     assert!(r < 0.01, "left guitar remains: {r}");
-    let r = resid(&out[1], &|i| orig.channels[1][i]);
+    let r = resid(&out[1], &|i| orig.channels[1].as_f32().unwrap()[i]);
     assert!(r < 0.01, "right channel changed: {r}");
 
     // Guitar OFF except left (heard at its volume), the rest on: the
@@ -174,13 +188,18 @@ fn an_exception_flips_with_the_switch() {
     let out = mix_all(&mut m, n, 700);
     for c in 0..2 {
         let want: Vec<f32> = (0..n)
-            .map(|i| orig.channels[c][i] - g.channels[c][i] + left[c][i])
+            .map(|i| {
+                orig.channels[c].as_f32().unwrap()[i] - g.channels[c].as_f32().unwrap()[i]
+                    + left[c][i]
+            })
             .collect();
         assert!(max_diff(&out[c], &want) < 1e-5, "off except left, ch {c}");
     }
-    let r = resid(&out[0], &|i| orig.channels[0][i]);
+    let r = resid(&out[0], &|i| orig.channels[0].as_f32().unwrap()[i]);
     assert!(r < 0.01, "left channel changed: {r}");
-    let r = resid(&out[1], &|i| orig.channels[1][i] - g.channels[1][i]);
+    let r = resid(&out[1], &|i| {
+        orig.channels[1].as_f32().unwrap()[i] - g.channels[1].as_f32().unwrap()[i]
+    });
     assert!(r < 0.01, "right guitar remains: {r}");
 
     // Solo (plain sum) plays exactly what the row plays: ON except left at
@@ -195,7 +214,7 @@ fn an_exception_flips_with_the_switch() {
             let want: Vec<f32> = (0..n)
                 .map(|i| {
                     let heard = if on {
-                        g.channels[c][i] - left[c][i]
+                        g.channels[c].as_f32().unwrap()[i] - left[c][i]
                     } else {
                         left[c][i]
                     };
@@ -227,6 +246,8 @@ fn flipping_the_switch_with_an_exception_crossfades() {
     all.extend_from_slice(&b[0]);
     all.extend_from_slice(&c[0]);
     let sig = orig.channels[0]
+        .as_f32()
+        .unwrap()
         .windows(2)
         .map(|w| (w[1] - w[0]).abs())
         .fold(0.0f32, f32::max);
@@ -236,12 +257,15 @@ fn flipping_the_switch_with_an_exception_crossfades() {
         .fold(0.0f32, f32::max);
     assert!(st < sig * 1.5, "step {st} vs {sig}");
     // Settled after each flip: left channel without, then with the left guitar.
-    let gl = &stems[0].channels[0];
+    let gl = &stems[0].channels[0].as_f32().unwrap();
     let tail = 15_000..20_000;
     let d = |x: &[f32], off: usize, with: bool| {
         rms(&tail
             .clone()
-            .map(|i| x[i] - (orig.channels[0][off + i] - if with { 0.0 } else { gl[off + i] }))
+            .map(|i| {
+                x[i] - (orig.channels[0].as_f32().unwrap()[off + i]
+                    - if with { 0.0 } else { gl[off + i] })
+            })
             .collect::<Vec<_>>())
     };
     assert!(d(&a[0], 0, false) < 0.01, "{}", d(&a[0], 0, false));
@@ -262,7 +286,12 @@ fn eq_on_a_stem_is_heard_in_the_full_mix_and_in_solo() {
         ..RefineParams::default()
     };
     let b = &stems[1];
-    let r = refine_offline(&p, SR, &b.channels[0], &b.channels[1]);
+    let r = refine_offline(
+        &p,
+        SR,
+        b.channels[0].as_f32().unwrap(),
+        b.channels[1].as_f32().unwrap(),
+    );
     // All on: original − bass + EQ(bass).
     let mut m = Mixer::new(vec![], &gains([1.0, 1.0, 1.0]));
     m.set_mode(MixMode::Original);
@@ -271,12 +300,14 @@ fn eq_on_a_stem_is_heard_in_the_full_mix_and_in_solo() {
     let out = mix_all(&mut m, n, 256);
     for c in 0..2 {
         let want: Vec<f32> = (0..n)
-            .map(|i| orig.channels[c][i] - b.channels[c][i] + r[c][i])
+            .map(|i| {
+                orig.channels[c].as_f32().unwrap()[i] - b.channels[c].as_f32().unwrap()[i] + r[c][i]
+            })
             .collect();
         assert!(max_diff(&out[c], &want) < 1e-5);
     }
     assert!(
-        max_diff(&out[0], &orig.channels[0]) > 0.05,
+        max_diff(&out[0], orig.channels[0].as_f32().unwrap()) > 0.05,
         "EQ not audible"
     );
     // Solo bass at 0.8 (plain sum): 0.8 · EQ(bass), nothing else.
@@ -389,12 +420,24 @@ fn playback_equals_export_with_refine_on() {
         // original − guitar + EQ(left guitar) − bass + EQ(bass).
         if speed == 1.0 {
             let rl = refined_list();
-            let gr = refine_offline(&rl[0].1, SR, &stems[0].channels[0], &stems[0].channels[1]);
-            let br = refine_offline(&rl[1].1, SR, &stems[1].channels[0], &stems[1].channels[1]);
+            let gr = refine_offline(
+                &rl[0].1,
+                SR,
+                stems[0].channels[0].as_f32().unwrap(),
+                stems[0].channels[1].as_f32().unwrap(),
+            );
+            let br = refine_offline(
+                &rl[1].1,
+                SR,
+                stems[1].channels[0].as_f32().unwrap(),
+                stems[1].channels[1].as_f32().unwrap(),
+            );
             let want: Vec<f32> = (0..n)
                 .map(|i| {
-                    orig.channels[0][i] - stems[0].channels[0][i] + gr[0][i]
-                        - stems[1].channels[0][i]
+                    orig.channels[0].as_f32().unwrap()[i]
+                        - stems[0].channels[0].as_f32().unwrap()[i]
+                        + gr[0][i]
+                        - stems[1].channels[0].as_f32().unwrap()[i]
                         + br[0][i]
                 })
                 .collect();
@@ -482,6 +525,8 @@ fn turning_refine_on_while_playing_is_seamless() {
     all.extend_from_slice(&b[0]);
     all.extend_from_slice(&c[0]);
     let sig = orig.channels[0]
+        .as_f32()
+        .unwrap()
         .windows(2)
         .map(|w| (w[1] - w[0]).abs())
         .fold(0.0f32, f32::max);
@@ -491,7 +536,7 @@ fn turning_refine_on_while_playing_is_seamless() {
         .fold(0.0f32, f32::max);
     assert!(st < sig * 1.5, "step {st} vs {sig}");
     // Before any change: exactly the original.
-    assert_eq!(&a[0][..], &orig.channels[0][..10_000]);
+    assert_eq!(&a[0][..], &orig.channels[0].as_f32().unwrap()[..10_000]);
 }
 
 #[test]

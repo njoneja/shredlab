@@ -887,7 +887,7 @@ pub fn resolve_play_start(pos: f64, duration: f64, loop_region: Option<(f64, f64
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
+    use crate::Channel;
 
     const SR: usize = 44_100;
 
@@ -896,7 +896,7 @@ mod tests {
         let v: Vec<f32> = (0..len).map(|i| i as f32 / len as f32).collect();
         Track {
             name: "mix".into(),
-            channels: [Arc::new(v.clone()), Arc::new(v)],
+            channels: [Channel::from(v.clone()), Channel::from(v)],
             sample_rate: SR as u32,
         }
     }
@@ -936,7 +936,7 @@ mod tests {
     fn bypass_offline_is_bit_exact_and_ends() {
         let len = SR + 123;
         let t = ramp_track(len);
-        let src = t.channels[0].clone();
+        let src = t.channels[0].to_vec();
         let mut p = Pipeline::new(vec![t], &unity(), false);
         p.play();
         let (l, _, m) = run(&mut p, len + 500, 1000);
@@ -1239,7 +1239,7 @@ mod tests {
         }
         let t = Track {
             name: "mix".into(),
-            channels: [Arc::new(v.clone()), Arc::new(v)],
+            channels: [Channel::from(v.clone()), Channel::from(v)],
             sample_rate: SR as u32,
         };
         let mut p = Pipeline::new(vec![t], &unity(), false);
@@ -1293,10 +1293,15 @@ mod tests {
         p.play();
         let _ = run(&mut p, SR, 512);
         // Two "stems" that sum to the original.
-        let half: Vec<f32> = orig.channels[0].iter().map(|x| x * 0.5).collect();
+        let half: Vec<f32> = orig.channels[0]
+            .as_f32()
+            .unwrap()
+            .iter()
+            .map(|x| x * 0.5)
+            .collect();
         let stem = |n: &str| Track {
             name: n.into(),
-            channels: [Arc::new(half.clone()), Arc::new(half.clone())],
+            channels: [Channel::from(half.clone()), Channel::from(half.clone())],
             sample_rate: SR as u32,
         };
         p.load(vec![stem("a"), stem("b")]);
@@ -1304,7 +1309,7 @@ mod tests {
         assert!((m[0].pos - 1.0).abs() < 1e-9);
         assert!(m.iter().all(|x| x.playing()));
         for (i, &x) in l.iter().enumerate().step_by(97) {
-            let want = orig.channels[0][SR + i];
+            let want = orig.channels[0].as_f32().unwrap()[SR + i];
             assert!((x - want).abs() < 1e-5, "at {i}: {x} vs {want}");
         }
     }

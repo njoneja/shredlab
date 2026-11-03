@@ -216,7 +216,7 @@ impl Engine {
         let len = tracks
             .iter()
             .chain(original.as_ref())
-            .map(|t| t.channels[0].len().min(t.channels[1].len()))
+            .map(Track::len)
             .min()
             .unwrap_or(0);
         let sr = tracks
@@ -853,6 +853,7 @@ fn spawn_device_watcher(shared: Arc<Shared>, initial: Option<String>) -> Option<
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Channel;
 
     #[test]
     fn master_volume_glides_to_target() {
@@ -895,7 +896,7 @@ mod tests {
             .collect();
         Track {
             name: "mix".into(),
-            channels: [Arc::new(v.clone()), Arc::new(v)],
+            channels: [Channel::from(v.clone()), Channel::from(v)],
             sample_rate: 44_100,
         }
     }
@@ -957,7 +958,7 @@ mod tests {
     #[test]
     fn feeder_bypasses_resampler_at_song_rate_bit_exact() {
         let t = sine_track(1.0);
-        let src = t.channels[0].clone();
+        let src = t.channels[0].to_vec();
         let mut pipe = Pipeline::new(vec![t], &[("mix".into(), 1.0)], false);
         pipe.play();
         let out = drive(&mut pipe, 44_100, 30_000);

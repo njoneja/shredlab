@@ -12,8 +12,9 @@ from the original and the per-stem Refine chains), the Signalsmith Stretch
 wrapper, click and count-in scheduling, both limiters, the offline renderer
 and the encoders.
 
-It does not decode files (the caller passes `Track`s: planar f32 stereo,
-all at the song rate, 44.1 kHz in practice), implement the Refine DSP
+It does not decode files (the caller passes `Track`s: planar stereo, each
+channel f32 or 16-bit integers times a step, all at the song rate, 44.1 kHz
+in practice), implement the Refine DSP
 (`RefineChain` and `RefineParams` come from
 [shredlab-dsp](../shredlab-dsp/src/refine/mod.rs)), detect beats or the
 music start (they arrive in `ClickConfig`), map the mixer's on/solo/volume
@@ -29,8 +30,8 @@ the LAME (LGPL) obligations are in [THIRD_PARTY.md](THIRD_PARTY.md).
 
 ## Layout
 
-Start with `src/lib.rs` (`Track`, `ClickConfig`, `Position`, `AudioError`,
-re-exports), then `Engine` in `src/engine.rs` for playback or `render` in
+Start with `src/lib.rs` (`Track`, `Channel`, `ClickConfig`, `Position`,
+`AudioError`, re-exports), then `Engine` in `src/engine.rs` for playback or `render` in
 `src/render.rs` for export. Both drive a `Pipeline`.
 
 - `src/engine.rs`: device stream, producer thread, ring buffer, device-rate resampling, master volume, device watcher, end and loop-wrap callbacks.
@@ -163,6 +164,13 @@ snapped to a standard rate), removing the partial file on error.
   when settings change, but steady-state rendering must not, and it never
   blocks on the API side (the stereo field is written with `try_lock`).
   Underruns show up in `Engine::stats`.
+- `Track::quantized` holds a stem as 16-bit integers (half the memory of
+  f32), divided by `max(peak, 1)` and rounded with exactly the arithmetic of
+  the FLAC stem cache writer in `shredlab-library`, so a stem reloaded from a
+  FLAC cache gives the same integers as the fresh stem (tested in the app's
+  backend). Change the two together. The mixer reads every track through
+  `Channel::read` / `get`; the bit-exact properties below hold for the
+  values a track yields (`int × step` for a quantized one).
 - All tracks of a set, including the original, must share the sample rate
   and be sample-aligned; the length is the shortest. The original must come
   from the same decode as the separation input.

@@ -374,7 +374,7 @@ impl TrackSet {
 
 /// Copies `[start, start + l.len())` of `t` into `l`/`r`; zeros outside the track.
 fn read_track(t: &Track, start: i64, l: &mut [f32], r: &mut [f32]) {
-    let len = t.channels[0].len().min(t.channels[1].len()) as i64;
+    let len = t.len() as i64;
     let n = l.len() as i64;
     let a = start.clamp(0, len);
     let b = (start + n).clamp(0, len);
@@ -382,8 +382,8 @@ fn read_track(t: &Track, start: i64, l: &mut [f32], r: &mut [f32]) {
     r.fill(0.0);
     if b > a {
         let (da, db) = ((a - start) as usize, (b - start) as usize);
-        l[da..db].copy_from_slice(&t.channels[0][a as usize..b as usize]);
-        r[da..db].copy_from_slice(&t.channels[1][a as usize..b as usize]);
+        t.channels[0].read(a as usize, &mut l[da..db]);
+        t.channels[1].read(a as usize, &mut r[da..db]);
     }
 }
 
@@ -397,17 +397,29 @@ fn add_track(
     r: &mut [f32],
     mut coef: impl FnMut(usize) -> f32,
 ) {
-    let len = t.channels[0].len().min(t.channels[1].len()) as i64;
-    let (cl, cr) = (&t.channels[0], &t.channels[1]);
-    for i in 0..l.len() {
-        let f = coef(i);
+    let len = t.len() as i64;
+    let in_range = |i: usize| {
         let p = pos + i as i64;
-        if p < 0 || p >= len {
-            continue;
+        (0..len).contains(&p).then_some(p as usize)
+    };
+    // The original is f32; other storage takes the per-sample path.
+    if let (Some(cl), Some(cr)) = (t.channels[0].as_f32(), t.channels[1].as_f32()) {
+        for i in 0..l.len() {
+            let f = coef(i);
+            if let Some(p) = in_range(i) {
+                l[i] += cl[p] * f;
+                r[i] += cr[p] * f;
+            }
         }
-        let p = p as usize;
-        l[i] += cl[p] * f;
-        r[i] += cr[p] * f;
+    } else {
+        let [cl, cr] = &t.channels;
+        for i in 0..l.len() {
+            let f = coef(i);
+            if let Some(p) = in_range(i) {
+                l[i] += cl.get(p) * f;
+                r[i] += cr.get(p) * f;
+            }
+        }
     }
 }
 
@@ -600,7 +612,7 @@ fn dims(tracks: &[Track], original: Option<&Track>) -> (usize, u32) {
     let len = tracks
         .iter()
         .chain(original)
-        .map(|t| t.channels[0].len().min(t.channels[1].len()))
+        .map(Track::len)
         .min()
         .unwrap_or(0);
     let sr = tracks
@@ -614,12 +626,12 @@ fn dims(tracks: &[Track], original: Option<&Track>) -> (usize, u32) {
 #[allow(clippy::needless_range_loop)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
+    use crate::Channel;
 
     pub(crate) fn track(name: &str, v: f32, len: usize) -> Track {
         Track {
             name: name.into(),
-            channels: [Arc::new(vec![v; len]), Arc::new(vec![-v; len])],
+            channels: [Channel::from(vec![v; len]), Channel::from(vec![-v; len])],
             sample_rate: 44_100,
         }
     }
@@ -682,7 +694,7 @@ mod tests {
         let data: Vec<f32> = (0..100).map(|i| (i as f32 * 0.37).sin() * 0.9).collect();
         let t = Track {
             name: "mix".into(),
-            channels: [Arc::new(data.clone()), Arc::new(data.clone())],
+            channels: [Channel::from(data.clone()), Channel::from(data.clone())],
             sample_rate: 44_100,
         };
         let mut m = Mixer::new(vec![t], &g(&[("mix", 1.0)]));
@@ -716,7 +728,7 @@ mod tests {
         let b: Vec<f32> = a.iter().map(|x| -0.7 * x + 0.01 * seed).collect();
         Track {
             name: name.into(),
-            channels: [Arc::new(a), Arc::new(b)],
+            channels: [Channel::from(a), Channel::from(b)],
             sample_rate: 44_100,
         }
     }
@@ -732,14 +744,17 @@ mod tests {
         let mut o = [vec![0.0f32; len], vec![0.0f32; len]];
         for (c, oc) in o.iter_mut().enumerate() {
             for (i, v) in oc.iter_mut().enumerate() {
-                *v = stems.iter().map(|t| t.channels[c][i]).sum::<f32>()
+                *v = stems
+                    .iter()
+                    .map(|t| t.channels[c].as_f32().unwrap()[i])
+                    .sum::<f32>()
                     + 0.05 * (i as f32 * 0.31).sin();
             }
         }
         let [a, b] = o;
         let orig = Track {
             name: "original".into(),
-            channels: [Arc::new(a), Arc::new(b)],
+            channels: [Channel::from(a), Channel::from(b)],
             sample_rate: 44_100,
         };
         (stems, orig)
@@ -780,8 +795,43 @@ mod tests {
         for c in 0..2 {
             assert!(out[c]
                 .iter()
-                .zip(orig.channels[c].iter())
+                .zip(orig.channels[c].as_f32().unwrap().iter())
                 .all(|(a, b)| a.to_bits() == b.to_bits()));
+        }
+    }
+
+    #[test]
+    fn quantized_stems_keep_the_original_exact_and_subtract_exactly() {
+        let n = 4000;
+        let (stems, orig) = p1_set(n);
+        let q: Vec<Track> = stems
+            .iter()
+            .map(|t| {
+                let [l, r] = t.channels.clone().map(|c| c.to_vec());
+                Track::quantized(t.name.clone(), [&l, &r], t.sample_rate)
+            })
+            .collect();
+        let guitar = q[1].clone();
+        let mut m = Mixer::new(vec![], &all(1.0));
+        m.set_mode(MixMode::Original);
+        m.load_with_original(q.clone(), Some(orig.clone()), false);
+        assert_eq!(
+            render(&mut m, 0, n),
+            orig.channels.clone().map(|c| c.to_vec())
+        );
+        let mut gains = all(1.0);
+        gains[1].1 = 0.0;
+        let mut m = Mixer::new(vec![], &gains);
+        m.set_mode(MixMode::Original);
+        m.load_with_original(q, Some(orig.clone()), false);
+        let out = render(&mut m, 0, n);
+        for c in 0..2 {
+            for i in 0..n {
+                assert_eq!(
+                    out[c][i],
+                    orig.channels[c].get(i) - guitar.channels[c].get(i)
+                );
+            }
         }
     }
 
@@ -798,7 +848,10 @@ mod tests {
         let out = render(&mut m, 0, n);
         for c in 0..2 {
             for i in 0..n {
-                assert_eq!(out[c][i], orig.channels[c][i] - guitar.channels[c][i]);
+                assert_eq!(
+                    out[c][i],
+                    orig.channels[c].as_f32().unwrap()[i] - guitar.channels[c].as_f32().unwrap()[i]
+                );
             }
         }
     }
@@ -816,7 +869,7 @@ mod tests {
         let out = render(&mut m, 0, n);
         for c in 0..2 {
             for i in 0..n {
-                assert_eq!(out[c][i], stems[2].channels[c][i] * 0.8);
+                assert_eq!(out[c][i], stems[2].channels[c].as_f32().unwrap()[i] * 0.8);
             }
         }
         // Volume boost in original mode: original + (g - 1) * stem.
@@ -829,7 +882,8 @@ mod tests {
         m2.set_gains(boosted);
         let out = render(&mut m2, 0, GAIN_RAMP + 100);
         let i = GAIN_RAMP + 50;
-        let want = orig.channels[0][i] + stems[3].channels[0][i];
+        let want =
+            orig.channels[0].as_f32().unwrap()[i] + stems[3].channels[0].as_f32().unwrap()[i];
         assert!((out[0][i] - want).abs() < 1e-6);
     }
 
@@ -861,7 +915,7 @@ mod tests {
                         .iter()
                         .enumerate()
                         .filter(|(j, _)| *j != 1)
-                        .map(|(_, t)| t.channels[0][k])
+                        .map(|(_, t)| t.channels[0].as_f32().unwrap()[k])
                         .sum()
                 };
                 (s(i) - s(i - 1)).abs()
@@ -873,13 +927,16 @@ mod tests {
         );
         // Before: orig - guitar; after the crossfade: plain sum.
         let k = 500;
-        assert_eq!(out[k], orig.channels[0][k] - stems[1].channels[0][k]);
+        assert_eq!(
+            out[k],
+            orig.channels[0].as_f32().unwrap()[k] - stems[1].channels[0].as_f32().unwrap()[k]
+        );
         let k = 1000 + MODE_XFADE + 500;
         let sum: f32 = stems
             .iter()
             .enumerate()
             .filter(|(j, _)| *j != 1)
-            .map(|(_, t)| t.channels[0][k])
+            .map(|(_, t)| t.channels[0].as_f32().unwrap()[k])
             .sum();
         assert!((out[k] - sum).abs() < 1e-5);
         // Halfway through the crossfade it is the average of the two.
@@ -888,9 +945,9 @@ mod tests {
             .iter()
             .enumerate()
             .filter(|(j, _)| *j != 1)
-            .map(|(_, t)| t.channels[0][k])
+            .map(|(_, t)| t.channels[0].as_f32().unwrap()[k])
             .sum();
-        let o = orig.channels[0][k] - stems[1].channels[0][k];
+        let o = orig.channels[0].as_f32().unwrap()[k] - stems[1].channels[0].as_f32().unwrap()[k];
         assert!((out[k] - 0.5 * (s + o)).abs() < 2e-3, "{} {}", out[k], s);
     }
 
@@ -903,7 +960,10 @@ mod tests {
         m.load_with_original(stems.clone(), None, false);
         assert!(!m.has_original());
         let out = render(&mut m, 0, n);
-        let sum: f32 = stems.iter().map(|t| t.channels[0][10]).sum();
+        let sum: f32 = stems
+            .iter()
+            .map(|t| t.channels[0].as_f32().unwrap()[10])
+            .sum();
         assert!((out[0][10] - sum).abs() < 1e-6);
     }
 }

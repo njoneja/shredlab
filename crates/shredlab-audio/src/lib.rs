@@ -63,8 +63,135 @@ pub const NAME: &str = env!("CARGO_PKG_NAME");
 #[derive(Debug, Clone)]
 pub struct Track {
     pub name: String,
-    pub channels: [Arc<Vec<f32>>; 2],
+    pub channels: [Channel; 2],
     pub sample_rate: u32,
+}
+
+impl Track {
+    /// A track holding `channels` as f32.
+    pub fn new(name: impl Into<String>, channels: [Vec<f32>; 2], sample_rate: u32) -> Self {
+        let [l, r] = channels;
+        Self {
+            name: name.into(),
+            channels: [l.into(), r.into()],
+            sample_rate,
+        }
+    }
+
+    /// A track holding `channels` as 16-bit integers, half the memory of
+    /// f32. Both channels are divided by `scale = max(peak, 1)` (NaN and
+    /// infinity count as 0), so loud stems don't clip, and rounded with the
+    /// same arithmetic as the library's FLAC stem cache: a stem read back
+    /// from a FLAC cache quantizes to exactly the integers in the file, and
+    /// a fresh stem to the integers its FLAC cache would hold. The rounding
+    /// noise sits about 100 dB below the stem's peak.
+    pub fn quantized(name: impl Into<String>, channels: [&[f32]; 2], sample_rate: u32) -> Self {
+        let peak = channels
+            .iter()
+            .flat_map(|c| c.iter())
+            .fold(
+                0.0f32,
+                |m, &v| if v.is_finite() { m.max(v.abs()) } else { m },
+            );
+        // The FLAC writer's widened scale: the peak maps to 32767.
+        let scale = peak.max(1.0) * (32768.0 / 32767.0);
+        let q = |c: &[f32]| -> Vec<i16> {
+            c.iter()
+                .map(|&v| {
+                    let v = if v.is_finite() { v / scale } else { 0.0 };
+                    (v * 32768.0).round().clamp(-32768.0, 32767.0) as i16
+                })
+                .collect()
+        };
+        let step = scale / 32768.0;
+        Self {
+            name: name.into(),
+            channels: channels.map(|c| Channel::I16 {
+                data: Arc::new(q(c)),
+                step,
+            }),
+            sample_rate,
+        }
+    }
+
+    /// Frames (the shorter channel).
+    pub fn len(&self) -> usize {
+        self.channels[0].len().min(self.channels[1].len())
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+/// One channel of a [`Track`]: f32 samples, or 16-bit integers times `step`
+/// (see [`Track::quantized`]). Cloning shares the samples.
+#[derive(Debug, Clone)]
+pub enum Channel {
+    F32(Arc<Vec<f32>>),
+    I16 { data: Arc<Vec<i16>>, step: f32 },
+}
+
+impl Channel {
+    pub fn len(&self) -> usize {
+        match self {
+            Channel::F32(v) => v.len(),
+            Channel::I16 { data, .. } => data.len(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Sample `i` as f32. Panics if out of range.
+    pub fn get(&self, i: usize) -> f32 {
+        match self {
+            Channel::F32(v) => v[i],
+            Channel::I16 { data, step } => data[i] as f32 * step,
+        }
+    }
+
+    /// Writes samples `start..start + out.len()` to `out`. Panics if out of
+    /// range.
+    pub fn read(&self, start: usize, out: &mut [f32]) {
+        let end = start + out.len();
+        match self {
+            Channel::F32(v) => out.copy_from_slice(&v[start..end]),
+            Channel::I16 { data, step } => {
+                for (o, &s) in out.iter_mut().zip(&data[start..end]) {
+                    *o = s as f32 * step;
+                }
+            }
+        }
+    }
+
+    /// The samples as f32, without copying when they are stored that way.
+    pub fn as_f32(&self) -> Option<&[f32]> {
+        match self {
+            Channel::F32(v) => Some(v),
+            Channel::I16 { .. } => None,
+        }
+    }
+
+    /// All samples as a new f32 vector.
+    pub fn to_vec(&self) -> Vec<f32> {
+        let mut v = vec![0.0; self.len()];
+        self.read(0, &mut v);
+        v
+    }
+}
+
+impl From<Vec<f32>> for Channel {
+    fn from(v: Vec<f32>) -> Self {
+        Channel::F32(Arc::new(v))
+    }
+}
+
+impl From<Arc<Vec<f32>>> for Channel {
+    fn from(v: Arc<Vec<f32>>) -> Self {
+        Channel::F32(v)
+    }
 }
 
 /// Click track and count-in settings.
@@ -145,5 +272,64 @@ mod tests {
     fn metadata_is_set() {
         assert_eq!(NAME, "shredlab-audio");
         assert!(!VERSION.is_empty());
+    }
+
+    fn ints(t: &Track) -> [Vec<i16>; 2] {
+        t.channels.clone().map(|c| match c {
+            Channel::I16 { data, .. } => data.to_vec(),
+            Channel::F32(_) => panic!("not quantized"),
+        })
+    }
+
+    #[test]
+    fn quantized_is_within_half_a_step_and_never_clips() {
+        let l: Vec<f32> = (0..5000).map(|i| 1.6 * (i as f32 * 0.013).sin()).collect();
+        let r: Vec<f32> = (0..5000).map(|i| 0.3 * (i as f32 * 0.007).cos()).collect();
+        let t = Track::quantized("x", [&l, &r], 44_100);
+        let Channel::I16 { step, .. } = t.channels[0] else {
+            panic!()
+        };
+        assert!((step - 1.6 / 32767.0).abs() < 1e-9);
+        for (c, src) in [&l, &r].into_iter().enumerate() {
+            for (i, &v) in src.iter().enumerate() {
+                assert!((t.channels[c].get(i) - v).abs() <= step * 0.5 + 1e-6);
+            }
+        }
+        assert_eq!(
+            ints(&t)[0].iter().map(|v| v.unsigned_abs()).max(),
+            Some(32767)
+        );
+        // A quiet track keeps scale 1.
+        let q = Track::quantized("q", [&[0.25], &[f32::NAN]], 44_100);
+        assert_eq!(ints(&q), [vec![8192], vec![0]]);
+    }
+
+    #[test]
+    fn quantizing_dequantized_samples_gives_the_same_integers() {
+        // What reopening a FLAC-cached stem does: decoded samples are
+        // `int * step`, and quantizing them again must be lossless.
+        let l: Vec<f32> = (0..20_000)
+            .map(|i| 1.2 * (i as f32 * 0.031).sin())
+            .collect();
+        let r: Vec<f32> = (0..20_000)
+            .map(|i| 0.9 * (i as f32 * 0.017).sin())
+            .collect();
+        let a = Track::quantized("a", [&l, &r], 44_100);
+        let [dl, dr] = a.channels.clone().map(|c| c.to_vec());
+        let b = Track::quantized("b", [&dl, &dr], 44_100);
+        assert_eq!(ints(&a), ints(&b));
+    }
+
+    #[test]
+    fn channel_reads_match_get() {
+        let t = Track::quantized("x", [&[0.5, -0.25, 1.0], &[0.0, 0.1, -1.0]], 44_100);
+        let mut out = [0.0; 2];
+        t.channels[1].read(1, &mut out);
+        assert_eq!(out, [t.channels[1].get(1), t.channels[1].get(2)]);
+        assert_eq!(t.len(), 3);
+        let f = Track::new("f", [vec![1.0, 2.0], vec![3.0]], 44_100);
+        assert_eq!(f.len(), 1);
+        assert_eq!(f.channels[0].as_f32(), Some(&[1.0, 2.0][..]));
+        assert_eq!(f.channels[1].to_vec(), vec![3.0]);
     }
 }

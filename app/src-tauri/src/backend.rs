@@ -68,8 +68,9 @@ impl Config {
 struct Song {
     meta: SongMeta,
     /// Original mix at [`RATE`] (or the sum of the cached stems when the
-    /// original is unavailable), for the waveform and beat tracking.
-    mix: Arc<[Vec<f32>; 2]>,
+    /// original is unavailable), for the waveform and beat tracking. Shared
+    /// with `original`, not copied.
+    mix: Mix,
     /// True when `mix` is the original (decoded or cached), i.e. the song
     /// can be (re-)separated.
     mix_is_original: bool,
@@ -93,7 +94,7 @@ impl Song {
         match (&self.stems, &self.original) {
             (Some(s), _) => s.clone(),
             (None, Some(o)) => vec![o.clone()],
-            (None, None) => vec![mix_track(&self.mix)],
+            (None, None) => vec![original_track(&self.mix)],
         }
     }
 
@@ -163,10 +164,44 @@ fn separated_with(info: &StemsInfo) -> SeparatedWith {
     }
 }
 
-fn original_track(ch: &[Vec<f32>; 2]) -> Track {
+/// Planar stereo at [`RATE`], shared between the song and its tracks.
+type Mix = [Arc<Vec<f32>>; 2];
+
+fn chans(mix: &Mix) -> [&[f32]; 2] {
+    [&mix[0], &mix[1]]
+}
+
+/// Decoded stems as `(name, [L, R])`.
+type RawStems = Vec<(String, [Vec<f32>; 2])>;
+
+/// Holds stems as 16-bit integers (half the memory of f32, see
+/// [`Track::quantized`]), freeing each f32 stem once converted.
+fn quantize_stems(stems: RawStems) -> Vec<Track> {
+    stems
+        .into_iter()
+        .map(|(name, [l, r])| Track::quantized(name, [&l, &r], RATE))
+        .collect()
+}
+
+/// Sum of the stems: the mix when the original is unavailable.
+fn stem_sum(stems: &RawStems) -> [Vec<f32>; 2] {
+    let len = stems.iter().map(|(_, c)| c[0].len()).max().unwrap_or(0);
+    let mut sum = [vec![0.0f32; len], vec![0.0f32; len]];
+    for (_, ch) in stems {
+        for (s, c) in sum.iter_mut().zip(ch) {
+            for (s, x) in s.iter_mut().zip(c) {
+                *s += x;
+            }
+        }
+    }
+    sum
+}
+
+/// The mix as the original track (shares the samples).
+fn original_track(mix: &Mix) -> Track {
     Track {
         name: ORIGINAL.into(),
-        channels: [Arc::new(ch[0].clone()), Arc::new(ch[1].clone())],
+        channels: mix.clone().map(Into::into),
         sample_rate: RATE,
     }
 }
@@ -227,9 +262,9 @@ pub struct Backend {
 }
 
 /// [`music_start::detect`] on the original mix, logged.
-fn detect_music_start(song_id: &str, mix: &[Vec<f32>; 2], beats: &[f64]) -> Option<f64> {
+fn detect_music_start(song_id: &str, mix: &Mix, beats: &[f64]) -> Option<f64> {
     let t0 = Instant::now();
-    let ms = music_start::detect(mix, RATE, beats);
+    let ms = music_start::detect(chans(mix), RATE, beats);
     log!(
         "music start of {song_id}: {} ({:.0} ms)",
         ms.map_or("none (no quiet intro)".to_string(), |t| format!("{t:.2}s")),
@@ -240,14 +275,6 @@ fn detect_music_start(song_id: &str, mix: &[Vec<f32>; 2], beats: &[f64]) -> Opti
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
-}
-
-fn mix_track(mix: &Arc<[Vec<f32>; 2]>) -> Track {
-    Track {
-        name: ORIGINAL.into(),
-        channels: [Arc::new(mix[0].clone()), Arc::new(mix[1].clone())],
-        sample_rate: RATE,
-    }
 }
 
 fn device_label(ep: Ep) -> &'static str {
@@ -357,7 +384,7 @@ pub fn snap_downbeats(downbeats: &[f64], beats: &[f64]) -> Vec<f64> {
 }
 
 /// Peak envelope: `n` equal slices, max |sample| over both channels.
-pub fn peaks(mix: &[Vec<f32>; 2], n: usize) -> Vec<f32> {
+pub fn peaks(mix: [&[f32]; 2], n: usize) -> Vec<f32> {
     let len = mix[0].len().min(mix[1].len());
     let n = n.max(1);
     (0..n)
@@ -975,9 +1002,9 @@ impl Backend {
             }
             for info in candidates {
                 match self.read_cached_stems(&song_id, &info) {
-                    Ok((tracks, sum)) => {
-                        stems = Some(tracks);
-                        stems_sum = Some(sum);
+                    Ok(data) => {
+                        stems_sum = Some(stem_sum(&data));
+                        stems = Some(quantize_stems(data));
                         stems_info = Some(info);
                         break;
                     }
@@ -1041,8 +1068,8 @@ impl Backend {
             );
         }
         let mix_is_original = original.is_some();
-        let original_tr = original.as_ref().map(original_track);
-        let mix = Arc::new(original.or(stems_sum).unwrap_or_default());
+        let mix: Mix = original.or(stems_sum).unwrap_or_default().map(Arc::new);
+        let original_tr = mix_is_original.then(|| original_track(&mix));
         let duration = mix[0].len() as f64 / RATE as f64;
 
         let mut m = match meta.take() {
@@ -1142,11 +1169,7 @@ impl Backend {
         Ok(info)
     }
 
-    fn read_cached_stems(
-        &self,
-        song_id: &str,
-        info: &StemsInfo,
-    ) -> Result<(Vec<Track>, [Vec<f32>; 2]), String> {
+    fn read_cached_stems(&self, song_id: &str, info: &StemsInfo) -> Result<RawStems, String> {
         if info.sample_rate != RATE {
             return Err(format!("unexpected sample rate {}", info.sample_rate));
         }
@@ -1158,29 +1181,13 @@ impl Backend {
             .library
             .read_stems(song_id, info)
             .map_err(|e| e.to_string())?;
-        let len = data.iter().map(|(_, c)| c[0].len()).max().unwrap_or(0);
-        let mut sum = [vec![0.0f32; len], vec![0.0f32; len]];
-        let mut tracks = Vec::with_capacity(data.len());
-        for (name, [l, r]) in data {
-            for (s, x) in sum[0].iter_mut().zip(&l) {
-                *s += x;
-            }
-            for (s, x) in sum[1].iter_mut().zip(&r) {
-                *s += x;
-            }
-            tracks.push(Track {
-                name,
-                channels: [Arc::new(l), Arc::new(r)],
-                sample_rate: RATE,
-            });
-        }
         log!(
             "read {} cached stems ({}) in {:.2}s",
-            tracks.len(),
+            data.len(),
             info.dir,
             t0.elapsed().as_secs_f64()
         );
-        Ok((tracks, sum))
+        Ok(data)
     }
 
     pub fn close_song(&self) {
@@ -1378,7 +1385,7 @@ impl Backend {
         shifts: u32,
         cached: Option<StemsInfo>,
         song_id: String,
-        mix: Arc<[Vec<f32>; 2]>,
+        mix: Mix,
         generation: u64,
         cancel: Arc<AtomicBool>,
     ) {
@@ -1481,7 +1488,7 @@ impl Backend {
                 device_label: info.device_label.clone(),
             },
         );
-        let (tracks, _) = self.read_cached_stems(song_id, &info)?;
+        let tracks = quantize_stems(self.read_cached_stems(song_id, &info)?);
         // Mark it as the most recent set.
         let _ = self
             .library
@@ -1494,7 +1501,7 @@ impl Backend {
         entry: &ModelEntry,
         shifts: u32,
         song_id: &str,
-        mix: &[Vec<f32>; 2],
+        mix: &Mix,
         cancel: &AtomicBool,
     ) -> Result<(Vec<Track>, StemsInfo), String> {
         let model_name = entry.manifest.name.clone();
@@ -1632,11 +1639,7 @@ impl Backend {
         let tracks = (0..stems.names.len())
             .map(|i| {
                 let ch = stems.stem(i);
-                Track {
-                    name: stems.names[i].clone(),
-                    channels: [Arc::new(ch[0].to_vec()), Arc::new(ch[1].to_vec())],
-                    sample_rate: RATE,
-                }
+                Track::quantized(stems.names[i].clone(), [ch[0], ch[1]], RATE)
             })
             .collect();
         progress(&mut th, SeparationStage::Writing, 1.0, &device, true);
@@ -1653,7 +1656,7 @@ impl Backend {
 
     // ------------------------------------------------------------ beats
 
-    fn spawn_beats(self: &Arc<Self>, song_id: String, mix: Arc<[Vec<f32>; 2]>, generation: u64) {
+    fn spawn_beats(self: &Arc<Self>, song_id: String, mix: Mix, generation: u64) {
         let Some(model_path) = self.cfg.beat_model.clone() else {
             log!("no beat model; click track and count-in use defaults");
             return;
@@ -1694,7 +1697,7 @@ impl Backend {
         });
     }
 
-    fn track_beats(&self, model_path: &Path, mix: &[Vec<f32>; 2]) -> Result<BeatData, String> {
+    fn track_beats(&self, model_path: &Path, mix: &Mix) -> Result<BeatData, String> {
         let mut guard = lock(&self.beat_model);
         if guard.is_none() {
             let t0 = Instant::now();
@@ -1844,7 +1847,7 @@ impl Backend {
         };
         Ok(Waveform {
             duration_sec: mix[0].len() as f64 / RATE as f64,
-            peaks: peaks(&mix, n_points.clamp(1, 100_000) as usize),
+            peaks: peaks(chans(&mix), n_points.clamp(1, 100_000) as usize),
         })
     }
 
@@ -2250,27 +2253,27 @@ impl Backend {
         progress(&mut th, 0.0, true);
         let result: Result<Vec<Track>, String> = (|| {
             // The base set from disk (the derived set replaces it in memory).
-            let (base, _) = self.read_cached_stems(&song_id, &info)?;
+            let base = self.read_cached_stems(&song_id, &info)?;
             if cancel.load(Ordering::Relaxed) {
                 return Err("canceled".into());
             }
             progress(&mut th, 0.3, true);
             if want.level == 0 {
-                return Ok(base);
+                return Ok(quantize_stems(base));
             }
             let o = original.ok_or(
                 "Separation strength needs the original mix, which isn't available for this song.",
             )?;
-            let views: Vec<[&[f32]; 2]> = base
-                .iter()
-                .map(|t| [&t.channels[0][..], &t.channels[1][..]])
-                .collect();
-            let len = o.channels[0].len();
+            let (Some(ol), Some(or)) = (o.channels[0].as_f32(), o.channels[1].as_f32()) else {
+                return Err("the original is not held as f32".into());
+            };
+            let views: Vec<[&[f32]; 2]> = base.iter().map(|(_, [l, r])| [&l[..], &r[..]]).collect();
+            let len = ol.len();
             if views.iter().any(|v| v[0].len() != len || v[1].len() != len) {
                 return Err("stems and original differ in length".into());
             }
             let out = apply_strength(
-                [&o.channels[0][..], &o.channels[1][..]],
+                [ol, or],
                 &views,
                 STRENGTH_P[want.level as usize],
                 &StrengthOptions {
@@ -2281,15 +2284,10 @@ impl Backend {
                 &cancel,
             )
             .map_err(|_| "canceled".to_string())?;
-            Ok(base
-                .iter()
-                .zip(out)
-                .map(|(t, [l, r])| Track {
-                    name: t.name.clone(),
-                    channels: [Arc::new(l), Arc::new(r)],
-                    sample_rate: t.sample_rate,
-                })
-                .collect())
+            drop(views);
+            Ok(quantize_stems(
+                base.into_iter().map(|(name, _)| name).zip(out).collect(),
+            ))
         })();
         let mut st = lock(&self.st);
         let current = st.strength_job.as_ref().is_some_and(|j| j.id == job)
@@ -2369,7 +2367,7 @@ impl Backend {
         let p1 = [0, 1].map(|c| {
             let mut v: Vec<f32> = o.channels[c].to_vec();
             for t in stems.iter().filter(|t| !on.contains(&t.name.as_str())) {
-                for (s, y) in v.iter_mut().zip(t.channels[c].iter()) {
+                for (s, y) in v.iter_mut().zip(t.channels[c].to_vec()) {
                     *s -= y;
                 }
             }
@@ -2378,7 +2376,7 @@ impl Backend {
         let sum = [0, 1].map(|c| {
             let mut v = vec![0.0f32; o.channels[c].len()];
             for t in stems.iter().filter(|t| on.contains(&t.name.as_str())) {
-                for (s, y) in v.iter_mut().zip(t.channels[c].iter()) {
+                for (s, y) in v.iter_mut().zip(t.channels[c].to_vec()) {
                     *s += y;
                 }
             }
@@ -2407,15 +2405,16 @@ impl Backend {
         let o = song.original.as_ref()?;
         let mut out = [o.channels[0].to_vec(), o.channels[1].to_vec()];
         for t in song.stems.as_ref()? {
+            let s = t.channels.clone().map(|c| c.to_vec());
             let row = rows.iter().find(|(n, _)| *n == t.name);
             let r = row.map(|&(_, on)| {
                 let mut p = st.refine.get(&t.name).copied().unwrap_or_default();
                 p.pan.invert = on;
-                refine_offline(&p, RATE, &t.channels[0], &t.channels[1])
+                refine_offline(&p, RATE, &s[0], &s[1])
             });
             for c in 0..2 {
                 for (i, v) in out[c].iter_mut().enumerate() {
-                    let sv = t.channels[c].get(i).copied().unwrap_or(0.0);
+                    let sv = s[c].get(i).copied().unwrap_or(0.0);
                     let rv = r
                         .as_ref()
                         .map_or(0.0, |r| r[c].get(i).copied().unwrap_or(0.0));
@@ -2532,13 +2531,13 @@ mod tests {
             .map(|i| if i == 10 { -0.9 } else { 0.1 })
             .collect();
         let r = vec![0.2f32; 1000];
-        let p = peaks(&[l, r], 10);
+        let p = peaks([&l, &r], 10);
         assert_eq!(p.len(), 10);
         assert!((p[0] - 0.9).abs() < 1e-6);
         assert!((p[5] - 0.2).abs() < 1e-6);
         // More points than samples still works.
-        assert_eq!(peaks(&[vec![0.5; 3], vec![0.5; 3]], 7).len(), 7);
-        assert_eq!(peaks(&[vec![], vec![]], 4), vec![0.0; 4]);
+        assert_eq!(peaks([&[0.5; 3], &[0.5; 3]], 7).len(), 7);
+        assert_eq!(peaks([&[], &[]], 4), vec![0.0; 4]);
     }
 
     #[test]
@@ -2833,6 +2832,53 @@ mod tests {
             .is_err());
     }
 
+    #[test]
+    fn flac_cached_stems_reload_to_the_same_integers() {
+        // Holding stems as 16-bit integers loses nothing on a FLAC cache:
+        // the reloaded stem quantizes to the integers of the fresh stem.
+        let (b, _) = test_backend("flac-int16");
+        std::fs::create_dir_all(b.data_dir()).unwrap();
+        let n = 30_000;
+        let loud: Vec<f32> = (0..n).map(|i| 1.37 * (i as f32 * 0.021).sin()).collect();
+        let quiet: Vec<f32> = (0..n).map(|i| 0.01 * (i as f32 * 0.37).cos()).collect();
+        let stems = [
+            ("drums", [&loud[..], &quiet[..]]),
+            ("piano", [&quiet[..], &quiet[..]]),
+        ];
+        let dir = shredlab_library::stem_set_dir("test", 1);
+        let format = shredlab_library::CacheFormat::Flac;
+        let files = b
+            .library
+            .write_stems("q1", &dir, RATE, &stems, format)
+            .unwrap();
+        let info = StemsInfo {
+            model_id: "test".into(),
+            model_name: "Test".into(),
+            device_label: "CPU".into(),
+            sample_rate: RATE,
+            len: n,
+            stems: files,
+            shifts: 1,
+            dir,
+            format,
+        };
+        let reloaded = quantize_stems(b.read_cached_stems("q1", &info).unwrap());
+        let ints = |t: &Track| {
+            t.channels.clone().map(|c| match c {
+                audio::Channel::I16 { data, step } => (data.to_vec(), step),
+                audio::Channel::F32(_) => panic!("not quantized"),
+            })
+        };
+        for ((name, ch), r) in stems.iter().zip(&reloaded) {
+            let fresh = Track::quantized(*name, *ch, RATE);
+            let (f, r) = (ints(&fresh), ints(r));
+            for c in 0..2 {
+                assert_eq!(f[c].0, r[c].0, "{name} channel {c}");
+                assert!((f[c].1 - r[c].1).abs() <= f[c].1 * 1e-6);
+            }
+        }
+    }
+
     /// A song with three cached stems (guitar hard-left 440 Hz + hard-right
     /// 660 Hz, centered bass and drums) and a cached original with a leftover.
     fn song_with_stems(b: &Arc<Backend>) -> (String, PathBuf) {
@@ -2934,7 +2980,12 @@ mod tests {
             (s.stems.clone().unwrap(), s.original.clone().unwrap())
         };
         let g = stems.iter().find(|t| t.name == "guitar").unwrap();
-        let sel = pan_offline(&left.pan, RATE, &g.channels[0], &g.channels[1]);
+        let sel = pan_offline(
+            &left.pan,
+            RATE,
+            &g.channels[0].to_vec(),
+            &g.channels[1].to_vec(),
+        );
         let row = |stem: &str, on: bool| ExportStem {
             stem: stem.into(),
             volume: 1.0,
@@ -2955,7 +3006,7 @@ mod tests {
         for c in 0..2 {
             let err = (0..got.channels[c].len())
                 .map(|i| {
-                    let want = orig.channels[c][i] - g.channels[c][i] + sel[c][i];
+                    let want = orig.channels[c].get(i) - g.channels[c].get(i) + sel[c][i];
                     (got.channels[c][i] - want).abs()
                 })
                 .fold(0.0f32, f32::max);
@@ -2971,10 +3022,10 @@ mod tests {
         };
         // The left guitar is still there (left channel ~ the original, the
         // mask leaks a little: within -36 dB), the right guitar is gone.
-        let e = ms_err(&got.channels[0], &|i| orig.channels[0][i]);
+        let e = ms_err(&got.channels[0], &|i| orig.channels[0].get(i));
         assert!(e < 1e-5, "{e}");
         let e = ms_err(&got.channels[1], &|i| {
-            orig.channels[1][i] - g.channels[1][i]
+            orig.channels[1].get(i) - g.channels[1].get(i)
         });
         assert!(e < 1e-5, "{e}");
         // All on (guitar ON except left): the original minus the left guitar.
@@ -2983,10 +3034,10 @@ mod tests {
             vec![row("guitar", true), row("bass", true), row("drums", true)],
         );
         let e = ms_err(&got.channels[0], &|i| {
-            orig.channels[0][i] - g.channels[0][i]
+            orig.channels[0].get(i) - g.channels[0].get(i)
         });
         assert!(e < 1e-5, "{e}");
-        let e = ms_err(&got.channels[1], &|i| orig.channels[1][i]);
+        let e = ms_err(&got.channels[1], &|i| orig.channels[1].get(i));
         assert!(e < 1e-5, "{e}");
 
         // Strength: derived stems sum to the original, saved, re-applied on open.
@@ -3013,8 +3064,8 @@ mod tests {
             let o = s.original.as_ref().unwrap();
             (0..o.channels[0].len())
                 .map(|i| {
-                    let sum: f32 = stems.iter().map(|t| t.channels[0][i]).sum();
-                    (sum - o.channels[0][i]).abs()
+                    let sum: f32 = stems.iter().map(|t| t.channels[0].get(i)).sum();
+                    (sum - o.channels[0].get(i)).abs()
                 })
                 .fold(0.0f32, f32::max)
         };
@@ -3056,8 +3107,8 @@ mod tests {
         let st = lock(&b.st);
         let s = st.song.as_ref().unwrap();
         assert_eq!(
-            s.stems.as_ref().unwrap()[0].channels[0][..],
-            stems[0].channels[0][..]
+            s.stems.as_ref().unwrap()[0].channels[0].to_vec(),
+            stems[0].channels[0].to_vec()
         );
         assert_eq!(s.meta.song_id, id);
     }

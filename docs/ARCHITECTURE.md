@@ -88,7 +88,10 @@ overrides are saved with the song.
 
 ## Playback and export
 
-`shredlab-audio` plays the stems plus the original mix. A producer thread
+`shredlab-audio` plays the stems plus the original mix. Stems are held in
+memory as 16-bit integers with a per-stem scale (half the memory of f32,
+with rounding noise about 100 dB below each stem's peak); the original stays
+f32. A producer thread
 runs refine → mix → time stretch → crossfades → limiter → click → volume →
 resample and keeps a lock-free ring buffer filled; the device callback only
 pops frames. The UI's controls reach the producer over a channel.

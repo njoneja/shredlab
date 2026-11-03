@@ -59,8 +59,9 @@ then `src/backend.rs`.
 ## How it works
 
 **State.** One `Mutex<State>` holds the open song (`Song`: the original mix
-at 44.1 kHz, the original as a track, the loaded stems and which cached set
-they are, beats, music start, the strength they were derived with), the
+at 44.1 kHz as f32, the original as a track sharing those samples, the
+loaded stems as 16-bit integers (`Track::quantized`, half the memory of f32)
+and which cached set they are, beats, music start, the strength they were derived with), the
 transport settings the UI last sent (mix, speed, pitch, loop, click,
 effective downbeats), the running jobs, Refine settings and the stem under
 stereo-field analysis. Transport settings survive a song switch; `open_song`

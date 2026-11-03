@@ -52,7 +52,7 @@ fn rms_db(l: &[f32], r: &[f32]) -> f64 {
 /// Where the music starts (song seconds), or `None` if there is no quiet
 /// intro to skip. `mix` is the original mix (stereo, planar) at `sr`;
 /// `beats` ascending seconds.
-pub fn detect(mix: &[Vec<f32>; 2], sr: u32, beats: &[f64]) -> Option<f64> {
+pub fn detect(mix: [&[f32]; 2], sr: u32, beats: &[f64]) -> Option<f64> {
     let c = candidate(mix, sr, beats, THRESHOLD_DB)?;
     (c.jump_db >= JUMP_DB && c.start >= MIN_SKIP).then_some(c.start)
 }
@@ -70,12 +70,7 @@ pub struct Candidate {
 
 /// The first loud region after a quiet one, refined to its onset (see the
 /// module docs). `None` if the song is loud from its first region.
-pub fn candidate(
-    mix: &[Vec<f32>; 2],
-    sr: u32,
-    beats: &[f64],
-    threshold_db: f64,
-) -> Option<Candidate> {
+pub fn candidate(mix: [&[f32]; 2], sr: u32, beats: &[f64], threshold_db: f64) -> Option<Candidate> {
     let len = mix[0].len().min(mix[1].len());
     if beats.len() < 3 || len == 0 || sr == 0 {
         return None;
@@ -162,11 +157,11 @@ mod tests {
         // Talk at -55 dB for 8.4 s with beats on it, then the riff.
         let mix = song(60.0, 8.4, -55.0);
         let beats = grid(0.5, 0.75, 60.0);
-        let ms = detect(&mix, SR, &beats).unwrap();
+        let ms = detect([&mix[0], &mix[1]], SR, &beats).unwrap();
         assert!((ms - (8.4 - PRE_ROLL)).abs() < 0.011, "{ms}");
         // No beats on the talk: same answer from the region before the first beat.
         let beats = grid(8.5, 0.75, 60.0);
-        let ms = detect(&mix, SR, &beats).unwrap();
+        let ms = detect([&mix[0], &mix[1]], SR, &beats).unwrap();
         assert!((ms - (8.4 - PRE_ROLL)).abs() < 0.011, "{ms}");
     }
 
@@ -174,13 +169,13 @@ mod tests {
     fn keeps_a_quiet_intro_that_is_part_of_the_song() {
         // A soft intro 12 dB below the rest is music, not talk.
         let mix = song(60.0, 10.0, -24.0);
-        assert_eq!(detect(&mix, SR, &grid(0.5, 0.75, 60.0)), None);
+        assert_eq!(detect([&mix[0], &mix[1]], SR, &grid(0.5, 0.75, 60.0)), None);
         // Loud from the start.
         let mix = song(60.0, 0.0, -12.0);
-        assert_eq!(detect(&mix, SR, &grid(0.0, 0.75, 60.0)), None);
+        assert_eq!(detect([&mix[0], &mix[1]], SR, &grid(0.0, 0.75, 60.0)), None);
         // Under a second of silence before the first note: not worth a jump.
         let mix = song(60.0, 0.6, -90.0);
-        assert_eq!(detect(&mix, SR, &grid(0.6, 0.75, 60.0)), None);
+        assert_eq!(detect([&mix[0], &mix[1]], SR, &grid(0.6, 0.75, 60.0)), None);
     }
 
     #[test]
@@ -199,9 +194,9 @@ mod tests {
             .collect();
         let mix = [v.clone(), v];
         let beats = grid(0.5, 0.75, 60.0);
-        let c = candidate(&mix, SR, &beats, THRESHOLD_DB).unwrap();
+        let c = candidate([&mix[0], &mix[1]], SR, &beats, THRESHOLD_DB).unwrap();
         assert!(c.start > 1.0 && c.jump_db < JUMP_DB, "{c:?}");
-        assert_eq!(detect(&mix, SR, &beats), None);
+        assert_eq!(detect([&mix[0], &mix[1]], SR, &beats), None);
     }
 
     #[test]
@@ -214,7 +209,7 @@ mod tests {
                 *x *= 10f32.powf(40.0 / 20.0);
             }
         }
-        let ms = detect(&mix, SR, &grid(0.0, 0.75, 60.0)).unwrap();
+        let ms = detect([&mix[0], &mix[1]], SR, &grid(0.0, 0.75, 60.0)).unwrap();
         assert!(ms > 7.5, "{ms}");
     }
 
@@ -247,13 +242,13 @@ mod tests {
             })
             .unwrap();
             let mix = [l, r];
-            let c = candidate(&mix, SR, &grid.beats, THRESHOLD_DB);
+            let c = candidate([&mix[0], &mix[1]], SR, &grid.beats, THRESHOLD_DB);
             println!(
                 "{path}: first beat {:.2}s, music start {:?}, candidate {c:?}, 12 dB {:?}, 24 dB {:?}",
                 grid.beats.first().copied().unwrap_or(f64::NAN),
-                detect(&mix, SR, &grid.beats),
-                candidate(&mix, SR, &grid.beats, 12.0).map(|c| (c.start, c.jump_db)),
-                candidate(&mix, SR, &grid.beats, 24.0).map(|c| (c.start, c.jump_db)),
+                detect([&mix[0], &mix[1]], SR, &grid.beats),
+                candidate([&mix[0], &mix[1]], SR, &grid.beats, 12.0).map(|c| (c.start, c.jump_db)),
+                candidate([&mix[0], &mix[1]], SR, &grid.beats, 24.0).map(|c| (c.start, c.jump_db)),
             );
         }
     }
@@ -261,7 +256,7 @@ mod tests {
     #[test]
     fn no_grid_no_music_start() {
         let mix = song(10.0, 5.0, -55.0);
-        assert_eq!(detect(&mix, SR, &[]), None);
-        assert_eq!(detect(&mix, SR, &[1.0, 2.0]), None);
+        assert_eq!(detect([&mix[0], &mix[1]], SR, &[]), None);
+        assert_eq!(detect([&mix[0], &mix[1]], SR, &[1.0, 2.0]), None);
     }
 }

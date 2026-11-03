@@ -20,7 +20,6 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use shredlab_audio::{ClickConfig, Engine, ExportFormat, RenderRequest, Track};
@@ -103,11 +102,7 @@ fn load_dir(dir: &Path) -> Result<Vec<Track>, String> {
         let mut ch = audio.channels.into_iter();
         let l = ch.next().unwrap_or_default();
         let r = ch.next().unwrap_or_else(|| l.clone());
-        tracks.push(Track {
-            name,
-            channels: [Arc::new(l), Arc::new(r)],
-            sample_rate: audio.sample_rate,
-        });
+        tracks.push(Track::new(name, [l, r], audio.sample_rate));
     }
     if tracks.is_empty() {
         return Err(format!("no .wav files in {}", dir.display()));
@@ -117,7 +112,9 @@ fn load_dir(dir: &Path) -> Result<Vec<Track>, String> {
     for t in &mut tracks {
         for c in &mut t.channels {
             if c.len() != len {
-                *c = Arc::new(c[..len].to_vec());
+                let mut v = vec![0.0; len];
+                c.read(0, &mut v);
+                *c = v.into();
             }
         }
     }
