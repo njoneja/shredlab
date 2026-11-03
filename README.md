@@ -92,40 +92,44 @@ already there; `--force` rebuilds (old files are kept as `*.bak-*`),
 
 ### 4. Build and run
 
+From the repository root:
+
 ```sh
-pnpm --dir app tauri dev                   # run the app (debug, hot reload)
-pnpm --dir app tauri build --no-bundle     # release exe: target/release/shredlab(.exe)
-pnpm --dir app bundle                      # installers: target/release/bundle/ (NSIS + MSI / .app + .dmg)
+pnpm dev                # run the app (debug, hot reload)
+pnpm build-release      # release exe: target/release/shredlab(.exe)
+pnpm build-installers   # installers: target/release/bundle/ (NSIS + MSI / .app + .dmg)
 ```
 
+`pnpm build-installers` builds the frontend and the release exe from scratch
+before packaging. Don't use `pnpm --dir app tauri bundle` for installers: it
+only repackages whatever exe was last built (possibly stale) and, on Windows,
+leaves out `DirectML.dll`.
+
 On Windows the release exe needs `DirectML.dll` next to it (the build puts
-it in `target/release`; `pnpm bundle` ships it in the installers).
+it in `target/release`; `pnpm build-installers` ships it in the installers).
 
 ### 5. Tests and checks
 
 ```sh
-pnpm --dir app build                       # once, see note below
-pnpm --dir app check                       # type-check the frontend
-cargo test --workspace                     # Rust unit tests
-cargo fmt --all --check
-cargo clippy --workspace --all-targets -- -D warnings
+pnpm check              # frontend type-check, cargo fmt --check, clippy
+pnpm test               # Rust tests
 ```
 
-Note: the Tauri crate embeds the built frontend, so `cargo build`/`clippy`/
-`test` on the whole workspace need `app/dist` to exist. Run
-`pnpm --dir app build` once first (any `tauri dev`/`tauri build` also
-creates it). They also need the models from step 3.
+Both build the frontend first: the Tauri crate embeds it, so `cargo build`/
+`clippy`/`test` on the whole workspace need `app/dist` to exist. Running
+cargo directly works too once `pnpm --dir app build` has run. They also need
+the models from step 3.
 
 Headless end-to-end check (separates a song, detects beats and plays a few
 seconds of audio): `SHREDLAB_AUTOTEST=<song> SHREDLAB_AUTOTEST_EXIT=1 pnpm --dir app
-tauri dev` prints `AUTOTEST PASS`. Other environment overrides are listed in
+tauri dev` (or `pnpm dev` with the same variables) prints `AUTOTEST PASS`. Other environment overrides are listed in
 [docs/DEVELOPING.md](docs/DEVELOPING.md).
 
 ### macOS notes
 
 - There is no `DirectML.dll`; GPU inference goes through CoreML (with a
   self-test and CPU fallback). The Windows-only DLL is added to the bundle by
-  `app/src-tauri/tauri.bundle.windows.conf.json`, which `pnpm bundle` uses
+  `app/src-tauri/tauri.bundle.windows.conf.json`, which `pnpm build-installers` uses
   only on Windows.
 - Model setup needs macOS 14+ on Apple Silicon (onnxruntime 1.24 wheels).
 - The app is unsigned and not notarized; Gatekeeper will complain.

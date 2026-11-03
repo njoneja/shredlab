@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 Navneet Joneja
 
-// `pnpm bundle`: release build + installers.
+// `pnpm build-installers` (repo root) or `pnpm --dir app bundle`: release build + installers.
 //
 // The frontend and the release binary are built before `tauri build` so that
 // on Windows target/release/DirectML.dll (copied there by the `ort` crate's
@@ -16,7 +16,7 @@
 // onto itself through that symlink (os error 32).
 // THIRD_PARTY_LICENSES.html is regenerated first so the notices always match
 // Cargo.lock and node_modules (it ships in the UI and as a bundle resource).
-// Extra arguments are passed to `tauri build`, e.g. `pnpm bundle --bundles nsis`.
+// Extra arguments are passed to `tauri build`, e.g. `pnpm build-installers --bundles nsis`.
 import { spawnSync } from "node:child_process";
 import { copyFileSync, mkdirSync } from "node:fs";
 
