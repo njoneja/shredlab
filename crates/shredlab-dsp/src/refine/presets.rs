@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 Navneet Joneja
 
-//! EQ presets of the Refine panel (SPEC §5.4 P5). Data only; a preset sets
-//! the EQ and leaves the stereo selection alone (see [`apply_preset`]).
+//! EQ presets of the Refine panel. Data only; a preset sets the EQ and
+//! leaves the stereo selection alone (see [`apply_preset`]).
 //!
 //! Reasoning, briefly (frequencies are where the energy of each thing sits
 //! in a typical rock/pop mix):

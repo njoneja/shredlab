@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 Navneet Joneja
 
-//! Beat This! (CPJKU, MIT) beat/downbeat tracking glue for Stem Extractor.
+//! Beat This! (CPJKU, MIT) beat/downbeat tracking glue for ShredLab.
 //!
 //! The ONNX graph (`models/onnx/beat_this_final0.onnx`) contains only the
 //! network: a log-mel chunk `(1, 1500, 128)` in, beat and downbeat logits
@@ -29,15 +29,6 @@
 //! beat counts, 100% of beats within ±20 ms, one borderline downbeat
 //! missing out of 591). Differences come from rubato vs soxr and symphonia
 //! vs libsndfile MP3 decoding (spectrogram SNR ~56 dB).
-//!
-//! ## Workspace note (temporary)
-//!
-//! `Cargo.toml` carries an empty `[workspace]` table so the crate builds
-//! standalone (`cargo test --manifest-path crates/shredlab-beats/Cargo.toml`),
-//! which creates `crates/shredlab-beats/{Cargo.lock,target/}` (gitignored). To
-//! wire it in: remove that table and add `crates/shredlab-beats` to the root
-//! workspace `members` (and `shredlab-beats = { path = ... }` to
-//! `[workspace.dependencies]`).
 
 use std::sync::OnceLock;
 

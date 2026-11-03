@@ -13,7 +13,8 @@ use serde::{Deserialize, Serialize};
 
 pub const FILE: &str = "settings.json";
 
-/// UI themes (from the brand guide); the first is the default.
+/// UI themes: Stage, Rosewood, Valve (dark) and Manuscript (light); the
+/// first is the default.
 pub const THEMES: [&str; 4] = ["stage", "rosewood", "valve", "manuscript"];
 
 /// Click and count-in volume when none is saved (linear).

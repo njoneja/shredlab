@@ -39,7 +39,7 @@ pub struct SongInfo {
     pub bpm: Option<f64>,
     pub settings: Option<serde_json::Value>,
     /// The original mix is loaded next to the stems, so the backing track
-    /// can be built from it (P1). False before separation or when an old
+    /// can be built from it. False before separation or when an old
     /// cache entry has no original and the source file is gone.
     pub original_available: bool,
     /// Refine panel settings of the refined stems (others are unrefined).
@@ -274,8 +274,8 @@ pub struct ExportRequest {
     pub path: String,
     pub format: ExportFormat,
     pub stems: Vec<ExportStem>,
-    /// The stems are the soloed ones: always the plain sum, never the P1
-    /// backing track. Missing = false.
+    /// The stems are the soloed ones: always the plain sum, never the
+    /// original-based backing track. Missing = false.
     #[serde(default)]
     pub solo: bool,
     pub speed_percent: f64,

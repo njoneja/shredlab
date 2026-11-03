@@ -1,14 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 Navneet Joneja
 
-//! Refine panel DSP (SPEC §5.4 P5): per-stem pan/width mask, then EQ.
+//! Refine panel DSP: per-stem pan/width mask, then EQ. The panel (one per
+//! mixer row) refines a stem in place: the refined part replaces the stem.
 //!
 //! [`RefineChain`] is what the audio engine runs per stem. It has a constant
 //! latency of [`PAN_LATENCY`] samples whether or not anything is enabled:
 //! with an identity [`RefineParams`] its output is the input delayed by that
 //! amount, bit-exact (no STFT round-trip, EQ skipped). The engine therefore
-//! feeds each refined stem `latency()` samples ahead of the play position
-//! (see `the unpublished Refine notes`), or delays every other path equally.
+//! feeds each refined stem `latency()` samples ahead of the play position,
+//! so nothing else has to be delayed and play/seek response is unchanged
+//! (the alternative, delaying every other path equally, adds the latency to
+//! every start and seek).
 
 pub mod eq;
 pub mod pan;

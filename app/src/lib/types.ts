@@ -7,7 +7,7 @@
 export const STEMS = ["vocals", "guitar", "bass", "drums", "piano", "other"] as const;
 export type StemName = (typeof STEMS)[number];
 
-/** UI themes (from the brand guide); the first is the default. */
+/** UI themes: Stage, Rosewood, Valve (dark) and Manuscript (light); the first is the default. */
 export const THEMES = ["stage", "rosewood", "valve", "manuscript"] as const;
 export type Theme = (typeof THEMES)[number];
 
@@ -36,7 +36,7 @@ export interface SongInfo {
   beats_ready: boolean;
   bpm: number | null;
   settings: SongSettings | null;
-  /** Stems and the sample-aligned original are loaded (backing track from the original, P1). */
+  /** Stems and the sample-aligned original are loaded (backing track from the original). */
   original_available: boolean;
   /** Refine settings of the refined stems (others are unrefined). */
   refine: Partial<Record<StemName, RefineParams>>;
@@ -46,7 +46,7 @@ export interface SongInfo {
   strength_job: number;
 }
 
-// ---- Refine panel (P5) ----
+// ---- Refine panel ----
 
 /**
  * Stereo exception: a raised-cosine window over pan −1 (left) … +1 (right).

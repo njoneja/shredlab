@@ -1,6 +1,6 @@
 [package]
 name = "shredlab-audio"
-description = "Real-time audio engine and offline renderer for Stem Extractor"
+description = "Real-time audio engine and offline renderer for ShredLab"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

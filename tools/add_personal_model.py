@@ -19,8 +19,8 @@ write model.json + selftest.json -> install into <dest>/<id>/.
 
 Default dest is models/personal/ in the repo. The app's real user models
 folder (%APPDATA%\\<app>\\models on Windows) is resolved by the app; note
-that processes launched from a packaged (MSIX) desktop app see a virtualized
-AppData, so pass an explicit --dest when testing against the app.
+that processes started from a packaged (MSIX) app can see a virtualized
+%APPDATA%, so pass an explicit --dest when testing against the app.
 
 Supported families: BS-RoFormer (adapter `roformer-mask`). Personal models
 are for the user's own use; licensing is the user's responsibility.

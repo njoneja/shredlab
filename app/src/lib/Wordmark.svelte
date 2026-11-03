@@ -2,9 +2,10 @@
 <!-- SPDX-FileCopyrightText: 2026 Navneet Joneja -->
 
 <script lang="ts">
-  // The ShredLab wordmark (from the brand guide): built from text so it
-  // takes the theme accent. Written "Shredlab" (lower-case l); the clefs
-  // stand in for the S and the D. Screen readers read "ShredLab".
+  // The ShredLab wordmark, built from text so it takes the theme accent.
+  // Written "Shredlab" (lower-case l: a capital L breaks the script flow);
+  // the clefs stand in for the S and the D, and the bass-clef D marks the
+  // Shred|lab split. Screen readers read "ShredLab".
   let { size = 20 }: { size?: number } = $props();
 </script>
 

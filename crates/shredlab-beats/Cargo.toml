@@ -1,6 +1,6 @@
 [package]
 name = "shredlab-beats"
-description = "Beat This! beat/downbeat tracking glue (preprocessing, chunking, postprocessing) for Stem Extractor"
+description = "Beat This! beat/downbeat tracking glue (preprocessing, chunking, postprocessing) for ShredLab"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

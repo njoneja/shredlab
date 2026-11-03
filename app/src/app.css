@@ -21,9 +21,11 @@
 }
 
 /*
- * Theme tokens (from the brand guide). <html data-theme="..."> picks the
- * theme; public/theme-init.js sets it before first paint. Stage is the
- * default, so it also applies without the attribute.
+ * Theme tokens. Four themes: Stage (default), Rosewood and Valve are dark,
+ * Manuscript is light; text stays at 4.5:1 contrast or better against its
+ * background. <html data-theme="..."> picks the theme;
+ * public/theme-init.js sets it before first paint. Stage is the default, so
+ * it also applies without the attribute.
  */
 :root,
 :root[data-theme="stage"] {
@@ -49,7 +51,7 @@
   --playhead: #FFFFFF;
   --tape: #E9DFC8;
   --tape-ink: #2A1A14;
-  /* Not in the brand guide: waveform bar lines, the inactive loop shade, popup shadow, dialog backdrop. */
+  /* Derived to sit in the palette (not part of the designed set): waveform bar lines, the inactive loop shade, popup shadow, dialog backdrop. */
   --grid-line: rgba(255, 255, 255, 0.1);
   --grid-line-faint: rgba(255, 255, 255, 0.04);
   --loop-idle: rgba(255, 255, 255, 0.05);
@@ -90,7 +92,7 @@
   --playhead: #FFF4EC;
   --tape: #E9DFC8;
   --tape-ink: #2A1A14;
-  /* Not in the brand guide: waveform bar lines, the inactive loop shade, popup shadow, dialog backdrop. */
+  /* Derived to sit in the palette (not part of the designed set): waveform bar lines, the inactive loop shade, popup shadow, dialog backdrop. */
   --grid-line: rgba(255, 255, 255, 0.1);
   --grid-line-faint: rgba(255, 255, 255, 0.04);
   --loop-idle: rgba(255, 255, 255, 0.05);
@@ -131,7 +133,7 @@
   --playhead: #FFFFFF;
   --tape: #E9DFC8;
   --tape-ink: #2A1A14;
-  /* Not in the brand guide: waveform bar lines, the inactive loop shade, popup shadow, dialog backdrop. */
+  /* Derived to sit in the palette (not part of the designed set): waveform bar lines, the inactive loop shade, popup shadow, dialog backdrop. */
   --grid-line: rgba(255, 255, 255, 0.1);
   --grid-line-faint: rgba(255, 255, 255, 0.04);
   --loop-idle: rgba(255, 255, 255, 0.05);
@@ -166,13 +168,13 @@
   --solo: var(--accent);
   --danger: #B42318;
   --lit: var(--ok);
-  --ok: #25784B; /* darker than the brand guide's #2E8B57 so "ok" text reaches 4.5:1 */
+  --ok: #25784B; /* darker than the brand green #2E8B57 so "ok" text reaches 4.5:1 */
   --wave: #C9BFAD;
   --wave-played: #4A5060;
   --playhead: #1D2230;
   --tape: #E3D3AE;
   --tape-ink: #1D2230;
-  /* Not in the brand guide: waveform bar lines, the inactive loop shade, popup shadow, dialog backdrop. */
+  /* Derived to sit in the palette (not part of the designed set): waveform bar lines, the inactive loop shade, popup shadow, dialog backdrop. */
   --grid-line: rgba(0, 0, 0, 0.12);
   --grid-line-faint: rgba(0, 0, 0, 0.05);
   --loop-idle: rgba(0, 0, 0, 0.05);
@@ -237,7 +239,8 @@ button:disabled {
   outline-offset: 2px;
 }
 
-/* Native-size buttons (brand guide): 28px high, 13px, weight 500. */
+/* Native-like button sizing, not chunky: 28px high, 13px, weight 500;
+   the primary one is accent-filled, the others neutral. */
 .btn {
   display: inline-flex;
   align-items: center;
@@ -326,7 +329,7 @@ kbd {
   border: 0;
 }
 
-/* Wordmark (brand guide): Rock Salt letters, Noto Music clefs in the accent. */
+/* Wordmark: Rock Salt letters, Noto Music clefs in the accent. */
 .wordmark {
   font-family: var(--font-wordmark);
   line-height: 1;

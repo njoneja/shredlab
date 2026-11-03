@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 Navneet Joneja
 
-//! Per-stem EQ for the Refine panel (SPEC §5.4 P5): low cut, high cut and
-//! three peaking bands, RBJ cookbook biquads (Robert Bristow-Johnson,
+//! Per-stem EQ for the Refine panel (one per mixer row): low cut, high cut
+//! and three peaking bands, RBJ cookbook biquads (Robert Bristow-Johnson,
 //! "Cookbook formulae for audio EQ biquad filter coefficients").
 //!
 //! - Low cut / high cut: 4th-order Butterworth (24 dB/octave), two cascaded

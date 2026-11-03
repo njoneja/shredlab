@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 Navneet Joneja
 
-//! Real-time audio engine and offline export renderer for Stem Extractor.
+//! Real-time audio engine and offline export renderer for ShredLab.
 //!
 //! - [`Engine`]: plays a set of [`Track`]s (stems or the original mix) on the
 //!   default output device with per-track gains, tempo change without pitch
@@ -13,24 +13,25 @@
 //! # Architecture
 //!
 //! A producer thread owns the [`pipeline`] (mix → Signalsmith Stretch →
-//! crossfades → click → resample to the device rate) and keeps a small
-//! lock-free ring buffer ([`rtrb`]) about 30 ms ahead of the device. The
-//! cpal callback only pops frames from the ring and publishes the position
-//! through atomics: no locks or allocation in the callback. Controls go to
-//! the producer thread over a channel; gain, speed and pitch changes are
-//! heard within roughly the ring latency plus the device buffer (< 60 ms).
+//! crossfades → safety limiter → click → master volume → resample to the
+//! device rate) and keeps a small lock-free ring buffer ([`rtrb`]) about
+//! 30 ms ahead of the device. The cpal callback only pops frames from the
+//! ring and publishes the position through atomics: no locks or allocation
+//! in the callback. Controls go to the producer thread over a channel;
+//! gain, speed and pitch changes are heard within roughly the ring latency
+//! plus the device buffer (< 60 ms).
 //!
 //! Speed 1.0 with pitch 0 bypasses the stretcher (bit-transparent at unity
 //! gain). Playback runs the music through a soft-knee look-ahead safety
 //! limiter ([`limiter`], transparent below -1 dBFS) before the click is
 //! added; export uses its own whole-file limiter instead (on the music
 //! before the click is added, then on the final sum). The mixer can
-//! build the backing track from the original mix ([`mix`], P1). Each stem
+//! build the backing track from the original mix ([`mix`]). Each stem
 //! first runs through its Refine chain (stereo selection + EQ, at the song
 //! rate, fed ahead by the chain's latency so nothing else is delayed); then
 //! the gained tracks are mixed and the stereo mix is stretched once. So
-//! refine sits before the stretcher, inside the mixer, next to the P1
-//! original path. Seeks, loop wraps, pause and stretch on/off are
+//! refine sits before the stretcher, inside the mixer, next to the
+//! original-mix path. Seeks, loop wraps, pause and stretch on/off are
 //! crossfaded (~10 ms).
 
 pub mod click;

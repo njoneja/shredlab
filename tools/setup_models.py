@@ -344,7 +344,7 @@ def main():
     out = a.out.resolve()
     out.mkdir(parents=True, exist_ok=True)
     t_start = time.time()
-    print(f"Stem Extractor model setup\n  models folder: {out}\n  venv:          {a.venv.resolve()}")
+    print(f"ShredLab model setup\n  models folder: {out}\n  venv:          {a.venv.resolve()}")
 
     step(1, f"Python {PYTHON_VERSION} environment for exporting (CPU only)")
     py = setup_venv(a.venv.resolve(), a.force)

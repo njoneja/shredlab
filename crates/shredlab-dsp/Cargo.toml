@@ -1,6 +1,6 @@
 [package]
 name = "shredlab-dsp"
-description = "STFT/iSTFT, chunking, overlap-add and Refine/strength DSP for Stem Extractor"
+description = "STFT/iSTFT, chunking, overlap-add and Refine/strength DSP for ShredLab"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

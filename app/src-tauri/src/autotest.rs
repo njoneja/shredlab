@@ -11,7 +11,7 @@
 //! quality High -> open -> separate (unless cached) -> beats -> play 3 s ->
 //! re-open (cache, High) -> cancel a Standard separation -> switch to
 //! Standard (re-separates) -> back to High (instant, from the cache) ->
-//! "All but guitar" export in P1 mode (checked against original - guitar)
+//! "All but guitar" export from the original (checked against original - guitar)
 //! -> the same with click + count-in (unstretched and at 80 %)
 //! -> a loop A-B export with count-in (played once, faded edges) -> the
 //! music start: whole-song count-in export and play from 0 start there
@@ -845,7 +845,7 @@ fn run(b: &Arc<Backend>, song: &Path, out: &Path, rx: &Receiver<Event>) -> Resul
     });
 
     // Play a few seconds (with count-in) from 30 s: "All but guitar"
-    // (P1 mode) with bass boosted +6 dB (exercises the playback limiter).
+    // (original-based backing) with bass boosted +6 dB (exercises the playback limiter).
     b.set_mix(
         STEMS
             .iter()
@@ -949,7 +949,7 @@ fn run(b: &Arc<Backend>, song: &Path, out: &Path, rx: &Receiver<Event>) -> Resul
         return Err(format!("switch back to High took {secs:.1}s (not cached?)"));
     }
 
-    // "All but guitar" export in P1 mode, unstretched: must equal
+    // "All but guitar" export from the original, unstretched: must equal
     // original - guitar (up to the export's scale and 24-bit rounding), and
     // differ from the plain sum of the other stems.
     let file = out.join("autotest-all-but-guitar.wav");
@@ -1007,8 +1007,8 @@ fn run(b: &Arc<Backend>, song: &Path, out: &Path, rx: &Receiver<Event>) -> Resul
     }
 
     // Solo export of vocals, bass and drums: what is heard is the plain sum
-    // of the soloed stems, even though 3 of 6 on would be P1 mode without
-    // solo.
+    // of the soloed stems, even though 3 of 6 on would use the original-based
+    // backing track without solo.
     let soloed = ["vocals", "bass", "drums"];
     let file = out.join("autotest-solo.wav");
     let _ = std::fs::remove_file(&file);
@@ -1043,13 +1043,13 @@ fn run(b: &Arc<Backend>, song: &Path, out: &Path, rx: &Receiver<Event>) -> Resul
     let (snr_sum, k) = snr_db(&got, &sum);
     let (snr_p1, _) = snr_db(&got, &p1);
     log!(
-        "autotest: solo export {secs:.1}s: vs sum of soloed stems {snr_sum:.1} dB (gain {k:.3}), vs P1 backing track {snr_p1:.1} dB"
+        "autotest: solo export {secs:.1}s: vs sum of soloed stems {snr_sum:.1} dB (gain {k:.3}), vs original-based backing track {snr_p1:.1} dB"
     );
     if snr_sum < MIX_SNR_MIN || snr_p1 > snr_sum - 10.0 {
         return Err("solo export is not the plain sum of the soloed stems".into());
     }
 
-    // +6 dB boost on bass (P1 mode): must not clip.
+    // +6 dB boost on bass (original-based backing): must not clip.
     let file = out.join("autotest-bass-boost.wav");
     let _ = std::fs::remove_file(&file);
     let secs = export_wait(

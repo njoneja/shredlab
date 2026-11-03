@@ -22,7 +22,7 @@ use shredlab_separation::{
 #[command(
     name = "shredlab-cli",
     version,
-    about = "Stem Extractor command-line interface"
+    about = "ShredLab command-line interface"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -420,7 +420,7 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     let result = match &cli.command {
         Command::Info => {
-            println!("Stem Extractor");
+            println!("ShredLab");
             for (name, version) in crate_versions() {
                 println!("  {name:<18} {version}");
             }

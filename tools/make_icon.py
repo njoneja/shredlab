@@ -4,8 +4,9 @@
 """Builds the ShredLab app icon as an SVG with the clefs as paths.
 
 Treble clef (accent) and bass clef (light) from Noto Music side by side on
-a rounded dark square (Stage colors, from the brand guide). The glyphs
-are converted to paths, so the SVG does not depend on the font.
+a rounded dark square, in the Stage theme's colors (BG, TREBLE_COLOR and
+BASS_COLOR below). The glyphs are converted to paths, so the SVG does not
+depend on the font.
 
 Usage (needs fonttools, e.g. in .venv-models):
     python tools/make_icon.py <NotoMusic-Regular.ttf> app/src-tauri/icons/app-icon.svg

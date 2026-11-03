@@ -18,7 +18,7 @@
     piano: "Piano / keys",
     other: "Other",
   };
-  /** Scribble-strip abbreviations written on the tape (brand guide). */
+  /** Scribble-strip abbreviations: each stem label is a strip of masking tape written in marker. */
   const SHORT: Record<StemName, string> = {
     vocals: "VOX",
     guitar: "GTR",

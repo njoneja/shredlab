@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 Navneet Joneja
 
-// Theme handling (from the brand guide). The theme is saved with the app
+// Theme handling: four themes, Stage the default, applied as data-theme on
+// <html> (Manuscript is the only light one). The theme is saved with the app
 // settings in the backend; localStorage keeps a mirror that
 // public/theme-init.js applies before first paint (no flash).
 import { THEMES, type Theme } from "./types";

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 Navneet Joneja
 
-// Refine panel helpers (P5): defaults, quick stereo presets, the stereo
+// Refine panel helpers: defaults, quick stereo presets, the stereo
 // window and the EQ curve. Mirrors crates/shredlab-dsp/src/refine (pan.rs,
 // eq.rs); the curve uses the same RBJ formulas, so it is what you hear.
 import type { BandParams, EndParams, EqParams, PanParams, RefineParams, RefinePreset } from "./types";

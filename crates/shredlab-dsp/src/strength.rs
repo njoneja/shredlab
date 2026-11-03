@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 Navneet Joneja
 
-//! Separation strength (SPEC §5.4 P4), offline.
+//! Separation strength, offline: the per-song Natural → Tight slider,
+//! computed after a change (a few seconds, then cached), not live.
 //!
 //! Every stem is re-derived from the original mix with a sharpened ratio
 //! mask: per STFT bin and channel,
@@ -20,7 +21,8 @@
 //! (the model's leftover, about -20 dB), so the ratio mask redistributes that
 //! leftover and replaces the stems' phases with the original's. The caller
 //! should use the cached stems at the Natural end and this function only for
-//! `p > 1` (see `the unpublished Refine notes` for measured deviations).
+//! `p > 1`. Measured per-stem SNR of `p = 1` against the cached stems is only
+//! about 10-19 dB, worst where stems share bins (kick against bass).
 //!
 //! Framing: periodic Hann analysis/synthesis windows, `n_fft` 4096, hop 1024
 //! (the Demucs STFT size), no padding beyond zeros outside the song; f32 FFTs.

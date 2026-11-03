@@ -6,7 +6,7 @@
 //!
 //! ```text
 //! .venv/Scripts/python.exe tools/beat_this_fixtures.py      # once, for the comparison
-//! cargo run --release --manifest-path crates/shredlab-beats/Cargo.toml --example beat_e2e -- \
+//! cargo run --release -p shredlab-beats --example beat_e2e -- \
 //!     [--model models/onnx/beat_this_final0.onnx] [--threads 8] <audio>...
 //! ```
 //!

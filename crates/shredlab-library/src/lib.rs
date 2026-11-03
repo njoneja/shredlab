@@ -203,7 +203,7 @@ pub struct BeatData {
     pub beats_per_bar: Option<u32>,
 }
 
-/// Separation strength of a song (SPEC §5.4 P4): `level` 0 = Natural (the
+/// Separation strength of a song (the Natural → Tight slider): `level` 0 = Natural (the
 /// cached stems), 1..=4 = mask exponents 1.5, 2, 3, 4 ("Tight").
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default)]

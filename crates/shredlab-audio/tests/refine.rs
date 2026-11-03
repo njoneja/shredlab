@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 Navneet Joneja
 
-//! Refined stems in the mixer, playback pipeline and export (M5c).
+//! Refined stems in the mixer, playback pipeline and export. The bar is that
+//! playback and export of refined stems match `refine_offline` exactly.
 //!
 //! The mix rule (crate `mix` docs): `out = w·original + Σ (g_i·r_i − w·s_i)`
 //! with `s_i` the whole stem and `r_i` the heard part after EQ. The stereo

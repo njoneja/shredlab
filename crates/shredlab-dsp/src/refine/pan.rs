@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 Navneet Joneja
 
-//! Streaming stereo pan/width mask (Refine panel, SPEC §5.4 P5).
+//! Streaming stereo pan/width mask (Refine panel: picks the part of a
+//! stem that sits in a stereo window).
 //!
 //! Each STFT bin gets a pan estimate from the channel magnitudes,
 //! `pan = (|R| - |L|) / (|L| + |R|)` (-1 hard left, +1 hard right, as in

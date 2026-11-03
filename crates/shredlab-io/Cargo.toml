@@ -1,6 +1,6 @@
 [package]
 name = "shredlab-io"
-description = "Audio decode, encode and resampling for Stem Extractor"
+description = "Audio decoding, resampling and WAV writing for ShredLab"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

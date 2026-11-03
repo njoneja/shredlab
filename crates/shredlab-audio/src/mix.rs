@@ -4,7 +4,7 @@
 //! Summing gained tracks into a stereo mix, with click-free gain ramps and a
 //! crossfade when the track set is replaced.
 //!
-//! # Backing track from the original (P1)
+//! # Backing track from the original
 //!
 //! A track set may carry the original mix next to the stems (same length,
 //! sample-aligned: both come from the same 44.1 kHz decode). The output is
@@ -24,7 +24,7 @@
 //! run at the same time. [`choose_mode`] is the rule shared by playback and
 //! export.
 //!
-//! # Refined stems (Refine panel, P5)
+//! # Refined stems (Refine panel)
 //!
 //! Every stem runs through a [`RefineChain`] (stereo selection, then EQ),
 //! refined or not. With `s_i` the whole stem and `r_i` the part that is
@@ -40,7 +40,7 @@
 //! is heard is the caller's business ([`PanParams::invert`]: ShredLab makes
 //! the stereo window an exception to the row's on switch). An unrefined
 //! chain passes the stem through bit-exact (`r_i = s_i`), so this is
-//! exactly the P1 formula above: while a chain is bypassed the mixer adds
+//! exactly the formula above: while a chain is bypassed the mixer adds
 //! `(gain_i - w) * r_i` as before, otherwise it reads `s_i` straight from
 //! the track (the chain's output is aligned with it, see below).
 //!
@@ -85,7 +85,7 @@ pub enum MixMode {
     Original,
 }
 
-/// The P1 rule, shared by playback and export: with any stem soloed, the
+/// The backing-track rule, shared by playback and export: with any stem soloed, the
 /// plain sum (of the soloed stems); otherwise the original-based mix when at
 /// least half of the stems are on (`2 * n_on >= n_stems`), else the plain
 /// sum. "On" ignores solo and volume (an on stem at volume 0 still counts).
@@ -707,7 +707,7 @@ mod tests {
         assert!(l.windows(2).all(|w| w[1] <= w[0] + 1e-7));
     }
 
-    // ---------------------------------------------------------- P1 tests
+    // ------------------------------------------ backing-track-from-original tests
 
     fn sig(name: &str, seed: f32, len: usize) -> Track {
         let a: Vec<f32> = (0..len)
