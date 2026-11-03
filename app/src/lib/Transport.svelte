@@ -285,10 +285,15 @@
     border-radius: var(--radius);
     background: var(--surface-2);
   }
+  /* Raised above the pill's own surface so it still reads as a button when off. */
   .pill > .btn.toggle {
-    border-color: transparent;
+    background: var(--surface-3);
+  }
+  .pill > .btn.toggle:hover:not(:disabled) {
+    filter: brightness(1.12);
   }
   .pill > .btn.toggle[aria-pressed="true"] {
+    background: var(--accent-soft);
     border-color: var(--accent);
   }
   .pill > .lbl {
