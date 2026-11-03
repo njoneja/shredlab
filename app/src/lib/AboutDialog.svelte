@@ -53,7 +53,7 @@
     {:else}
       <div class="about">
         <div class="brand"><Wordmark size={34} /></div>
-        <p class="version">Version {version}</p>
+        <p class="version">Version {version}{__SHREDLAB_COMMIT__ ? ` (${__SHREDLAB_COMMIT__})` : ""}</p>
         <p>Copyright (C) 2026 Navneet Joneja</p>
         <p class="small">
           ShredLab is free software under the GNU General Public License, version 3 or (at your option) any later version,

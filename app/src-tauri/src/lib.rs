@@ -114,8 +114,12 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         },
     };
     log::init(&data_dir);
+    let commit = match env!("SHREDLAB_COMMIT") {
+        "" => String::new(),
+        c => format!(" ({c})"),
+    };
     log!(
-        "ShredLab {} starting ({} build, audio engine: {})",
+        "ShredLab {}{commit} starting ({} build, audio engine: {})",
         env!("CARGO_PKG_VERSION"),
         if cfg!(debug_assertions) {
             "debug"

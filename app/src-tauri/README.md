@@ -50,6 +50,7 @@ then `src/backend.rs`.
 - `src/audio.rs` re-exports `shredlab-audio`; `src/log.rs` is the `log!` macro (stderr and `<data dir>/shredlab.log`).
 - `src/autotest.rs`: debug-only headless end-to-end check.
 - `src/win_icon.rs`: Windows only; sharper window and taskbar icons.
+- `build.rs`: runs `tauri_build` and stamps the short commit hash (`SHREDLAB_COMMIT`, empty outside git) into the startup log line.
 - `tauri.conf.json`: window, CSP, bundle resources and icons.
   `tauri.bundle.windows.conf.json` adds `DirectML.dll` for installers (see Build below).
 - `capabilities/default.json`: permissions of the main window (`core:default` only).

@@ -32,6 +32,7 @@ backend calls are in `lib/store.svelte.ts`; read it next.
 
 - `App.svelte`: page layout, global keyboard shortcuts, mounting of dialogs and the toast.
 - `app.css`: fonts, theme tokens per `data-theme`, shared button and control styles.
+- `globals.d.ts`: `__SHREDLAB_COMMIT__`, the short commit hash that `../vite.config.ts` defines at build time; About shows it after the version.
 - `lib/store.svelte.ts`: `AppState` (the `app` singleton): every `$state`, the event listeners, and one method per user action.
 - `lib/api.ts`, `lib/api.tauri.ts`, `lib/api.mock.ts`, `lib/types.ts`, `lib/API.md`: the backend seam (above).
 - `lib/mix.ts`: dB and linear gain, the volume slider law, the backing-track-from-original rule.
