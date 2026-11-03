@@ -7,7 +7,7 @@
     "dev": "pnpm --dir app tauri dev",
     "build-release": "pnpm --dir app tauri build --no-bundle",
     "build-installers": "pnpm --dir app bundle",
-    "check": "pnpm --dir app build && pnpm --dir app check && cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings",
+    "check": "node tools/check_docs.mjs && pnpm --dir app build && pnpm --dir app check && cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings",
     "test": "pnpm --dir app build && cargo test --workspace"
   }
 }

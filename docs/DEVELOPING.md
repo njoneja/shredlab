@@ -29,10 +29,11 @@ It prints `AUTOTEST PASS`.
 | `SHREDLAB_MODELS_DIR` | Extra model folders (`;`-separated on Windows, `:` elsewhere) |
 | `SHREDLAB_MODEL` | Separation model id, e.g. a personal model such as `bs-roformer-sw` |
 | `SHREDLAB_DEVICE` | `auto`, `cpu` or `gpu` |
-| `SHREDLAB_BEAT_MODEL` | Beat model id |
-| `SHREDLAB_BEATS_DEVICE` | Device for beat detection |
+| `SHREDLAB_BEAT_MODEL` | Path of `beat_this_final0.onnx` |
+| `SHREDLAB_BEATS_DEVICE` | `cpu` (default), `auto` or `gpu` for beat detection |
 | `SHREDLAB_NO_PRELOAD` | Skip loading the model at startup |
-| `SHREDLAB_AUTOTEST`, `SHREDLAB_AUTOTEST_EXIT` | Headless end-to-end check (above) |
+| `SHREDLAB_AUTOTEST`, `SHREDLAB_AUTOTEST_OUT`, `SHREDLAB_AUTOTEST_EXIT` | Headless end-to-end check (above) |
+| `SHREDLAB_AUDIO_DEVICE_RATE` | Request a specific output device rate (exercises the resampler) |
 
 ## Python environments
 
@@ -47,8 +48,9 @@ Two separate virtual environments, both Python 3.12:
   `onnxruntime`, and `demucs` / `beat-this` from PyPI. It exists only to
   export the bundled models.
 
-Python reference implementations are described in
-[spikes/README.md](../spikes/README.md) and [tools/README.md](../tools/README.md).
+Which scripts use which environment is in [tools/README.md](../tools/README.md),
+[tools/reference/README.md](../tools/reference/README.md),
+[spikes/README.md](../spikes/README.md) and [scripts/README.md](../scripts/README.md).
 
 ## ONNX Runtime and DirectML
 

@@ -15,12 +15,13 @@ env:
 
 jobs:
   spdx:
-    name: SPDX headers
+    name: SPDX headers and docs
     if: github.repository == 'njoneja/shredlab'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - run: sh tools/check_spdx.sh
+      - run: node tools/check_docs.mjs
 
   build:
     name: ${{ matrix.os }}

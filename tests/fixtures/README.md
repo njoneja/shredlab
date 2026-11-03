@@ -1,20 +1,33 @@
 # Golden test fixtures
 
-Reference outputs from the Python implementation in `tools/reference/`, for
-validating the Rust port. Two sets:
+Reference outputs from the Python implementation in `tools/reference/` and
+`spikes/onnx_beat_this.py`, for validating the Rust port. Two sets:
 
 - **Committed (this folder, ~1.9 MiB):** model-free DSP and chunking vectors.
-  Regenerate with `.venv\Scripts\python.exe tools/make_fixtures.py`.
+  Regenerate with `.venv\Scripts\python.exe tools/make_fixtures.py` (needs
+  torch for the cross-checks). Used by `crates/shredlab-dsp/tests/fixtures.rs`,
+  which skips with a message if the folder is missing.
 - **Local (`local/`, gitignored, ~400 MB):** full-model outputs on a real
-  song excerpt. Regenerate with `.venv\Scripts\python.exe tools/make_goldens.py
-  --audio FILE` (needs ffmpeg and the model folders; see `tools/README.md`).
+  song excerpt, from `.venv\Scripts\python.exe tools/make_goldens.py
+  --audio FILE` (needs ffmpeg and the model folders; see
+  [tools/README.md](../../tools/README.md)), used by the ignored tests in
+  `crates/shredlab-separation/tests/golden.rs`; and Beat This! vectors in
+  `local/beat_this/`, from `tools/beat_this_fixtures.py`, used by
+  `crates/shredlab-beats/tests/reference.rs`.
+
+The generators are deterministic, but a rerun on another machine or with
+other numpy/scipy/torch versions can change the `.bin` bytes in the last
+bits. The Rust tests compare within tolerances (except chunk offsets,
+starts and triangular weights, which must match exactly), so only commit
+regenerated files when the reference itself changed.
 
 ## Binary format
 
 Every `.bin` file is raw **little-endian float32**, C order (last axis
-fastest), no header. Shapes and descriptions are in the `index.json` next to
-it (`files.<name>.shape`). Complex arrays have a trailing axis of 2:
-`[..., 0]` = real, `[..., 1]` = imaginary.
+fastest), no header. Shapes, dtype, byte size and a description are in the
+`index.json` next to it (`files.<name>.shape`). Complex arrays have a
+trailing axis of 2: `[..., 0]` = real, `[..., 1]` = imaginary. (`local/beat_this/`
+uses its own layout, described at the end.)
 
 ## Committed files
 
@@ -25,7 +38,7 @@ either hop, so the edge padding paths are exercised.
 
 | File | Shape | What |
 |---|---|---|
-| `synth_input.bin` | (2, 22050) | synth-v1, channels 0 and 1. Tests the synth generator too. |
+| `synth_input.bin` | (2, 22050) | synth-v1, channels 0 and 1. Input of the DSP tests (the Rust synth generator has its own formula test). |
 | `demucs_stft.bin` | (2, 2048, 22, 2) | `demucs_hybrid.spec(x)` = HTDemucs `_spec`: (channel, bin, frame, re/im). |
 | `demucs_istft.bin` | (2, 22050) | `demucs_hybrid.ispec(demucs_stft, 22050)`. **Not** equal to the input (see below). |
 | `roformer_stft.bin` | (2, 1025, 44, 2) | `torch.stft(x, 2048, 512, hann_window(2048), center=True, reflect)`. |
@@ -105,8 +118,12 @@ channel's STFT with its mask.
 
 Source: a full rock song of your choice (`--audio`), decoded
 with `ffmpeg -f f32le -ac 2 -ar 44100`. All inference on the ONNX CPU EP.
-`local/index.json` lists shapes and also stores
-`demucs_song_normalization`, `demucs_chunks` and `roformer_chunk_starts`.
+Demucs files need `models/registry/htdemucs_6s`; RoFormer files need the
+personal model `models/personal/bs-roformer-sw` and are skipped without it
+(or with `--skip-roformer`). `local/index.json` lists shapes and also
+stores `source_audio`, `decode`, `demucs_song_normalization`,
+`demucs_chunks` and `roformer_chunk_starts`. A full run rewrites
+`index.json` from scratch; `--shifts-only` adds to it.
 
 | File | Shape | What |
 |---|---|---|
@@ -117,12 +134,38 @@ with `ffmpeg -f f32le -ac 2 -ar 44100`. All inference on the ONNX CPU EP.
 | `demucs_w0_wave.bin` | (6, 2, 343980) | Window 0 graph output `wave`. |
 | `demucs_w0_spec.bin` | (6, 4, 2048, 336) | Window 0 graph output `spec`. |
 | `demucs_w0_out.bin` | (6, 2, 343980) | `wave + ispec(uncac(spec))`, normalized domain, before weighting. |
+| `demucs_shifts2_stems.bin` | (6, 2, 441000) | `demucs_hybrid.separate(demucs_input, shifts=2)`, deterministic offsets [0, 11025]. Regenerate alone with `--shifts-only` (reads `demucs_input.bin`). |
 | `roformer_input.bin` | (2, 1323000) | Song 60–90 s (30 s → 4 full chunks incl. the end-aligned tail). |
 | `roformer_stems.bin` | (6, 2, 1323000) | Full `roformer_separate.separate` with BS-RoFormer-SW (personal model). Stems: bass, drums, other, vocals, guitar, piano. |
 | `roformer_c0_stft.bin` | (2, 1025, 1151, 2) | Chunk 0 graph input. |
 | `roformer_c0_mask.bin` | (6, 2050, 1151, 2) | Chunk 0 graph output. |
 | `roformer_c0_out.bin` | (6, 2, 588800) | Chunk 0 stems before windowing/overlap-add. |
 
-Suggested pass criterion for the Rust goldens: SNR ≥ 60 dB per stem on CPU.
-Python vs Python across ORT thread counts already differs at
-~1e-7 absolute.
+Pass criteria in `golden.rs`: graph inputs (`mag`, `stft`) > 100 dB SNR;
+full separation on CPU and, if one passes the self-test, on the GPU
+≥ 60 dB SNR per loud stem (rms ≥ −40 dB relative to the input mix). Quieter
+stems are reported but not asserted, because their SNR mostly measures ONNX
+Runtime build differences. Python vs Python across ORT thread counts
+already differs at ~1e-7 absolute.
+
+Run them with
+`cargo test --release -p shredlab-separation --test golden -- --ignored --nocapture --test-threads 1`.
+
+### `local/beat_this/`
+
+Written by `tools/beat_this_fixtures.py [--model final0]`. Raw
+little-endian arrays named `<name>.float32` or `<name>.float64` (beat and
+downbeat times), listed with shape and dtype in `meta.json`:
+
+- `synth_<sr>_<layout>_{audio,mono22k,spect}`: three short synthetic signals
+  (clicks at 120 BPM, two sines, noise; 44.1 kHz stereo, 48 kHz mono,
+  22.05 kHz mono, odd lengths): interleaved input, soxr-resampled mono at
+  22.05 kHz, and the log-mel spectrogram.
+- `song_<name>_{beat_logits,down_logits,beats,downs,spect}`: one set per
+  `out/beat_this/<model>_<song>.npz` written by
+  `spikes/onnx_beat_this.py ref` (PyTorch logits, beat and downbeat times
+  after minimal postprocessing, reference spectrogram).
+
+`crates/shredlab-beats/tests/reference.rs` skips when `meta.json` is
+missing; the `beat_e2e` example of `shredlab-beats` also compares against
+these files.

@@ -21,18 +21,21 @@ How to use it: [docs/HELP.md](docs/HELP.md). What's planned:
 
 ## Repository layout
 
+Each source directory has its own README with the details; [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) shows how they fit together.
+
 | Path | What |
 |---|---|
 | `app/` | Tauri app: Svelte 5 + TypeScript + Vite frontend (`app/src`), Rust shell (`app/src-tauri`) |
 | `crates/shredlab-dsp` | STFT/iSTFT, chunking, overlap-add |
-| `crates/shredlab-io` | Decode, encode, resample |
+| `crates/shredlab-io` | Decode, resample, WAV writing |
 | `crates/shredlab-separation` | ONNX Runtime sessions, model registry, adapters |
 | `crates/shredlab-audio` | Real-time audio engine, offline render, WAV/FLAC/MP3 export |
 | `crates/shredlab-beats` | Beat/downbeat detection (Beat This! ONNX) |
 | `crates/shredlab-library` | Song folders, JSON manifest, stem cache |
 | `crates/shredlab-cli` | `shredlab-cli`, headless CLI |
 | `tools/` | Python tooling: model setup/export, model folders, fixtures ([tools/README.md](tools/README.md)) |
-| `spikes/`, `scripts/` | Python reference implementations (Rust ports are validated against them; [spikes/README.md](spikes/README.md)) |
+| `spikes/` | Python prototypes, including the export code for the bundled models ([spikes/README.md](spikes/README.md)) |
+| `scripts/` | Model setup wrappers and separation experiments ([scripts/README.md](scripts/README.md)) |
 | `docs/` | User help, architecture, development notes, model manifest format |
 
 ## Building from scratch
