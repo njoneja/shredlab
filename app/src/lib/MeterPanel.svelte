@@ -169,14 +169,14 @@
     height: 26px;
     background: var(--surface-2);
     color: var(--fg);
-    border: 1px solid var(--border);
+    border: 1px solid var(--control-border);
     border-radius: 4px;
     padding: 0 6px;
     font: inherit;
   }
   .seg {
     display: inline-flex;
-    border: 1px solid var(--border);
+    border: 1px solid var(--control-border);
     border-radius: var(--radius-sm);
     overflow: hidden;
   }
@@ -187,7 +187,7 @@
     font-size: 12px;
   }
   .seg button + button {
-    border-left: 1px solid var(--border);
+    border-left: 1px solid var(--control-border);
   }
   .seg button[aria-checked="true"] {
     background: var(--accent);

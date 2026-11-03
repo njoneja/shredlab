@@ -143,6 +143,9 @@ an iframe.
 - Theme names are listed in `lib/types.ts` (`THEMES`), `lib/theme.ts`
   (`THEME_NAME`), `../public/theme-init.js`, `../index.html` (page
   background), `app.css` (tokens) and `app/src-tauri/src/settings.rs`.
+- Edges of clickable or editable controls (buttons, segmented controls,
+  inputs, selects, switches) use `--control-border`; panels, dialogs and
+  dividers use the fainter `--border`. Every theme defines both.
 - Drag and drop comes from Tauri's webview event (`onFileDrop`), not the
   DOM; keep `dragDropEnabled` at its default in `tauri.conf.json`.
 - Adding an npm dependency that ships in the UI changes the third-party

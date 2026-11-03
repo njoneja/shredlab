@@ -497,7 +497,7 @@
     height: 20px;
     border-radius: 10px;
     background: var(--surface-3);
-    border: 1px solid var(--border);
+    border: 1px solid var(--control-border);
     position: relative;
     overflow: hidden;
     transition: background 0.12s;

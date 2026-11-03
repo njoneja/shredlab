@@ -157,7 +157,7 @@
   }
   .seg {
     display: inline-flex;
-    border: 1px solid var(--border);
+    border: 1px solid var(--control-border);
     border-radius: 5px;
     overflow: hidden;
     flex: none;
@@ -172,7 +172,7 @@
     white-space: nowrap;
   }
   .seg button + button {
-    border-left: 1px solid var(--border);
+    border-left: 1px solid var(--control-border);
   }
   .seg button:hover:not(:disabled):not([aria-checked="true"]) {
     background: var(--surface-3);
@@ -195,7 +195,7 @@
     gap: 2px;
     padding: 10px;
     background: var(--surface-2);
-    border: 1px solid var(--border);
+    border: 1px solid var(--control-border);
     border-radius: var(--radius-sm);
     text-align: left;
   }

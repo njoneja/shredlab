@@ -755,7 +755,7 @@
     color: inherit;
     padding: 0 6px;
     background: var(--surface);
-    border: 1px solid var(--border);
+    border: 1px solid var(--control-border);
     border-radius: var(--radius-sm);
   }
   option {
@@ -800,7 +800,7 @@
   }
   .seg {
     display: inline-flex;
-    border: 1px solid var(--border);
+    border: 1px solid var(--control-border);
     border-radius: 5px;
     overflow: hidden;
   }
@@ -812,7 +812,7 @@
     font-size: 12px;
   }
   .seg button + button {
-    border-left: 1px solid var(--border);
+    border-left: 1px solid var(--control-border);
   }
   .seg button:hover:not([aria-checked="true"]):not([aria-pressed="true"]) {
     background: var(--surface-3);
@@ -899,7 +899,7 @@
   .tabs {
     display: grid;
     grid-template-columns: repeat(5, minmax(0, 1fr));
-    border: 1px solid var(--border);
+    border: 1px solid var(--control-border);
     border-radius: 5px;
     overflow: hidden;
   }
@@ -919,7 +919,7 @@
     text-overflow: ellipsis;
   }
   .tabs button + button {
-    border-left: 1px solid var(--border);
+    border-left: 1px solid var(--control-border);
   }
   .tabs button:hover:not([aria-selected="true"]) {
     background: var(--surface-3);
@@ -994,7 +994,7 @@
     color: inherit;
     padding: 0 4px;
     background: var(--surface);
-    border: 1px solid var(--border);
+    border: 1px solid var(--control-border);
     border-radius: 4px;
   }
 </style>

@@ -282,7 +282,7 @@
   }
   .seg {
     display: inline-flex;
-    border: 1px solid var(--border);
+    border: 1px solid var(--control-border);
     border-radius: 5px;
     overflow: hidden;
   }
@@ -294,7 +294,7 @@
     font-size: 12.5px;
   }
   .seg button + button {
-    border-left: 1px solid var(--border);
+    border-left: 1px solid var(--control-border);
   }
   .seg button[aria-checked="true"] {
     background: var(--accent);

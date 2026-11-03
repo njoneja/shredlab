@@ -179,7 +179,7 @@
   /* Segmented control: two joined native-size buttons, the chosen one accent-filled. */
   .seg {
     display: inline-flex;
-    border: 1px solid var(--border);
+    border: 1px solid var(--control-border);
     border-radius: 5px;
     overflow: hidden;
   }
@@ -192,7 +192,7 @@
     font-weight: 500;
   }
   .seg button + button {
-    border-left: 1px solid var(--border);
+    border-left: 1px solid var(--control-border);
   }
   .seg button:hover:not(:disabled):not([aria-checked="true"]) {
     background: var(--surface-3);
@@ -220,7 +220,7 @@
     height: 28px;
     padding: 0 8px;
     background: var(--surface-2);
-    border: 1px solid var(--border);
+    border: 1px solid var(--control-border);
     border-radius: var(--radius-sm);
   }
   select.compact {

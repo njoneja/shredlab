@@ -23,7 +23,8 @@
 /*
  * Theme tokens. Four themes: Stage (default), Rosewood and Valve are dark,
  * Manuscript is light; text stays at 4.5:1 contrast or better against its
- * background. <html data-theme="..."> picks the theme;
+ * background. --border outlines panels and dialogs; --control-border is
+ * stronger, for the edges of things you click or type into. <html data-theme="..."> picks the theme;
  * public/theme-init.js sets it before first paint. Stage is the default, so
  * it also applies without the attribute.
  */
@@ -34,6 +35,7 @@
   --surface-2: #1B1E27;
   --surface-3: #232733;
   --border: #262A35;
+  --control-border: #3E4454;
   --fg: #EEF0F6;
   --muted: #8F96A8;
   --faint: #5E6578;
@@ -75,6 +77,7 @@
   --surface-2: #2F1C1F;
   --surface-3: #3A2327;
   --border: #43282B;
+  --control-border: #5C3F42;
   --fg: #F6E7DF;
   --muted: #C2A39C;
   --faint: #8A6B66;
@@ -116,6 +119,7 @@
   --surface-2: #2A231B;
   --surface-3: #342B22;
   --border: #3A3027;
+  --control-border: #54483B;
   --fg: #F3E9D8;
   --muted: #B3A48F;
   --faint: #7D705E;
@@ -157,6 +161,7 @@
   --surface-2: #EFE8DA;
   --surface-3: #E6DDCB;
   --border: #D9CFBD;
+  --control-border: #BCB09A;
   --fg: #1D2230;
   --muted: #5C6070;
   --faint: #8A8D99;
@@ -248,7 +253,7 @@ button:disabled {
   height: 28px;
   padding: 0 12px;
   border-radius: 5px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--control-border);
   background: var(--surface-2);
   font-size: 13px;
   font-weight: 500;
