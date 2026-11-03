@@ -25,7 +25,7 @@ async fn blocking<T: Send + 'static>(f: impl FnOnce() -> R<T> + Send + 'static) 
         .map_err(|e| format!("Internal error: {e}"))?
 }
 
-const AUDIO_EXTS: [&str; 7] = ["mp3", "wav", "flac", "m4a", "aac", "ogg", "opus"];
+const AUDIO_EXTS: [&str; 6] = ["mp3", "wav", "flac", "m4a", "aac", "ogg"];
 
 #[tauri::command]
 pub async fn pick_audio_file(window: WebviewWindow) -> R<Option<String>> {

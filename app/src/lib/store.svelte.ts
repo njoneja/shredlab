@@ -143,7 +143,7 @@ class AppState {
   /** The user's range pick in the dialog (null = the default, re-chosen each time it opens). */
   exportRangePick = $state<ExportRange | null>(null);
 
-  // refine (P5)
+  // refine
   refine = $state<Record<StemName, RefineParams>>(defaultRefineAll());
   /** Stem whose Refine panel is open (one at a time). */
   refineOpen = $state<StemName | null>(null);
@@ -151,7 +151,7 @@ class AppState {
   /** Latest stereo field of the open panel's stem (3 × 41 linear powers). */
   field = $state.raw<number[] | null>(null);
 
-  // strength (P4)
+  // strength
   strength = $state<StrengthSetting>({ level: 0, smooth: false });
   strengthBusy = $state(false);
   strengthFraction = $state(0);
@@ -201,7 +201,7 @@ class AppState {
   /**
    * Stems the export mixes: exactly what is audible. With a solo, the soloed
    * stems (always the plain sum); otherwise the switched-on ones (on at −∞
-   * still counts as on for P1) plus off ones with a stereo exception (they
+   * still counts as on for the backing track) plus off ones with a stereo exception (they
    * play the excepted part).
    */
   exportStems = $derived(STEMS.filter((s) => this.audible(s)));
@@ -258,7 +258,6 @@ class AppState {
   });
   showReseparate = $derived(this.askReseparate && this.settingsMismatch && !this.separating && this.stemsReady);
 
-  private saveTimer: number | null = null;
   private started = false;
 
   /**
@@ -463,7 +462,6 @@ class AppState {
     this.opening = true;
     this.error = null;
     try {
-      this.flushSave();
       const info = await api.openSong(path);
       this.song = info;
       this.stemsReady = info.stems_cached;
@@ -566,16 +564,9 @@ class AppState {
     };
   }
 
-  private scheduleSave() {
+  /** Sent on every change: the backend debounces the write and flushes it on song switch and quit. */
+  private saveSettings() {
     if (!this.song) return;
-    if (this.saveTimer != null) clearTimeout(this.saveTimer);
-    this.saveTimer = window.setTimeout(() => this.flushSave(), 600);
-  }
-
-  private flushSave() {
-    if (this.saveTimer == null || !this.song) return;
-    clearTimeout(this.saveTimer);
-    this.saveTimer = null;
     api.saveSongSettings(this.song.song_id, this.settingsSnapshot()).catch((e) => console.warn("save_song_settings failed", e));
   }
 
@@ -630,7 +621,7 @@ class AppState {
     this.loop = { a_sec: a, b_sec: b, enabled: enabled ?? this.loop.enabled };
     if (this.loop.a_sec == null || this.loop.b_sec == null) this.loop.enabled = false;
     await api.setLoop($state.snapshot(this.loop));
-    this.scheduleSave();
+    this.saveSettings();
   }
 
   async toggleLoop() {
@@ -668,7 +659,7 @@ class AppState {
 
   private async pushMix(save = true) {
     await api.setMix(this.mixPayload());
-    if (save) this.scheduleSave();
+    if (save) this.saveSettings();
   }
 
   async setStemOn(stem: StemName, on: boolean) {
@@ -710,7 +701,7 @@ class AppState {
     await this.pushMix(false);
   }
 
-  // ---- refine (P5) ----
+  // ---- refine ----
   refined(stem: StemName): boolean {
     return !isIdentity(this.refine[stem]);
   }
@@ -749,7 +740,7 @@ class AppState {
     await this.setRefine(stem, { ...cur, eq: normalize({ eq: structuredClone(pr.eq) }).eq });
   }
 
-  // ---- strength (P4) ----
+  // ---- strength ----
   /** Strength needs cached stems and the original (it re-derives from it). */
   strengthAvailable = $derived(this.stemsReady && !!this.song?.original_available && !this.separating);
   strengthLabel = $derived(STRENGTH_NAMES[this.strength.level] ?? "Natural");
@@ -791,7 +782,7 @@ class AppState {
   private async pushClick(save = true) {
     this.click.beats_per_bar = this.beatsPerBar;
     await api.setClick($state.snapshot(this.click));
-    if (save) this.scheduleSave();
+    if (save) this.saveSettings();
   }
 
   async toggleClick() {

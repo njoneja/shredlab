@@ -63,7 +63,7 @@ SongInfo {
   bpm: number | null,       // from the beat grid if beats_ready, else null
   settings: SongSettings | null,          // last value given to save_song_settings, verbatim
   original_available: boolean // stems AND the sample-aligned original are loaded,
-                              // so the backing track can come from the original (P1).
+                              // so the backing track can come from the original.
                               // False before separation, or for an old cache entry
                               // without the original whose source file is gone.
   refine: { [stem in StemName]?: RefineParams },  // saved Refine settings, refined stems only
@@ -149,12 +149,12 @@ ExportRequest {
   stems: { stem: StemName, volume: number, on: boolean }[],
                              // exactly the audible stems, with linear gains: the soloed
                              // stems if any stem is soloed, else the stems that are on
-                             // (include on stems at volume 0: they count as "on" for P1)
+                             // (include on stems at volume 0: they count as "on" for the backing track)
                              // plus off stems with a stereo exception (they play the
                              // excepted part). `on` = the row's switch: it decides which
                              // part a stem with an exception plays. Optional; missing = true.
   solo: boolean,             // true = `stems` are the soloed stems: always the plain sum,
-                             // never the P1 backing track. Optional; missing = false.
+                             // never the original-based backing. Optional; missing = false.
   speed_percent: number,     // 50..150, apply time-stretch like playback
   semitones: number,         // -12..12
   cents: number,             // -50..50
@@ -168,7 +168,7 @@ ExportRequest {
 
 SongSettings   // OPAQUE to the backend: store the JSON value and return it verbatim.
 
-// ---- Refine panel (P5) ----
+// ---- Refine panel ----
 RefineParams { pan: PanParams, eq: EqParams }   // identity = pan off and a flat EQ
 PanParams {                  // the stereo EXCEPTION: does the opposite of the row's switch
   enabled: boolean,          // false = no exception (the stem plays whole, or not at all)
@@ -190,7 +190,7 @@ EndParams {
 BandParams { enabled: boolean, freq: number, gain_db: number, q: number }  // peaking; ±15 dB in the UI
 RefinePreset { id: string, name: string, eq: EqParams }
 
-// ---- Separation strength (P4) ----
+// ---- Separation strength ----
 StrengthSetting { level: number, smooth: boolean }
   // level 0 = Natural (the cached stems), 1..4 = Light, Medium, Strong, Tight
   // (mask exponents 1.5, 2, 3, 4, re-derived from the original so the stems
@@ -202,7 +202,7 @@ StrengthSetting { level: number, smooth: boolean }
 
 | Command | Rust params | Returns | Notes |
 |---|---|---|---|
-| `pick_audio_file` | – | `string \| null` | Native open dialog (tauri-plugin-dialog). Filter: mp3, wav, flac, m4a, aac, ogg, opus. `null` if canceled. |
+| `pick_audio_file` | – | `string \| null` | Native open dialog (tauri-plugin-dialog). Filter: mp3, wav, flac, m4a, aac, ogg. `null` if canceled. |
 | `pick_export_path` | `default_name: String, format: ExportFormat` | `string \| null` | Native save dialog. `default_name` has no extension (e.g. `"Song (mix)"`); add `.<format>` and a filter for that format. Returns the full path or `null`. |
 | `open_song` | `path: String` | `SongInfo` | Decode (or start decoding) the file and make it current. Stops playback, position = 0, loop cleared. If stems are cached, load them so playback uses stems immediately. If a separation is running for another song it is canceled (emit `separation-error` with `canceled: true` for that song). Adds/updates the library entry. Kick off beat analysis in the background if the grid is not cached; emit `beats-ready` when done. May return before decoding finishes only if `duration_sec` is known. |
 | `close_song` | – | `()` | Stop playback, cancel separation, drop the current song. |
@@ -226,7 +226,7 @@ StrengthSetting { level: number, smooth: boolean }
 | `get_beats` | – | `BeatGrid \| null` | `null` until beat analysis is done for the current song. |
 | `export_mix` | `req: ExportRequest` | `()` | Starts export on a background thread and returns immediately. Progress via events. `Err` if an export is already running. |
 | `cancel_export` | – | `()` | Cancel if running; emit `export-error` with `canceled: true`. Delete the partial file. |
-| `save_song_settings` | `song_id: String, settings: serde_json::Value` | `()` | Persist next to the song's library entry. Returned verbatim in `SongInfo.settings` on the next `open_song` of that song. Called debounced (~600 ms) after changes. |
+| `save_song_settings` | `song_id: String, settings: serde_json::Value` | `()` | Persist next to the song's library entry. Returned verbatim in `SongInfo.settings` on the next `open_song` of that song. Called on every change: for the open song the backend writes `song.json` about 600 ms after the last call, and at once on song switch, close and app exit; for any other song it writes at once. `Err` for an unknown song that isn't open. |
 | `get_app_settings` | – | `AppSettingsInfo` | Models and the separation settings. |
 | `set_count_in_to_music_start` | `on: bool` | `AppSettingsInfo` | Saves "Count in to where the music starts" with the app settings (`settings.json`) and applies it to playback at once. |
 | `set_stem_format` | `format: "mp3" \| "flac"` | `AppSettingsInfo` | Saves the format of newly written stems with the app settings (`stem_format`, default `"mp3"`: MP3 VBR V0). Applies to the next separation; existing stems keep their format and are still read (old caches are WAV). The cached original is always a copy of a lossy source file or FLAC, whatever this is. |
@@ -234,7 +234,7 @@ StrengthSetting { level: number, smooth: boolean }
 | `set_click_volume` | `volume: f32` | `AppSettingsInfo` | Saves the click and count-in volume (linear, clamped to 0..1) with the app settings and applies it to playback at once. While the slider is dragged the UI sends `set_click` with the new `volume` instead (heard at once, not saved). `Err` for a non-finite value. |
 | `set_theme` | `theme: String` | `AppSettingsInfo` | Saves the UI theme with the app settings (`<data dir>/settings.json`). `Err` for an unknown theme. The UI applies the theme itself and mirrors it in `localStorage` for the next start (no flash before `get_app_settings` returns). |
 | `get_refine_presets` | – | `RefinePreset[]` | The Refine panel's EQ presets (shredlab-dsp `presets.rs`). A preset sets the EQ and keeps the stereo selection. |
-| `set_refine` | `update: { stem: StemName, params: RefineParams }` | `()` | Live: heard at once (smoothed, no clicks), also during playback; turning an exception on or off on an off row also makes it audible or silent; saved in the song's `song.json` about 600 ms after the last change (and on song switch). Identity params = unrefined. `Err` for an unknown stem or no song. |
+| `set_refine` | `update: { stem: StemName, params: RefineParams }` | `()` | Live: heard at once (smoothed, no clicks), also during playback; turning an exception on or off on an off row also makes it audible or silent; saved in the song's `song.json` about 600 ms after the last change (and on song switch, close and app exit). Identity params = unrefined. `Err` for an unknown stem or no song. |
 | `set_refine_analysis` | `stem: Option<String>` | `()` | Turns the stereo-field analysis on for this stem only (the open Refine panel) or off (`null`). Data comes as `refine-field` events while playing. |
 | `set_strength` | `strength: StrengthSetting` | `{ job: number }` | Saves the song's strength at once and re-derives the stems on a background thread (re-reads the cached set, about 1–2 s for a 5-min song; a newer call cancels the older job), then swaps the stems in with the usual crossfade. `job` 0 = nothing to compute (same as loaded, or not separated yet: applied after separation). |
 | `set_app_settings` | `settings: AppSettingsUpdate` | `AppSettingsInfo` | Saves the choice (null = default) and returns the new effective settings. Does **not** re-separate: if a song is open and its `separated_with` (model_id, quality) differs from the new effective `model_id`/`quality`, the UI asks "Re-separate this song?" and calls `start_separation` on yes. `Err` for an unknown model id. |
@@ -272,7 +272,7 @@ Events for a `song_id` that is no longer current are ignored by the UI.
   the old path finds the library entry (stems and the original are in the
   cache).
 
-### Backing track from the original (P1)
+### Backing track from the original
 - With `original_available`, let *n* = number of stems, *on* = stems with
   `on: true` (ignoring volume and solo). If no stem is soloed and
   `2 * on >= n`, playback is `original + Σ (gain_i − 1) · stem_i`, where
@@ -285,7 +285,7 @@ Events for a `song_id` that is no longer current are ignored by the UI.
   shows "Backing track built from the original" under the export summary
   when `original_available && !req.solo && 2 * on >= n`.
 
-### Refine (P5) and strength (P4)
+### Refine and strength
 - **Stereo exception.** A stem's stereo window (`pan.enabled`) is an
   exception to its row's on switch: the window always does the opposite of
   the switch. Guitar on, except left = the guitar without its left part;
@@ -298,7 +298,7 @@ Events for a `song_id` that is no longer current are ignored by the UI.
   Playback and export: `w·original + Σ (gain_i·r_i − w·s_i)` with `s_i` the
   whole stem and `w` = 1 in the backing-track mode, 0 for the plain sum.
   The whole stem leaves the backing and only the heard part comes back, so
-  the unheard part is not in the mix. Unrefined, this is exactly the P1
+  the unheard part is not in the mix. Unrefined, this is exactly the backing-track
   formula above (bit for bit). Examples: guitar off except left + the rest
   on = the original minus the right guitar; all on with guitar on except
   left = the original minus the left guitar; EQ on a stem is audible in
@@ -332,13 +332,13 @@ Events for a `song_id` that is no longer current are ignored by the UI.
   a stereo exception (they play only the excepted part; see Refine).
 - An audible stem plays at `volume` (linear). The UI keeps solo exclusive
   (at most one), but the backend should implement the general rule above.
-- How the audible stems are combined: see Backing track (P1).
+- How the audible stems are combined: see Backing track from the original.
 
 ### Export
 - "Export what you hear": mix exactly `req.stems` at their volumes. The UI
   has already picked the audible stems: the soloed ones when any stem is
   soloed (`req.solo: true`, plain sum), else the switched-on ones plus
-  off ones with a stereo exception (P1 rule above; each with its `on`). Apply `speed_percent`, `semitones`, `cents`
+  off ones with a stereo exception (backing-track rule above; each with its `on`). Apply `speed_percent`, `semitones`, `cents`
   as in playback. Avoid clipping (a limiter or
   float WAV is fine; MP3 at ≥ 192 kbps).
 - **Range** (`start_sec`, `end_sec`): the export covers `[start, end)`

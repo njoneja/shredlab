@@ -45,8 +45,8 @@ const ORIGINAL: &str = "original";
 const RECENT_MAX: usize = 20;
 /// Mask exponent per strength level (0 = Natural: the cached stems).
 pub const STRENGTH_P: [f32; 5] = [1.0, 1.5, 2.0, 3.0, 4.0];
-/// Refine settings are saved this long after the last change.
-const REFINE_SAVE_DELAY: Duration = Duration::from_millis(600);
+/// Refine and per-song UI settings are saved this long after the last change.
+const SONG_SAVE_DELAY: Duration = Duration::from_millis(600);
 const NO_DEVICE: &str =
     "No audio output device found. Connect speakers or headphones and restart ShredLab (separation and export still work).";
 
@@ -74,8 +74,8 @@ struct Song {
     /// can be (re-)separated.
     mix_is_original: bool,
     /// The original as a track: played before separation, and the source
-    /// of the backing track (P1) once stems are loaded. `None` when it is
-    /// unavailable or not sample-aligned with the stems.
+    /// of the backing track built from it once stems are loaded. `None`
+    /// when it is unavailable or not sample-aligned with the stems.
     original: Option<Track>,
     stems: Option<Vec<Track>>,
     /// The cached stem set in `stems`.
@@ -97,8 +97,8 @@ impl Song {
         }
     }
 
-    /// Loads the song into the engine: stems plus the original (for P1),
-    /// or the original alone before separation.
+    /// Loads the song into the engine: stems plus the original (for the
+    /// backing track), or the original alone before separation.
     fn load_into(&self, e: &Engine) {
         match &self.stems {
             Some(s) => e.load_with_original(s.clone(), self.original.clone()),
@@ -204,8 +204,9 @@ struct State {
     last_separation_error: Option<String>,
     /// Refine settings of the open song, by stem (only refined stems).
     refine: BTreeMap<String, RefineParams>,
-    /// Unsaved refine change: (song id, time of the last change).
-    refine_dirty: Option<(String, Instant)>,
+    /// Unsaved refine or per-song settings change of the open song: (song
+    /// id, time of the last change).
+    song_dirty: Option<(String, Instant)>,
     /// Stem whose Refine panel is open (stereo-field analysis).
     analysis: Option<String>,
     strength_job: Option<StrengthJob>,
@@ -318,7 +319,7 @@ pub fn engine_refine(
         .collect()
 }
 
-/// The P1 mix mode for playback: the original-based backing track when the
+/// The mix mode for playback: the original-based backing track when the
 /// original is loaded with the stems and at least half of the stems are on
 /// (ignoring solo and volume), plain sum otherwise or when any stem is
 /// soloed. A stem missing from `mix` counts as on (like [`gains_for`]).
@@ -501,7 +502,7 @@ impl Backend {
                 export: None,
                 last_separation_error: None,
                 refine: BTreeMap::new(),
-                refine_dirty: None,
+                song_dirty: None,
                 analysis: None,
                 strength_job: None,
                 next_strength_job: 0,
@@ -536,8 +537,9 @@ impl Backend {
         self.engine.is_some()
     }
 
-    /// Starts the position emitter and preloads the separation model (runs
-    /// or reuses the device self-test, so the first separation starts
+    /// Starts the position emitter (which also flushes the debounced song
+    /// save: Refine and per-song settings) and preloads the separation model
+    /// (runs or reuses the device self-test, so the first separation starts
     /// fast).
     pub fn start_background(self: &Arc<Self>) {
         let weak = Arc::downgrade(self);
@@ -547,8 +549,9 @@ impl Backend {
             loop {
                 std::thread::sleep(Duration::from_millis(33));
                 let Some(b) = weak.upgrade() else { break };
-                b.flush_refine_save(false);
-                let Some(e) = &b.engine else { break };
+                b.flush_song_save(false);
+                // Without an engine the thread stays alive for the flush.
+                let Some(e) = &b.engine else { continue };
                 let analysis = {
                     let st = lock(&b.st);
                     if st.song.is_none() {
@@ -656,6 +659,26 @@ impl Backend {
         }
     }
 
+    /// Changes the saved settings with `f` and writes the file. The lock is
+    /// held across the change and the (small, atomic) write, so concurrent
+    /// setters cannot lose each other's change. With `save` false only
+    /// memory changes.
+    fn update_settings(
+        &self,
+        save: bool,
+        f: impl FnOnce(&mut AppSettings),
+    ) -> Result<AppSettings, String> {
+        let mut cur = lock(&self.app_settings);
+        let mut new = cur.clone();
+        f(&mut new);
+        if save {
+            new.save(&self.cfg.data_dir)
+                .map_err(|e| format!("Cannot save settings: {e}"))?;
+        }
+        *cur = new.clone();
+        Ok(new)
+    }
+
     /// Saves the settings (null = default) and returns the new effective
     /// settings. Does not re-separate anything by itself.
     pub fn set_app_settings(&self, update: AppSettingsUpdate) -> Result<AppSettingsInfo, String> {
@@ -664,15 +687,11 @@ impl Backend {
                 return Err(format!("Unknown model {id}"));
             }
         }
-        let new = AppSettings {
-            model_id: update.model_id,
-            quality: update.quality,
-            ..lock(&self.app_settings).clone()
-        };
-        new.save(&self.cfg.data_dir)
-            .map_err(|e| format!("Cannot save settings: {e}"))?;
+        let new = self.update_settings(true, |s| {
+            s.model_id = update.model_id;
+            s.quality = update.quality;
+        })?;
         log!("settings saved: {new:?}");
-        *lock(&self.app_settings) = new;
         Ok(self.app_settings())
     }
 
@@ -682,28 +701,16 @@ impl Backend {
         if !settings::THEMES.contains(&theme) {
             return Err(format!("Unknown theme {theme}"));
         }
-        let new = AppSettings {
-            theme: Some(theme.to_string()),
-            ..lock(&self.app_settings).clone()
-        };
-        new.save(&self.cfg.data_dir)
-            .map_err(|e| format!("Cannot save settings: {e}"))?;
+        self.update_settings(true, |s| s.theme = Some(theme.to_string()))?;
         log!("theme saved: {theme}");
-        *lock(&self.app_settings) = new;
         Ok(self.app_settings())
     }
 
     /// Saves "Count in to where the music starts" with the app settings and
     /// applies it to playback at once.
     pub fn set_count_in_to_music_start(&self, on: bool) -> Result<AppSettingsInfo, String> {
-        let new = AppSettings {
-            count_in_to_music_start: Some(on),
-            ..lock(&self.app_settings).clone()
-        };
-        new.save(&self.cfg.data_dir)
-            .map_err(|e| format!("Cannot save settings: {e}"))?;
+        self.update_settings(true, |s| s.count_in_to_music_start = Some(on))?;
         log!("count in to where the music starts: {on}");
-        *lock(&self.app_settings) = new;
         self.apply_click(&lock(&self.st));
         Ok(self.app_settings())
     }
@@ -711,14 +718,8 @@ impl Backend {
     /// Saves the format of newly written stems with the app settings.
     /// Existing stems keep their format; they are still read.
     pub fn set_stem_format(&self, format: StemFormat) -> Result<AppSettingsInfo, String> {
-        let new = AppSettings {
-            stem_format: Some(format),
-            ..lock(&self.app_settings).clone()
-        };
-        new.save(&self.cfg.data_dir)
-            .map_err(|e| format!("Cannot save settings: {e}"))?;
+        self.update_settings(true, |s| s.stem_format = Some(format))?;
         log!("stem format: {format:?}");
-        *lock(&self.app_settings) = new;
         Ok(self.app_settings())
     }
 
@@ -729,14 +730,8 @@ impl Backend {
             return Err(format!("Invalid click volume {volume}"));
         }
         let volume = volume.clamp(0.0, 1.0);
-        let new = AppSettings {
-            click_volume: Some(volume),
-            ..lock(&self.app_settings).clone()
-        };
-        new.save(&self.cfg.data_dir)
-            .map_err(|e| format!("Cannot save settings: {e}"))?;
+        self.update_settings(true, |s| s.click_volume = Some(volume))?;
         log!("click volume: {volume:.2}");
-        *lock(&self.app_settings) = new;
         let mut st = lock(&self.st);
         st.click.volume = volume;
         self.apply_click(&st);
@@ -753,16 +748,10 @@ impl Backend {
         if let Some(e) = &self.engine {
             e.set_master_volume(volume);
         }
-        let new = AppSettings {
-            master_volume: Some(volume),
-            ..lock(&self.app_settings).clone()
-        };
+        self.update_settings(save, |s| s.master_volume = Some(volume))?;
         if save {
-            new.save(&self.cfg.data_dir)
-                .map_err(|e| format!("Cannot save settings: {e}"))?;
             log!("master volume: {volume:.2}");
         }
-        *lock(&self.app_settings) = new;
         Ok(self.app_settings())
     }
 
@@ -949,7 +938,7 @@ impl Backend {
                 .ok_or_else(|| format!("File not found: {path}"))?
         };
         // Stop what was going on.
-        self.flush_refine_save(true);
+        self.flush_song_save(true);
         {
             let mut st = lock(&self.st);
             self.cancel_separation_locked(&mut st);
@@ -1195,7 +1184,7 @@ impl Backend {
     }
 
     pub fn close_song(&self) {
-        self.flush_refine_save(true);
+        self.flush_song_save(true);
         let mut st = lock(&self.st);
         self.cancel_separation_locked(&mut st);
         self.cancel_strength_locked(&mut st);
@@ -1288,6 +1277,9 @@ impl Backend {
         Ok(freed)
     }
 
+    /// Stores the per-song UI settings. For the open song they are kept in
+    /// memory and written like Refine (shortly after the last change, or on
+    /// song switch, close and exit), so the UI can send every change.
     pub fn save_song_settings(
         &self,
         song_id: &str,
@@ -1296,7 +1288,9 @@ impl Backend {
         {
             let mut st = lock(&self.st);
             if let Some(s) = st.song.as_mut().filter(|s| s.meta.song_id == song_id) {
-                s.meta.settings = Some(settings.clone());
+                s.meta.settings = Some(settings);
+                st.song_dirty = Some((song_id.to_string(), Instant::now()));
+                return Ok(());
             }
         }
         match self
@@ -1590,7 +1584,7 @@ impl Backend {
             .library
             .write_stems(song_id, &dir, RATE, &views, format)
             .map_err(|e| format!("Cannot write stems: {e}"))?;
-        // Keep a copy of the original next to the stems (P1 backing track
+        // Keep a copy of the original next to the stems (the backing track works
         // even if the source file moves later): the source file itself when
         // it is lossy (exact and small), else FLAC.
         let meta = self.library.load(song_id).ok().flatten();
@@ -2113,7 +2107,7 @@ impl Backend {
         // Refine (with the exception following the switch) and gains: an
         // exception on an off row makes it audible, and back.
         self.apply_gains(&st);
-        st.refine_dirty = Some((song_id, Instant::now()));
+        st.song_dirty = Some((song_id, Instant::now()));
         Ok(())
     }
 
@@ -2126,26 +2120,35 @@ impl Backend {
         }
     }
 
-    /// Writes pending refine settings to `song.json` (after
-    /// [`REFINE_SAVE_DELAY`] of no changes, or now with `force`).
-    fn flush_refine_save(&self, force: bool) {
-        let (song_id, refine) = {
+    /// Writes pending refine and per-song settings to `song.json` (after
+    /// [`SONG_SAVE_DELAY`] of no changes, or now with `force`: song switch,
+    /// close and app exit).
+    pub fn flush_song_save(&self, force: bool) {
+        let (song_id, refine, settings) = {
             let mut st = lock(&self.st);
-            match &st.refine_dirty {
-                Some((_, t)) if force || t.elapsed() >= REFINE_SAVE_DELAY => {}
+            match &st.song_dirty {
+                Some((_, t)) if force || t.elapsed() >= SONG_SAVE_DELAY => {}
                 _ => return,
             }
-            let Some((id, _)) = st.refine_dirty.take() else {
+            let Some((id, _)) = st.song_dirty.take() else {
                 return;
             };
             let refine = st.refine.clone();
+            let mut settings = None;
             if let Some(s) = st.song.as_mut().filter(|s| s.meta.song_id == id) {
                 s.meta.refine = refine.clone();
+                settings = s.meta.settings.clone();
             }
-            (id, refine)
+            (id, refine, settings)
         };
-        if let Err(e) = self.library.update(&song_id, |m| m.refine = refine) {
-            log!("cannot save refine settings of {song_id}: {e}");
+        let saved = self.library.update(&song_id, |m| {
+            m.refine = refine;
+            if settings.is_some() {
+                m.settings = settings;
+            }
+        });
+        if let Err(e) = saved {
+            log!("cannot save settings of {song_id}: {e}");
         }
     }
 
@@ -2354,8 +2357,9 @@ impl Backend {
     }
 
     /// Autotest helper, unstretched, for checking an export of the stems
-    /// `on`: the P1 backing track (original minus the other stems) and the
-    /// plain sum of `on`. `None` without stems or original.
+    /// `on`: the backing track built from the original (original minus the
+    /// other stems) and the plain sum of `on`. `None` without stems or
+    /// original.
     #[cfg(debug_assertions)]
     pub fn debug_mix_references(&self, on: &[&str]) -> Option<[[Vec<f32>; 2]; 2]> {
         let st = lock(&self.st);
@@ -2391,8 +2395,8 @@ impl Backend {
         self.engine.as_ref().map(|e| e.stats())
     }
 
-    /// Autotest helper, unstretched: the refined backing mix in P1 mode,
-    /// computed offline. `rows` are the heard rows (gain 1) with their on
+    /// Autotest helper, unstretched: the refined backing mix built from the
+    /// original, computed offline. `rows` are the heard rows (gain 1) with their on
     /// switch; every other stem is silent:
     /// `original + Σ_rows refine(stem, switch) − Σ_all stem`.
     #[cfg(debug_assertions)]
@@ -2561,6 +2565,62 @@ mod tests {
             beat_device: DevicePref::Cpu,
         };
         (Backend::new(cfg, None, sink).unwrap(), events)
+    }
+
+    #[test]
+    fn concurrent_setters_keep_every_change() {
+        let (b, _) = test_backend("settings-race");
+        std::fs::create_dir_all(b.data_dir()).unwrap();
+        let go = Arc::new(std::sync::Barrier::new(5));
+        let setters: [fn(&Backend); 5] = [
+            |b| drop(b.set_theme("valve").unwrap()),
+            |b| drop(b.set_click_volume(0.25).unwrap()),
+            |b| drop(b.set_stem_format(StemFormat::Flac).unwrap()),
+            |b| drop(b.set_count_in_to_music_start(false).unwrap()),
+            |b| drop(b.set_master_volume(0.5, true).unwrap()),
+        ];
+        let threads: Vec<_> = setters
+            .into_iter()
+            .map(|f| {
+                let (b, go) = (b.clone(), go.clone());
+                std::thread::spawn(move || {
+                    go.wait();
+                    f(&b);
+                })
+            })
+            .collect();
+        for t in threads {
+            t.join().unwrap();
+        }
+        let saved = AppSettings::load(b.data_dir()).0;
+        assert_eq!(saved.theme.as_deref(), Some("valve"));
+        assert_eq!(saved.click_volume, Some(0.25));
+        assert_eq!(saved.stem_format, Some(StemFormat::Flac));
+        assert_eq!(saved.count_in_to_music_start, Some(false));
+        assert_eq!(saved.master_volume, Some(0.5));
+    }
+
+    #[test]
+    fn song_settings_are_saved_later_without_an_engine() {
+        let (b, _) = test_backend("song-save");
+        let (id, wav) = song_with_stems(&b);
+        b.open_song(wav.to_str().unwrap()).unwrap();
+        b.start_background();
+        let saved = |b: &Backend| b.library.load(&id).unwrap().unwrap().settings;
+        let v = serde_json::json!({"version": 1, "count_in_beats": 4});
+        b.save_song_settings(&id, v.clone()).unwrap();
+        assert_ne!(saved(&b), Some(v.clone()));
+        // The position thread writes it after the delay, with no audio engine.
+        let t0 = Instant::now();
+        while saved(&b).as_ref() != Some(&v) && t0.elapsed() < Duration::from_secs(10) {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(saved(&b), Some(v));
+        // A forced flush (song switch, close, app exit) writes at once.
+        let w = serde_json::json!({"version": 1, "count_in_beats": 2});
+        b.save_song_settings(&id, w.clone()).unwrap();
+        b.flush_song_save(true);
+        assert_eq!(saved(&b), Some(w));
     }
 
     #[test]
@@ -2860,7 +2920,7 @@ mod tests {
         assert!(b.set_refine("banjo", left).is_err());
         b.set_refine("guitar", left).unwrap();
         b.set_refine("bass", RefineParams::default()).unwrap();
-        b.flush_refine_save(true);
+        b.flush_song_save(true);
         let again = b.open_song(wav.to_str().unwrap()).unwrap();
         assert_eq!(again.refine.len(), 1);
         assert_eq!(again.refine["guitar"], left);

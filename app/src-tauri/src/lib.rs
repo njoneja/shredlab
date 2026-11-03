@@ -215,11 +215,23 @@ pub fn run() {
             commands::set_refine_analysis,
             commands::set_strength,
         ])
-        .run(tauri::generate_context!());
-    if let Err(e) = result {
-        log!("fatal: {e}");
-        std::process::exit(1);
-    }
+        .build(tauri::generate_context!());
+    let app = match result {
+        Ok(app) => app,
+        Err(e) => {
+            log!("fatal: {e}");
+            std::process::exit(1);
+        }
+    };
+    app.run(|handle, event| {
+        // A Refine or per-song settings change made just before quitting
+        // is still waiting for its debounced save.
+        if let tauri::RunEvent::Exit = event {
+            if let Some(b) = handle.try_state::<Arc<Backend>>() {
+                b.flush_song_save(true);
+            }
+        }
+    });
 }
 
 #[cfg(test)]
