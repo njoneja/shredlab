@@ -65,8 +65,8 @@
       </button>
       {#if settingsOpen}<SettingsPopover onclose={() => (settingsOpen = false)} />{/if}
     </div>
-    <button class="btn ghost icon-only" onclick={onhelp} title="Keyboard shortcuts" aria-label="Keyboard shortcuts">
-      <Icon name="keyboard" />
+    <button class="btn ghost icon-only" onclick={onhelp} title="Help &amp; shortcuts" aria-label="Help and shortcuts">
+      <Icon name="help" />
     </button>
     <OpenMenu />
     {#if app.song}

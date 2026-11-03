@@ -4,7 +4,7 @@ The basics explain themselves: open a song, wait a few seconds while it is
 split into stems (vocals, guitar, bass, drums, keys, other), then switch
 stems on and off and press play. This page covers the parts that aren't
 obvious. The same text, shorter, is in the app under **Help & shortcuts**
-(the keyboard button in the header).
+(the question-mark button in the header).
 
 ## Practice a part
 
