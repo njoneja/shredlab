@@ -4,24 +4,34 @@ ShredLab is a desktop practice and transcription tool for musicians.
 It separates a song into instruments (vocals, drums, bass, guitar, piano,
 other) on your own machine, so you can play along with an instrument
 removed or listen to one by itself, with speed change without pitch change,
-transposition, A–B loops and a click track with count-in. It is built with Tauri 2 and a Rust core, runs separation models with
-ONNX Runtime (DirectML / CoreML / CPU), and targets Windows and macOS.
+transposition, A–B loops and a click track with count-in. It is built with
+Tauri 2 and a Rust core, runs separation models with ONNX Runtime
+(DirectML / CoreML / CPU), and targets Windows and macOS.
+
+## Download
+
+Installers for the latest version are on the
+[releases page](https://github.com/njoneja/shredlab/releases/latest):
+
+- **Windows 10/11 (x64):** `ShredLab_<version>_x64-setup.exe` (or the `.msi`)
+- **macOS 14+ (Apple Silicon):** `ShredLab_<version>_aarch64.dmg`
+
+The installers are not signed yet, so the first launch shows a warning.
+On Windows, choose More info, then Run anyway. On macOS, open the app once,
+then go to System Settings > Privacy & Security and choose Open Anyway.
+
+How to use it: [docs/HELP.md](docs/HELP.md). What's planned:
+[ROADMAP.md](ROADMAP.md).
 
 ![ShredLab: waveform with bar numbers and an A–B loop, six stem rows with on/off switch, Refine, solo and volume, the Refine panel for guitar (stereo exception and EQ), and the transport with click, count-in, play, A–B loop, speed and pitch](docs/images/screenshot.webp)
 
-**Download:** unsigned installers for Windows and macOS (Apple Silicon) are
-on the [Releases](https://github.com/njoneja/shredlab/releases) page.
+## Repository layout
 
 Status: works end to end on Windows and macOS (separate, beats, mixer,
 speed/pitch, loops, click, export). See
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for how it fits together and
 [docs/DEVELOPING.md](docs/DEVELOPING.md) for practical development notes.
-How to use it: [docs/HELP.md](docs/HELP.md). What's planned:
-[ROADMAP.md](ROADMAP.md).
-
-## Repository layout
-
-Each source directory has its own README with the details; [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) shows how they fit together.
+Each source directory has its own README with the details.
 
 | Path | What |
 |---|---|
