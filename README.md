@@ -3,8 +3,9 @@
 ShredLab is a desktop practice and transcription tool for musicians.
 It separates a song into instruments (vocals, drums, bass, guitar, piano,
 other) on your own machine, so you can play along with an instrument
-removed or listen to one by itself, with speed change without pitch change,
-transposition, A–B loops and a click track with count-in. It is built with
+removed or listen to one by itself. You can also slow songs down or speed
+them up without changing the pitch, transpose them, loop a section and play
+along with a click track and count-in. It is built with
 Tauri 2 and a Rust core, runs separation models with ONNX Runtime
 (DirectML / CoreML / CPU), and targets Windows and macOS.
 
