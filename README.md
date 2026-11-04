@@ -18,8 +18,17 @@ Installers for the latest version are on the
 - **macOS 14+ (Apple Silicon):** `ShredLab_<version>_aarch64.dmg`
 
 The installers are not signed yet, so the first launch shows a warning.
-On Windows, choose More info, then Run anyway. On macOS, open the app once,
-then go to System Settings > Privacy & Security and choose Open Anyway.
+On Windows, choose More info, then Run anyway. On macOS, drag ShredLab to
+Applications, open it once, then go to System Settings > Privacy & Security
+and choose Open Anyway.
+
+If macOS says the app "is damaged and can't be opened", it is not damaged:
+macOS shows this for unsigned apps downloaded from the internet. Move
+ShredLab to Applications, then run this once in Terminal and open it again:
+
+```
+xattr -dr com.apple.quarantine /Applications/ShredLab.app
+```
 
 How to use it: [docs/HELP.md](docs/HELP.md). What's planned:
 [ROADMAP.md](ROADMAP.md).
@@ -146,7 +155,9 @@ tauri dev` (or `pnpm dev` with the same variables) prints `AUTOTEST PASS`. Other
   `app/src-tauri/tauri.bundle.windows.conf.json`, which `pnpm build-installers` uses
   only on Windows.
 - Model setup needs macOS 14+ on Apple Silicon (onnxruntime 1.24 wheels).
-- The app is unsigned and not notarized; Gatekeeper will complain.
+- The app is ad-hoc signed (`bundle.macOS.signingIdentity` is `-` in
+  `tauri.conf.json`) but not notarized, so Gatekeeper warns on first launch.
+  Without the ad-hoc signature, macOS reports a downloaded app as damaged.
 
 ## Developer notes
 
