@@ -33,9 +33,10 @@ jobs:
           - os: macos-latest
             bundles: app,dmg
             artifact_path: target/release/bundle/dmg/*.dmg
-          # The oldest supported Ubuntu with WebKitGTK 4.1: binaries built
-          # against an older glibc run on more distributions.
-          - os: ubuntu-22.04
+          # Sets the minimum glibc of the Linux binaries (2.39). Not older:
+          # pyke's prebuilt static ONNX Runtime needs glibc 2.38+ and the
+          # GCC 13 libstdc++, so it fails to link on 22.04.
+          - os: ubuntu-24.04
             bundles: deb,rpm,appimage
             artifact_path: |
               target/release/bundle/deb/*.deb

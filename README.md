@@ -16,11 +16,12 @@ Installers for the latest version are on the
 
 - **Windows 10/11 (x64):** `ShredLab_<version>_x64-setup.exe` (or the `.msi`)
 - **macOS 14+ (Apple Silicon):** `ShredLab_<version>_aarch64.dmg`
-- **Linux (x86_64):** `ShredLab_<version>_amd64.AppImage`,
-  `ShredLab_<version>_amd64.deb` (Debian, Ubuntu) or
-  `ShredLab-<version>-1.x86_64.rpm` (Fedora, openSUSE). Separation runs on
-  the CPU on Linux; there is no GPU support there yet. The AppImage needs
-  FUSE 2 (`libfuse2t64` on Ubuntu 24.04 and later, `libfuse2` before).
+- **Linux (x86_64, glibc 2.39+: Ubuntu 24.04+, Debian 13+, Fedora 40+):**
+  `ShredLab_<version>_amd64.AppImage`, `ShredLab_<version>_amd64.deb`
+  (Debian, Ubuntu) or `ShredLab-<version>-1.x86_64.rpm` (Fedora, openSUSE).
+  Separation runs on the CPU on Linux; there is no GPU support there yet.
+  The AppImage needs FUSE 2 (`libfuse2t64` on Debian and Ubuntu,
+  `fuse-libs` on Fedora).
 
 The installers are not signed yet, so the first launch shows a warning.
 On Windows, choose More info, then Run anyway. On macOS, drag ShredLab to
@@ -168,7 +169,8 @@ tauri dev` (or `pnpm dev` with the same variables) prints `AUTOTEST PASS`. Other
 
 ### Linux notes
 
-- Build packages on Debian/Ubuntu (Ubuntu 22.04 or later):
+- Build packages on Debian/Ubuntu (Ubuntu 24.04 or later; the prebuilt
+  ONNX Runtime needs glibc 2.38+ and GCC 13's libstdc++ to link):
   `sudo apt install build-essential curl wget file patchelf libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libxdo-dev libssl-dev libasound2-dev`.
 - No GPU execution provider is compiled in by default, so separation runs
   on the CPU. The `cuda` feature of `shredlab-separation` adds NVIDIA CUDA
