@@ -7,7 +7,7 @@ removed or listen to one by itself. You can also slow songs down or speed
 them up without changing the pitch, transpose them, loop a section and play
 along with a click track and count-in. It is built with
 Tauri 2 and a Rust core, runs separation models with ONNX Runtime
-(DirectML / CoreML / CPU), and targets Windows and macOS.
+(DirectML / CoreML / CPU), and targets Windows, macOS and Linux.
 
 ## Download
 
@@ -16,6 +16,11 @@ Installers for the latest version are on the
 
 - **Windows 10/11 (x64):** `ShredLab_<version>_x64-setup.exe` (or the `.msi`)
 - **macOS 14+ (Apple Silicon):** `ShredLab_<version>_aarch64.dmg`
+- **Linux (x86_64):** `ShredLab_<version>_amd64.AppImage`,
+  `ShredLab_<version>_amd64.deb` (Debian, Ubuntu) or
+  `ShredLab-<version>-1.x86_64.rpm` (Fedora, openSUSE). Separation runs on
+  the CPU on Linux; there is no GPU support there yet. The AppImage needs
+  FUSE 2 (`libfuse2t64` on Ubuntu 24.04 and later, `libfuse2` before).
 
 The installers are not signed yet, so the first launch shows a warning.
 On Windows, choose More info, then Run anyway. On macOS, drag ShredLab to
@@ -38,7 +43,8 @@ How to use it: [docs/HELP.md](docs/HELP.md). What's planned:
 ## Repository layout
 
 Status: works end to end on Windows and macOS (separate, beats, mixer,
-speed/pitch, loops, click, export). See
+speed/pitch, loops, click, export). Linux builds and runs with CPU
+separation; it has had less testing. See
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for how it fits together and
 [docs/DEVELOPING.md](docs/DEVELOPING.md) for practical development notes.
 Each source directory has its own README with the details.
@@ -60,8 +66,9 @@ Each source directory has its own README with the details.
 
 ## Building from scratch
 
-Tested on Windows 11 x64 and macOS (Apple Silicon); see
-[macOS notes](#macos-notes) for the differences on a Mac.
+Tested on Windows 11 x64 and macOS (Apple Silicon), and built on Ubuntu;
+see [macOS notes](#macos-notes) and [Linux notes](#linux-notes) for the
+differences.
 
 ### 1. Prerequisites
 
@@ -120,7 +127,7 @@ From the repository root:
 ```sh
 pnpm dev                # run the app (debug, hot reload)
 pnpm build-release      # release exe: target/release/shredlab(.exe)
-pnpm build-installers   # installers: target/release/bundle/ (NSIS + MSI / .app + .dmg)
+pnpm build-installers   # installers: target/release/bundle/ (NSIS + MSI / .app + .dmg / deb + rpm + AppImage)
 ```
 
 `pnpm build-installers` builds the frontend and the release exe from scratch
@@ -158,6 +165,17 @@ tauri dev` (or `pnpm dev` with the same variables) prints `AUTOTEST PASS`. Other
 - The app is ad-hoc signed (`bundle.macOS.signingIdentity` is `-` in
   `tauri.conf.json`) but not notarized, so Gatekeeper warns on first launch.
   Without the ad-hoc signature, macOS reports a downloaded app as damaged.
+
+### Linux notes
+
+- Build packages on Debian/Ubuntu (Ubuntu 22.04 or later):
+  `sudo apt install build-essential curl wget file patchelf libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libxdo-dev libssl-dev libasound2-dev`.
+- No GPU execution provider is compiled in by default, so separation runs
+  on the CPU. The `cuda` feature of `shredlab-separation` adds NVIDIA CUDA
+  (untested, and it needs CUDA and cuDNN installed).
+- Playback goes through ALSA, which on most desktops forwards to PulseAudio
+  or PipeWire. The `.deb` and `.rpm` declare the ALSA library as a
+  dependency.
 
 ## Developer notes
 

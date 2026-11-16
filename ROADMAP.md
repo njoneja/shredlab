@@ -83,4 +83,4 @@ one are out of scope.
 
 ### Platforms
 
-- Linux.
+- GPU separation on Linux.

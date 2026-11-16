@@ -147,7 +147,9 @@ monitor's work area. Installers come from `app/scripts/bundle.mjs`
 (`pnpm build-installers` at the root), which regenerates the license file,
 builds the frontend and the release exe, stages a real copy of
 `DirectML.dll` in `target/bundle-res`, then runs `tauri build` with
-`tauri.bundle.windows.conf.json` on Windows only. The crate is `rlib` only,
+`tauri.bundle.windows.conf.json` on Windows only. On Linux, `bundle.linux`
+in `tauri.conf.json` adds the ALSA library to the `.deb` and `.rpm`
+dependencies, because Tauri lists only its own. The crate is `rlib` only,
 so no DLL of the app itself lands in the installers. Icons are made with
 `tools/make_icon.py` and `pnpm --dir app tauri icon src-tauri/icons/app-icon.svg`.
 
