@@ -94,7 +94,10 @@ venv. Six steps, each skipped when its output already exists and checks out:
 2. Checkpoints, sha256-checked: `5c90dfd2-34c22ccb.th` (Demucs v4
    htdemucs_6s, Meta, MIT, from dl.fbaipublicfiles.com) and
    `beat_this/beat_this-final0.ckpt` (Beat This! final0, CPJKU, MIT, from
-   cloud.cp.jku.at).
+   cloud.cp.jku.at). A checkpoint with a `mirror` URL (Beat This!) is
+   fetched from the project's `checkpoints` GitHub release first, with the
+   original host as the fallback; either source must match the pinned
+   sha256.
 3. `onnx/htdemucs_6s_own.onnx` via `spikes/onnx_demucs_own.py` `export()`.
 4. `onnx/beat_this_final0.onnx` via `spikes/onnx_beat_this.py` `export()`.
 5. `registry/htdemucs_6s/` via `registry.py build-htdemucs`.

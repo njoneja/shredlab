@@ -54,6 +54,11 @@ STATE_FILE = ".setup_models.json"
 # Bump when the export recipe changes so existing exports are rebuilt.
 EXPORT_VERSION = 1
 
+# Unchanged copies on the project's `checkpoints` GitHub release, tried
+# before the original host, so CI builds don't download from the authors'
+# servers on every run and an outage there doesn't break a build.
+MIRROR = "https://github.com/njoneja/shredlab/releases/download/checkpoints/"
+
 CHECKPOINTS = [
     {
         "key": "demucs",
@@ -70,6 +75,7 @@ CHECKPOINTS = [
         "name": "Beat This! final0 weights (CPJKU, MIT)",
         # CHECKPOINT_URL from beat_this/inference.py (beat-this 1.1.0).
         "url": "https://cloud.cp.jku.at/public.php/dav/files/7ik4RrBKTS273gp/final0.ckpt",
+        "mirror": MIRROR + "beat_this-final0.ckpt",
         "rel": "beat_this/beat_this-final0.ckpt",
         # Not published upstream; recorded from the download.
         "sha256": "8c328b45f59d8dd3dff219253ff6a8d6482be57d0133a29140e2febbf8eb8331",
@@ -258,12 +264,25 @@ def fetch_checkpoints(out, force):
                 continue
             info("  existing file has a different sha256" if not force else "  --force: downloading again")
             move_aside(dest)
-        info(f"  downloading {ck['url']}")
-        part = download(ck["url"], dest, ck["size"])
-        got = sha256_file(part)
-        if got != ck["sha256"]:
-            fail(f"sha256 mismatch for {ck['url']}\n  expected {ck['sha256']}\n  got      {got}\n"
-                 f"  (the partial download is kept at {part})")
+        urls = [u for u in (ck.get("mirror"), ck["url"]) if u]
+        for i, url in enumerate(urls):
+            last = i == len(urls) - 1
+            info(f"  downloading {url}")
+            try:
+                part = download(url, dest, ck["size"])
+            except OSError as e:  # URLError/HTTPError, timeouts, resets
+                if last:
+                    fail(f"download failed: {url}: {e}")
+                info(f"  failed ({e}); trying the next source")
+                continue
+            got = sha256_file(part)
+            if got == ck["sha256"]:
+                break
+            msg = f"sha256 mismatch for {url}\n  expected {ck['sha256']}\n  got      {got}"
+            if last:
+                fail(f"{msg}\n  (the partial download is kept at {part})")
+            info(f"  {msg}; trying the next source")
+            part.unlink()
         part.rename(dest)
         info(f"  ok: {dest}")
     return paths
