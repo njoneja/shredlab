@@ -229,7 +229,9 @@ pub fn build_session(
 
 #[allow(unreachable_code, unused_variables)]
 fn register_gpu(b: SessionBuilder, ep: Ep, coreml_cache: Option<&Path>) -> Result<SessionBuilder> {
-    let dispatch = match ep {
+    // Annotated: on a build with no GPU provider (Linux without `cuda`) every
+    // arm but `_` is compiled out, and rustc rejects a method call on `!`.
+    let dispatch: ort::ep::ExecutionProviderDispatch = match ep {
         #[cfg(windows)]
         Ep::DirectMl => ort::ep::DirectML::default().build(),
         #[cfg(target_os = "macos")]
