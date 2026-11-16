@@ -31,11 +31,12 @@ const MIN_AHEAD_SECS: f64 = 0.025;
 const REPLY_TIMEOUT: Duration = Duration::from_millis(500);
 /// How often the producer publishes the stereo field (about 30 Hz).
 const FIELD_EVERY: Duration = Duration::from_millis(33);
-/// Paused this long, the output stream is paused too and the producer waits
-/// for commands instead of polling every millisecond (idle CPU wakeups).
-/// Short pauses keep the stream running, so Bluetooth outputs stay awake.
+/// Paused this long, the output stream is closed and the producer waits for
+/// commands instead of polling every millisecond (idle CPU wakeups); `play`
+/// opens a fresh stream. Short pauses keep the stream running, so Bluetooth
+/// outputs stay awake.
 const SUSPEND_AFTER: Duration = Duration::from_secs(5);
-/// Longest wait for a command while suspended (device checks still run).
+/// Longest wait for a command while suspended.
 const SUSPENDED_WAIT: Duration = Duration::from_millis(250);
 /// Time constant of the master volume smoothing (no zipper noise).
 const MASTER_SMOOTH_SECS: f32 = 0.01;
@@ -394,30 +395,10 @@ impl Drop for Engine {
 
 /// The open device stream plus the producer side of its ring buffer.
 struct Output {
-    stream: cpal::Stream,
+    /// Held only to keep the device open; dropping it closes the stream.
+    _stream: cpal::Stream,
     feeder: Feeder,
     device_name: String,
-    suspended: bool,
-}
-
-impl Output {
-    /// Pauses or resumes the device stream. A failed resume flags a stream
-    /// error so the producer reopens the device.
-    fn set_suspended(&mut self, suspend: bool, shared: &Shared) {
-        if suspend == self.suspended {
-            return;
-        }
-        let ok = if suspend {
-            self.stream.pause().is_ok()
-        } else {
-            self.stream.play().is_ok()
-        };
-        match ok {
-            true => self.suspended = suspend,
-            false if !suspend => shared.stream_error.store(true, Ordering::Relaxed),
-            false => {}
-        }
-    }
 }
 
 /// Producer side of the ring: renders the pipeline, resamples to the device
@@ -481,8 +462,7 @@ fn open_output(shared: &Arc<Shared>) -> Result<Output, AudioError> {
     }
     .map_err(|e| AudioError::Device(format!("{device_name}: {e}")))?;
     Ok(Output {
-        stream,
-        suspended: false,
+        _stream: stream,
         feeder: Feeder {
             producer,
             rate: config.sample_rate.0,
@@ -732,6 +712,8 @@ fn producer_thread(
     let mut field = [0.0f32; FIELD_LEN];
     let mut last_field = Instant::now();
     let mut idle_since: Option<Instant> = None;
+    // The stream was closed for idleness (not lost): reopen at once on wake.
+    let mut closed_idle = false;
     let mut next: Option<Cmd> = None;
     'main: loop {
         while let Some(cmd) = next.take().or_else(|| rx.try_recv().ok()) {
@@ -772,27 +754,35 @@ fn producer_thread(
             wraps = w;
             let _ = ev_tx.send(on_wrap.clone());
         }
-        // Device lost or default device changed: reopen (at most every 500 ms).
-        let lost = shared.stream_error.load(Ordering::Relaxed) || out.is_none();
-        let changed = shared.device_changed.swap(false, Ordering::Relaxed);
-        if (lost || changed) && last_reopen.elapsed() > Duration::from_millis(500) {
-            last_reopen = Instant::now();
-            drop(out.take()); // drop the old stream first
-            out = open_output(&shared).ok();
-        }
         if pipe.is_playing() {
             idle_since = None;
         } else {
             idle_since.get_or_insert_with(Instant::now);
         }
         let suspend = idle_since.is_some_and(|t| t.elapsed() >= SUSPEND_AFTER);
-        if let Some(o) = &mut out {
-            o.set_suspended(suspend, &shared);
-            if !o.suspended {
+        if suspend {
+            // Idle: close the stream rather than pause it. Resuming a paused
+            // stream hung PulseAudio (ALSA's pulse plugin under WSLg) for
+            // every client; a fresh stream works on every host.
+            if out.take().is_some() {
+                closed_idle = true;
+            }
+        } else {
+            // Waking from idle, device lost, or default device changed:
+            // (re)open. Reopening after a failure is limited to every 500 ms.
+            let lost = shared.stream_error.load(Ordering::Relaxed) || out.is_none();
+            let changed = shared.device_changed.swap(false, Ordering::Relaxed);
+            let waking = std::mem::take(&mut closed_idle);
+            if waking || ((lost || changed) && last_reopen.elapsed() > Duration::from_millis(500)) {
+                last_reopen = Instant::now();
+                drop(out.take()); // drop the old stream first
+                out = open_output(&shared).ok();
+            }
+            if let Some(o) = &mut out {
                 o.feeder.fill(&mut pipe, &shared, &mut bufs);
             }
         }
-        if out.as_ref().is_some_and(|o| o.suspended) {
+        if suspend {
             match rx.recv_timeout(SUSPENDED_WAIT) {
                 Ok(cmd) => next = Some(cmd),
                 Err(mpsc::RecvTimeoutError::Timeout) => {}

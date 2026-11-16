@@ -55,8 +55,9 @@ handles control commands from a channel and renders the pipeline in
 256-frame blocks until the ring holds about 25 ms (or twice the largest
 callback plus a block), applying the master volume (smoothed) and a rubato
 sinc resampler when the device rate differs from the song rate. After 5 s
-paused it pauses the stream and blocks on the channel; shorter pauses keep
-the stream running so Bluetooth outputs stay awake. An events thread runs
+paused it closes the stream and blocks on the channel, and the next `play`
+opens a new one; shorter pauses keep the stream running so Bluetooth
+outputs stay awake. An events thread runs
 the end and loop-wrap callbacks (they may call back into the `Engine`), and
 a watcher polls the default device every 2 s so the producer can reopen it.
 
@@ -196,6 +197,9 @@ snapped to a standard rate), removing the partial file on error.
   `build.rs` always compiles it at `-O3`; unoptimized it is about 10 times
   slower. A Signalsmith update can change its latencies;
   `stretched_output_is_aligned_with_reported_position` checks alignment.
+- The idle stream is closed, never paused with `Stream::pause`: resuming a
+  paused ALSA stream through the PulseAudio plugin under WSLg hung the
+  PulseAudio server for every client.
 - The master volume is playback only; exports ignore it.
 - flacenc writes the last block's size as the minimum block size, which
   symphonia rejects; `fix_streaminfo_min_block` patches it (the same fix
