@@ -536,8 +536,8 @@ impl PanMask {
                 self.idle_frames = 0;
             }
         }
-        for c in 0..2 {
-            self.hist[c].copy_within(hop.., 0);
+        for h in &mut self.hist {
+            h.copy_within(hop.., 0);
         }
     }
 
