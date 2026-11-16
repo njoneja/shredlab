@@ -28,6 +28,20 @@ On Windows, choose More info, then Run anyway. On macOS, drag ShredLab to
 Applications, open it once, then go to System Settings > Privacy & Security
 and choose Open Anyway.
 
+On Linux, install the package from the folder you downloaded it to:
+
+```
+sudo apt install ./ShredLab_<version>_amd64.deb       # Debian, Ubuntu
+sudo dnf install ./ShredLab-<version>-1.x86_64.rpm    # Fedora
+```
+
+Or make the AppImage executable and run it:
+
+```
+chmod +x ShredLab_<version>_amd64.AppImage
+./ShredLab_<version>_amd64.AppImage
+```
+
 If macOS says the app "is damaged and can't be opened", it is not damaged:
 macOS shows this for unsigned apps downloaded from the internet. Move
 ShredLab to Applications, then run this once in Terminal and open it again:
@@ -44,8 +58,9 @@ How to use it: [docs/HELP.md](docs/HELP.md). What's planned:
 ## Repository layout
 
 Status: works end to end on Windows and macOS (separate, beats, mixer,
-speed/pitch, loops, click, export). Linux builds and runs with CPU
-separation; it has had less testing. See
+speed/pitch, loops, click, export). On Linux it runs end to end with CPU
+separation on Ubuntu (26.04 desktop and WSL2); other distributions are
+untested. See
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for how it fits together and
 [docs/DEVELOPING.md](docs/DEVELOPING.md) for practical development notes.
 Each source directory has its own README with the details.
@@ -67,7 +82,7 @@ Each source directory has its own README with the details.
 
 ## Building from scratch
 
-Tested on Windows 11 x64 and macOS (Apple Silicon), and built on Ubuntu;
+Tested on Windows 11 x64 and macOS (Apple Silicon), and built and tested on Ubuntu;
 see [macOS notes](#macos-notes) and [Linux notes](#linux-notes) for the
 differences.
 
