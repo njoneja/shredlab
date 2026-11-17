@@ -165,6 +165,7 @@ fn main() {
             start: 0.0,
             end: None,
             refine: vec![],
+            rate_cents: 0,
         };
         let t = Instant::now();
         let mut last = -1;

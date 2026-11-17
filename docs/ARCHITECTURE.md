@@ -93,8 +93,11 @@ memory as 16-bit integers with a per-stem scale (half the memory of f32,
 with rounding noise about 100 dB below each stem's peak); the original stays
 f32. A producer thread
 runs refine → mix → time stretch → crossfades → limiter → click → volume →
-resample and keeps a lock-free ring buffer filled; the device callback only
-pops frames. The UI's controls reach the producer over a channel.
+resample → reference tone and keeps a lock-free ring buffer filled; the
+device callback only pops frames. The resample step converts to the device
+rate and also applies the tuning's playback-rate correction (pitch and
+tempo together); the reference tone comes after it, so it stays at its
+absolute pitch. The UI's controls reach the producer over a channel.
 
 When at least half the stems are on and nothing is soloed, the backing track is built from the original mix
 minus the removed stems rather than from the sum of stems, so whatever the
@@ -103,7 +106,9 @@ model missed stays in. Refine (a per-stem stereo-window mask and EQ, DSP in
 stems from the original on an app background thread.
 
 Export runs the same mix and stretch path offline, so the file matches what
-you hear, including speed, pitch and the click track.
+you hear, including speed, pitch, the click track and the playback-rate
+correction (applied by resampling the finished file). Reference tones are
+never exported.
 
 ## Library and stem cache
 

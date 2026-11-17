@@ -9,8 +9,9 @@ what was heard, including speed, pitch, Refine and the click track.
 
 Owns the real-time engine, the mixer (including the backing track built
 from the original and the per-stem Refine chains), the Signalsmith Stretch
-wrapper, click and count-in scheduling, both limiters, the offline renderer
-and the encoders.
+wrapper, click and count-in scheduling, both limiters, the playback-rate
+correction, the reference tone voice, the offline renderer and the
+encoders.
 
 It does not decode files (the caller passes `Track`s: planar stereo, each
 channel f32 or 16-bit integers times a step, all at the song rate, 44.1 kHz
@@ -34,12 +35,14 @@ Start with `src/lib.rs` (`Track`, `Channel`, `ClickConfig`, `Position`,
 `AudioError`, re-exports), then `Engine` in `src/engine.rs` for playback or `render` in
 `src/render.rs` for export. Both drive a `Pipeline`.
 
-- `src/engine.rs`: device stream, producer thread, ring buffer, device-rate resampling, master volume, device watcher, end and loop-wrap callbacks.
+- `src/engine.rs`: device stream, producer thread, ring buffer, device-rate and rate-correction resampling, master volume, reference tone mixing, idle suspension, device watcher, end and loop-wrap callbacks.
 - `src/pipeline.rs`: transport (play, pause, seek, loop, end), count-in state machine, stretcher voice, crossfades, click mixing, per-frame `Meta`.
 - `src/mix.rs`: `Mixer`, `MixMode`, `choose_mode`: gained sum, original-based backing track, Refine chains, gain ramps, track-set crossfades.
 - `src/stretch.rs`: safe `Stretcher` over the C ABI in `cpp/stretch_wrapper.cpp`; `build.rs` compiles it against the headers in `third_party/`.
 - `src/click.rs`: click sounds and pure scheduling functions (`clicks_in_range`, `plan_count_in`, `count_in_interval`, `effective_start`).
 - `src/limiter.rs`: playback safety limiter.
+- `src/rate.rs`: rate-correction math, the shared sinc parameters and the offline resampler used by export.
+- `src/tone.rs`: `ToneSound` and the reference tone generator (Karplus-Strong pluck, filtered sawtooth drone).
 - `src/render.rs`, `src/encode.rs`: export (`render`, `RenderRequest`, `encode`, `ExportFormat`, the whole-file `limiter_gain`).
 - `tests/refine.rs`: Refine through the mixer, playback pipeline and export.
 - `examples/play.rs`: plays a folder of stem WAVs, or renders it to a file.
@@ -53,11 +56,12 @@ ring, zero-fills and counts an underrun when it runs short, and publishes
 the last frame's position and flags through atomics. A producer thread
 handles control commands from a channel and renders the pipeline in
 256-frame blocks until the ring holds about 25 ms (or twice the largest
-callback plus a block), applying the master volume (smoothed) and a rubato
-sinc resampler when the device rate differs from the song rate. After 5 s
-paused it closes the stream and blocks on the channel, and the next `play`
-opens a new one; shorter pauses keep the stream running so Bluetooth
-outputs stay awake. An events thread runs
+callback plus a block), applying the master volume (smoothed), a rubato
+sinc resampler when the device rate differs from the song rate or a rate
+correction is set, and then the reference tone. After 5 s paused with no
+tone sounding it closes the stream and blocks on the channel, and the next
+`play` or `play_tone` opens a new one; shorter pauses keep the stream
+running so Bluetooth outputs stay awake. An events thread runs
 the end and loop-wrap callbacks (they may call back into the `Engine`), and
 a watcher polls the default device every 2 s so the producer can reopen it.
 
@@ -122,6 +126,32 @@ Which part is heard (stem without the window, or the window alone) is set
 by the caller through `PanParams::invert`. `set_analysis` picks the one
 track whose stereo field is published for `Engine::take_field`.
 
+### Rate correction and reference tones
+
+`set_rate_correction(cents)` (±200, 0 = off) plays the song
+`2^(cents/1200)` times faster, pitch and tempo together, on top of the
+speed; the stretcher is not involved. It lives in the device-rate
+resampler, which is built with ratio headroom (1.13) so a new correction
+only changes its ratio, gliding over one block. The pipeline, the clicks
+and every `Meta` stay in song time; the feeder maps `Meta`, end and wrap
+events onto the resampled frames proportionally, for any ratio, so
+positions and callbacks need nothing else. When the song rate equals the
+device rate there is no resampler at 0 cents, and turning the correction
+on or off adds or removes it: one block fades out over about 4 ms (and
+stays silent for the resampler's half kernel), the switch happens, and the
+next block fades in. Export applies the same correction by resampling the
+finished render (`RenderRequest::rate_cents`).
+
+`play_tone(hz, sound)` and `stop_tone` drive one mono tone voice owned by
+the producer thread: Pluck (Karplus-Strong string with an allpass
+fractional delay, so the pitch is exact, a 4 s decay and a new pluck every
+2.5 s) or Drone (band-limited sawtooth through a one-pole lowpass at 4×f0,
+50 ms attack). It peaks at −12 dBFS and runs at the device rate, mixed
+after the resampler and scaled by the master volume, so speed, pitch and
+the rate correction never touch it and the pipeline (and so export) never
+sees it. It sounds whether or not the transport plays; a new frequency
+releases the old tone over 10 ms first, `stop_tone` releases over 30 ms.
+
 ### Click track and count-in
 
 Clicks are short synthesized sines (accent, beat, softer subdivision)
@@ -154,7 +184,8 @@ range end. The result is `round(range ÷ speed)` frames plus the count-in,
 with 8 ms fades only at cut points inside the song. With a click track or
 count-in, `render_split` keeps the clicks in a separate buffer; the music
 goes through `limiter_gain` and the clicks are added after it, as in
-playback. `encode` limits the final sum again and writes WAV 16-bit (TPDF
+playback. A rate correction then resamples the finished result (music and
+clicks), dividing its length by the rate. `encode` limits the final sum again and writes WAV 16-bit (TPDF
 dither from a fixed seed), WAV 24-bit, FLAC 24-bit or MP3 CBR (bitrate
 snapped to a standard rate), removing the partial file on error.
 
@@ -181,8 +212,15 @@ snapped to a standard rate), removing the partial file on error.
 - Bit-exact properties are tested and relied on: an unstretched unity
   render equals the input, all stems at unity in Original mode equal the
   original, identity Refine equals the plain mix, and the device path at
-  the song rate skips the resampler. The fast paths in the mixer loop
-  exist for this.
+  the song rate with no rate correction and no tone skips the resampler.
+  The fast paths in the mixer loop exist for this.
+- rubato's `SincFixedIn` output is aligned with its input (the half kernel
+  of look-ahead is the only latency, flushed at the end), and the offline
+  resampler relies on that; `offline_resample_shifts_pitch_and_length_and_keeps_alignment`
+  checks it after a rubato update.
+- The reference tone is mixed after the resampler at the device rate and
+  is not part of `Pipeline`; anything added to the tone must stay out of
+  `render`/`render_split`.
 - Playback and export share `Pipeline`, `Mixer`, `choose_mode` and the
   click code; don't special-case one side. Export needs `realtime = false`
   and no pipeline limiter (`render_split` asserts it in debug builds).
@@ -237,4 +275,7 @@ supported) to exercise the resampler.
   `Mixer` if it affects the mix). If export should honor it, add a field to
   `RenderRequest` and apply it in `render`.
 - Changing the click sounds: `ClickBank::new` and `synth` in `src/click.rs`.
+- Changing a reference tone sound: `Tone::begin` and its per-sample
+  function in `src/tone.rs`; `pluck_and_drone_are_in_tune` checks the
+  pitch.
 - Dropping MP3 export: see the LGPL note in [THIRD_PARTY.md](THIRD_PARTY.md).

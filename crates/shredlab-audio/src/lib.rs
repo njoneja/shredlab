@@ -9,15 +9,18 @@
 //! - [`render`] + [`encode`]: offline "export what you hear" (same mix and
 //!   stretch path, the whole song or a time range; click track and count-in
 //!   optional) to WAV, FLAC or MP3.
+//! - Playback-rate correction ([`Engine::set_rate_correction`],
+//!   [`RenderRequest::rate_cents`]) and reference tones
+//!   ([`Engine::play_tone`]) for tuning.
 //!
 //! # Architecture
 //!
 //! A producer thread owns the [`pipeline`] (mix → Signalsmith Stretch →
 //! crossfades → safety limiter → click → master volume → resample to the
-//! device rate) and keeps a small lock-free ring buffer ([`rtrb`]) about
-//! 30 ms ahead of the device. The cpal callback only pops frames from the
-//! ring and publishes the position through atomics: no locks or allocation
-//! in the callback. Controls go to the producer thread over a channel;
+//! device rate and by the rate correction → reference tone) and keeps a
+//! small lock-free ring buffer ([`rtrb`]) about 30 ms ahead of the device.
+//! The cpal callback only pops frames from the ring and publishes the
+//! position through atomics: no locks or allocation in the callback. Controls go to the producer thread over a channel;
 //! gain, speed and pitch changes are heard within roughly the ring latency
 //! plus the device buffer (< 60 ms).
 //!
@@ -40,17 +43,21 @@ mod engine;
 pub mod limiter;
 pub mod mix;
 pub mod pipeline;
+mod rate;
 mod render;
 pub mod stretch;
+mod tone;
 
 use std::sync::Arc;
 
 pub use encode::{encode, limiter_gain, peak, ExportFormat};
 pub use engine::{Engine, EngineStats};
 pub use mix::{choose_mode, MixMode};
+pub use rate::MAX_RATE_CENTS;
 pub use render::{render, render_range, RenderRequest, EDGE_FADE_SECS};
 /// Refine DSP types used in this crate's API (parameters, field size).
 pub use shredlab_dsp::refine::{RefineParams, FIELD_LEN};
+pub use tone::{ToneSound, TONE_MAX_HZ, TONE_MIN_HZ};
 
 /// Version of this crate, from `Cargo.toml`.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

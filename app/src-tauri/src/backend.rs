@@ -1942,6 +1942,7 @@ impl Backend {
             click,
             start: req.start_sec.filter(|s| s.is_finite()).unwrap_or(0.0),
             end: req.end_sec.filter(|e| e.is_finite()),
+            rate_cents: 0,
             // "What you hear": the refined parts as in playback, each
             // stereo exception following the exported row's switch.
             refine: if song.stems.is_some() {
