@@ -210,12 +210,6 @@
               <span class="mono hz">A = {t.reference_hz.toFixed(1)} Hz</span>
               <span class="mono cents" class:warn={tstate === "off"} class:muted={tstate !== "off"}>{formatCents(t.offset_cents)}</span>
             </div>
-            <label class="row song-in">
-              <span class="muted">Song is in</span>
-              <select class="field small" value={app.songSemitones} onchange={(e) => app.setSongSemitones(Number(e.currentTarget.value))}>
-                {#each semitoneOptions as n (n)}<option value={n}>{songTuningName(n)}</option>{/each}
-              </select>
-            </label>
             {#if curve && drift}
               <svg class="curve" width="100%" height="34" viewBox="0 0 220 34" preserveAspectRatio="none" role="img" aria-label="Tuning drifts {drift.kind === 'from' ? 'from' : 'between'} {drift.a} {drift.kind === 'from' ? 'to' : 'and'} {drift.b} cents over the song">
                 <line x1="0" y1={curve.avg} x2="220" y2={curve.avg} class="avg" vector-effect="non-scaling-stroke" />
@@ -231,6 +225,21 @@
                 {Math.abs(Math.round(t.offset_cents))} cents {t.offset_cents < 0 ? "flat" : "sharp"} of A440, steady through the song.
               {/if}
             </p>
+            <label class="row song-in">
+              <span class="muted">Song is in</span>
+              <select class="field small" value={app.songSemitones} onchange={(e) => app.setSongSemitones(Number(e.currentTarget.value))}>
+                {#each semitoneOptions as n (n)}<option value={n}>{songTuningName(n)}</option>{/each}
+              </select>
+            </label>
+            {#if !app.matched}
+              <p class="muted song-in-hint">
+                {#if app.songSemitones === 0}
+                  The cents are measured, the tuning isn't. If the song is in a lowered tuning (Eb, D…), set it here before shifting.
+                {:else}
+                  The cents are measured; the tuning is your choice. Check it before shifting.
+                {/if}
+              </p>
+            {/if}
 
             {#if app.matched && app.match}
               <p class="muted">
@@ -547,6 +556,9 @@
   }
   .song-in {
     font-size: 12.5px;
+  }
+  .song-in-hint {
+    margin-top: -4px;
   }
   .field {
     height: 28px;

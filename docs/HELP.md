@@ -101,7 +101,9 @@ blue when the song has been shifted to match your tuning. Click it, or
 press `T`, to open the Tuning panel.
 
 - **Song** shows the measured reference (for example A435.4, 18 cents
-  flat). If the song is in a lowered tuning, set it under **Song is in**.
+  flat). Only the cents are measured: a song in Eb standard sounds in
+  tune to the measurement, so if the song is in a lowered tuning, set it
+  under **Song is in** before shifting.
 - **My tuning** is your instrument and how it is tuned: preset, shift in
   semitones and the reference A. It is saved with each song.
 - **Shift song to my tuning** moves the song to your tuning, so you don't
