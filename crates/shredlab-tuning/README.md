@@ -105,7 +105,9 @@ cargo run --release -p shredlab-tuning --example measure_library -- <library roo
 The `measure_library` example runs the estimate on the stems of every song
 in a ShredLab library (the `library` folder in the app's data folder) and
 prints the offset, confidence, drift and segment offsets per song. Use it
-to check a change on real recordings before bumping `VERSION`.
+to check a change on real recordings before bumping `VERSION`. With
+`SHIFT_CENTS=-40,-25,10` set, it also resamples every song's stems by
+those amounts and prints the error of the measured change for each.
 
 The tests synthesize their audio (plucked notes with several partials and
 mild inharmonicity, chords, a weak-fundamental guitar voice) and need no

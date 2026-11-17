@@ -40,6 +40,22 @@ fn main() {
                 Some((kind, l.iter().zip(r).map(|(a, b)| 0.5 * (a + b)).collect()))
             })
             .collect();
+        // With SHIFT_CENTS set, measure every stem resampled by those amounts
+        // and print the measured change, and its error, next to each.
+        if let Ok(list) = std::env::var("SHIFT_CENTS") {
+            let base = estimate(&mono, info.sample_rate);
+            let mut line = format!("{:32} base {:+6.1}", meta.title, base);
+            for c in list.split(',').filter_map(|c| c.trim().parse::<f64>().ok()) {
+                let shifted: Vec<(StemKind, Vec<f32>)> =
+                    mono.iter().map(|(k, s)| (*k, resample(s, c))).collect();
+                let m = estimate(&shifted, info.sample_rate);
+                let diff = m - base;
+                let diff = diff - 100.0 * (diff / 100.0).round();
+                line += &format!("  {c:+}:{:+5.1}", diff - c as f32);
+            }
+            println!("{line}");
+            continue;
+        }
         let input: Vec<StemAudio> = mono
             .iter()
             .map(|(kind, s)| StemAudio {
@@ -71,4 +87,29 @@ fn main() {
             println!("    {}", v.join(" "));
         }
     }
+}
+
+fn estimate(mono: &[(StemKind, Vec<f32>)], rate: u32) -> f32 {
+    let input: Vec<StemAudio> = mono
+        .iter()
+        .map(|(kind, s)| StemAudio {
+            kind: *kind,
+            samples: s,
+        })
+        .collect();
+    estimate_song_tuning(&input, rate).map_or(f32::NAN, |e| e.offset_cents)
+}
+
+/// Raises the pitch by `cents` (reads faster), with linear interpolation.
+fn resample(s: &[f32], cents: f64) -> Vec<f32> {
+    let r = 2f64.powf(cents / 1200.0);
+    let n = ((s.len() - 1) as f64 / r) as usize;
+    (0..n)
+        .map(|i| {
+            let x = i as f64 * r;
+            let j = x as usize;
+            let f = (x - j as f64) as f32;
+            s[j] * (1.0 - f) + s[(j + 1).min(s.len() - 1)] * f
+        })
+        .collect()
 }
