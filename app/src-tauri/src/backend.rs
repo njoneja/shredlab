@@ -1755,22 +1755,28 @@ impl Backend {
                 if data.drifts { ", drifts" } else { "" },
                 t0.elapsed().as_secs_f64()
             );
+            // In memory first, so a settings save of the open song between
+            // here and the file update can't drop the new result.
+            let current = {
+                let mut st = lock(&b.st);
+                let current = st.generation == generation
+                    && st.song.as_ref().is_some_and(|s| s.meta.song_id == song_id);
+                if current {
+                    if let Some(s) = st.song.as_mut() {
+                        s.meta.tuning = Some(data.clone());
+                    }
+                }
+                current
+            };
             if let Err(e) = b
                 .library
                 .update(&song_id, |m| m.tuning = Some(data.clone()))
             {
                 log!("cannot save tuning: {e}");
             }
-            let mut st = lock(&b.st);
-            let current = st.generation == generation
-                && st.song.as_ref().is_some_and(|s| s.meta.song_id == song_id);
             if !current {
                 return;
             }
-            if let Some(s) = st.song.as_mut() {
-                s.meta.tuning = Some(data.clone());
-            }
-            drop(st);
             b.emit(
                 "tuning-ready",
                 &TuningReady {

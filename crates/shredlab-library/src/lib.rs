@@ -40,6 +40,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -480,6 +481,16 @@ pub fn dir_size(path: &Path) -> u64 {
         .unwrap_or(0)
 }
 
+/// Serializes manifest writes in this process. Without it two writers (the
+/// song's settings save and a background job's `update`) share
+/// `song.json.tmp` and can interleave their bytes, and `update`'s
+/// read-modify-write can lose the other writer's change.
+static MANIFEST_LOCK: Mutex<()> = Mutex::new(());
+
+fn manifest_lock() -> std::sync::MutexGuard<'static, ()> {
+    MANIFEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// A song library rooted at a directory.
 #[derive(Debug, Clone)]
 pub struct Library {
@@ -543,6 +554,11 @@ impl Library {
     /// Writes `song.json` atomically (temp file + rename) and bumps
     /// `updated_ms`.
     pub fn save(&self, meta: &mut SongMeta) -> Result<()> {
+        let _guard = manifest_lock();
+        self.save_locked(meta)
+    }
+
+    fn save_locked(&self, meta: &mut SongMeta) -> Result<()> {
         if meta.song_id.is_empty() || meta.song_id.contains(['/', '\\', '.']) {
             return Err(Error::Input(format!("bad song id {:?}", meta.song_id)));
         }
@@ -561,12 +577,14 @@ impl Library {
 
     /// Loads, modifies and saves a manifest. `Ok(false)` if the song is not
     /// in the library.
+    /// Holds the manifest lock throughout, so concurrent saves can't be lost.
     pub fn update(&self, song_id: &str, f: impl FnOnce(&mut SongMeta)) -> Result<bool> {
+        let _guard = manifest_lock();
         let Some(mut meta) = self.load(song_id)? else {
             return Ok(false);
         };
         f(&mut meta);
-        self.save(&mut meta)?;
+        self.save_locked(&mut meta)?;
         Ok(true)
     }
 
@@ -1024,6 +1042,36 @@ mod tests {
         let _ = fs::remove_dir_all(&d);
         fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    /// A settings save and a background `update` running at the same time
+    /// must leave a readable manifest with both changes.
+    #[test]
+    fn concurrent_save_and_update_keep_the_manifest_whole() {
+        let lib = Library::open(&tmpdir("concurrent")).unwrap();
+        let mut m = meta("cafe", 1);
+        lib.save(&mut m).unwrap();
+        std::thread::scope(|s| {
+            s.spawn(|| {
+                for i in 0..200 {
+                    lib.update("cafe", |m| {
+                        m.tuning = Some(TuningData {
+                            offset_cents: i as f32,
+                            ..Default::default()
+                        })
+                    })
+                    .unwrap();
+                }
+            });
+            s.spawn(|| {
+                for i in 0..200 {
+                    lib.update("cafe", |m| m.last_opened_ms = i).unwrap();
+                }
+            });
+        });
+        let m = lib.load("cafe").unwrap().unwrap();
+        assert_eq!(m.last_opened_ms, 199);
+        assert_eq!(m.tuning.unwrap().offset_cents, 199.0);
     }
 
     fn meta(lib_id: &str, opened: u64) -> SongMeta {

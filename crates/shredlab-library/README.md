@@ -95,6 +95,11 @@ FLAC at the song rate. Older `original.*` files are removed.
 
 ## Invariants and gotchas
 
+- Manifest writes (`save`, `update`) hold one process-wide lock. Writers
+  share the `song.json.tmp` name, and `update` reads, modifies and saves,
+  so the app's settings save and a background job's `update` would
+  otherwise interleave or lose each other's changes. Write `song.json`
+  only through these two.
 - Old manifests must keep loading. Every new field needs `#[serde(default)]`
   (or `Option`) so a `song.json` without it still parses. Existing
   defaults encode history: missing `shifts` = 1, `dir` = `stems`,
