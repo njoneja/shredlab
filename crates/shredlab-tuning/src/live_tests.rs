@@ -106,19 +106,21 @@ fn run(det: &mut LiveDetector, samples: &[f32], rate: f64) -> Vec<(f64, LiveRead
 }
 
 /// Readings within the note's first `until_s` seconds (after [`LEAD_S`])
-/// whose median no longer includes a window that holds the attack.
+/// once the detector's hold after the attack is over: the attack is seen
+/// at the first reading at the latest, and the hold lasts a window, the
+/// settling time and a few hops for the attack span and the median.
 fn steady(
     readings: &[(f64, LiveReading)],
     det: &LiveDetector,
     rate: f64,
     until_s: f64,
 ) -> Vec<LiveReading> {
-    // The window of this reading and of the four before it (the median)
-    // start at least 20 ms after the attack.
-    let span = (det.window_len() + 4 * det.hop_len()) as f64 / rate;
+    let (w, hop) = (det.window_len() as f64, det.hop_len() as f64);
+    let seen = (w / rate).max(LEAD_S);
+    let start = seen + (w + 0.06 * rate + 10.0 * hop) / rate;
     readings
         .iter()
-        .filter(|(t, _)| *t - span >= LEAD_S + 0.02 && *t <= LEAD_S + until_s)
+        .filter(|(t, _)| *t >= start && *t <= LEAD_S + until_s)
         .map(|(_, r)| *r)
         .collect()
 }
@@ -372,6 +374,56 @@ fn per_hop_cost() {
         );
         if !cfg!(debug_assertions) {
             assert!(per_hop < 0.1 * budget, "{per_hop} s per hop");
+        }
+    }
+}
+
+/// A pluck with a real attack: a noise burst and the pitch starting
+/// `sharp` cents high, settling with a 20 ms time constant.
+fn sharp_attack(rate: f64, f0: f64, sharp: f64, dur_s: f64, seed: u64) -> Vec<f32> {
+    let n = (dur_s * rate) as usize;
+    let mut rng = Rng(seed);
+    let mut phase = [0.0f64; 4];
+    (0..n)
+        .map(|j| {
+            let t = j as f64 / rate;
+            let f = f0 * 2f64.powf(sharp * (-t / 0.02).exp() / 1200.0);
+            let env = (t / 0.003).min(1.0) * (-t / 1.5).exp();
+            let mut y = 0.0;
+            for (h, (p, a)) in phase.iter_mut().zip([0.5, 1.0, 0.7, 0.4]).enumerate() {
+                *p += std::f64::consts::TAU * f * (h + 1) as f64 / rate;
+                y += a * p.sin();
+            }
+            let burst = if t < 0.015 { 0.5 * rng.noise() } else { 0.0 };
+            (0.15 * env * y + 0.15 * burst + 0.002 * rng.noise()) as f32
+        })
+        .collect()
+}
+
+#[test]
+fn attacks_are_held_back_until_the_note_settles() {
+    let rate = 48_000.0;
+    for (k, (midi, low_hz)) in [(40, 75.0), (28, 30.0), (64, 75.0)].into_iter().enumerate() {
+        let f0 = hz(midi, 0.0);
+        // Silence, a pluck, then the same string plucked again while it
+        // still rings.
+        let mut audio = vec![0.0f32; 24_000];
+        audio.extend(sharp_attack(rate, f0, 40.0, 1.0, k as u64));
+        audio.extend(sharp_attack(rate, f0, 40.0, 1.0, k as u64 + 10));
+        let mut det = LiveDetector::new(48_000, low_hz);
+        let readings = run(&mut det, &audio, rate);
+        let reported: Vec<(f64, f64)> = readings
+            .iter()
+            .filter_map(|(t, r)| r.hz.map(|h| (*t, cents(h, f0))))
+            .collect();
+        let worst = reported.iter().fold(0.0f64, |w, c| w.max(c.1.abs()));
+        assert!(worst < 2.0, "midi {midi}: {worst:.2} cents");
+        // Each note shows within 0.4 s of its attack.
+        for start in [0.5, 1.5] {
+            assert!(
+                reported.iter().any(|(t, _)| *t > start && *t < start + 0.4),
+                "midi {midi}: nothing within 0.4 s of {start}"
+            );
         }
     }
 }

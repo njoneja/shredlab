@@ -28,7 +28,7 @@ map them to their own storage types.
   and the non-octave harmonic filter.
 - `src/cents.rs`: cents conversion, folding and the weighted circular mean.
 - `src/live.rs`: the live detector: high-pass, McLeod Pitch Method,
-  octave guard and the reading median.
+  octave guard, the reading median and the attack hold.
 - `src/tests.rs`: estimator tests on synthesized stems.
 - `src/live_tests.rs`: live detector tests on synthesized plucks.
 
@@ -123,12 +123,20 @@ plain values; the caller throttles them for the UI.
    are in, and `None` for rejected readings. Eight rejected readings in a
    row (about 85 ms) clear the median, so a new note doesn't inherit the
    last one.
+8. Attack hold: a plucked string starts sharp (often 20 to 40 cents) and
+   noisy, and settles within a few tens of milliseconds. Each hop's mean
+   square level is kept; when the latest span of hops is at least 4 dB
+   louder than the span before it and above the quiet gate, a new attack
+   has started. A span covers at least one period of `low_hz` (up to four
+   hops), so a low note's waveform doesn't make the level wobble. After an
+   attack the median is cleared and no pitch is reported until the window
+   no longer holds the attack plus 60 ms (about 150 ms on the short
+   window, 240 ms on the long one). 4 dB catches a string re-plucked
+   while it still rings at half its starting level; natural decay and
+   noise 20 dB under the note don't trigger it.
 
 Notes below `low_hz` may read an octave high: their doubled period can
-exceed the searched lag range, so the octave guard can't see it. The
-first few readings of an attack, while the window still holds the
-silence before it, can be off by several cents or an octave; the median
-hides most of them. Upper partials stretched by string stiffness pull the
+exceed the searched lag range, so the octave guard can't see it. Upper partials stretched by string stiffness pull the
 reading slightly sharp (a fraction of a cent for normal strings), as they
 do for the ear.
 
@@ -185,8 +193,10 @@ cent offsets, at 44.1 and 48 kHz, and require every reading after the
 attack to be within 1 cent. They also cover weak and missing
 fundamentals under a strong 2nd harmonic (the right octave), much noisier
 plucks (never another octave), silence, white noise and a tone under the
-quiet gate (no pitch), window sizes per rate, chunking, and the median
-restarting after a gap. `per_hop_cost` prints the time per hop and, in
+quiet gate (no pitch), window sizes per rate, chunking, the median
+restarting after a gap, and plucks with a noise burst that start 40 cents
+sharp (from silence and re-plucked while ringing): no reading more than 2
+cents off, and each note shown within 0.4 s. `per_hop_cost` prints the time per hop and, in
 release builds only, fails above a tenth of the hop's duration.
 
 ## Common changes

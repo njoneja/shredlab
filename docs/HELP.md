@@ -118,8 +118,9 @@ press `T`, to open the Tuning panel.
 - **Live tuner** listens to your instrument through an audio interface or
   a microphone. Pick the input device, and for an interface with several
   inputs, the one your instrument is plugged into; both are remembered.
-  Play a string: the tuner shows the note, how many cents it is off and
-  which way to turn the peg ("7¢ flat: tune up"), and the string turns
+  Play a string: after the pluck settles (a fraction of a second), the
+  tuner shows the note, how many cents it is off and which way to turn
+  the peg ("7¢ flat: tune up"), and the string turns
   "in tune" once it stays within 3 cents for a second. **Chromatic**
   ignores your tuning and shows the nearest note. The song is paused while
   the tuner listens, and pressing Play stops the tuner so the speakers

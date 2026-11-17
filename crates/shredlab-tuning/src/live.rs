@@ -39,14 +39,25 @@ const MEDIAN_LEN: usize = 5;
 const MEDIAN_MIN: usize = 3;
 /// Consecutive rejected readings after which the median starts over.
 const DROPOUT_HOPS: u32 = 8;
+/// A new attack (a pluck) is a span of hops at least this much louder
+/// (dB) than the span just before it. A span covers at least one period of
+/// the lowest target note, up to [`MAX_ONSET_HOPS`] hops, so a low note's
+/// waveform doesn't make its level wobble.
+const ONSET_RISE_DB: f32 = 4.0;
+const MAX_ONSET_HOPS: usize = 4;
+/// After an attack, no pitch is reported until the window no longer holds
+/// it and this much longer has passed: a plucked string starts sharp and
+/// noisy and takes a few tens of milliseconds to settle.
+const SETTLE_MS: f64 = 60.0;
 
 /// One detector reading, produced every hop.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LiveReading {
     /// Detected fundamental in Hz: the median of the last few accepted
     /// readings. `None` when this reading was rejected (clarity below
-    /// [`MIN_CLARITY`] or level below [`QUIET_DB`]) or fewer than three
-    /// readings have been accepted since the last dropout.
+    /// [`MIN_CLARITY`] or level below [`QUIET_DB`]), the note is still
+    /// settling after an attack, or fewer than three readings have been
+    /// accepted since the last dropout or attack.
     pub hz: Option<f32>,
     /// How periodic the window is, 0..1 (NSDF value at the chosen peak;
     /// 0 when no peak was found).
@@ -85,6 +96,17 @@ pub struct LiveDetector {
     recent_len: usize,
     recent_next: usize,
     dropout: u32,
+    /// Sum of squares of the high-passed samples since the last reading.
+    hop_energy: f64,
+    hop_samples: usize,
+    /// Mean square of the latest hops, newest first: two spans.
+    hop_power: [f64; 2 * MAX_ONSET_HOPS],
+    /// Hops in one onset span.
+    onset_hops: usize,
+    /// Readings an attack holds back.
+    settle_hops: u32,
+    /// Readings left before the current attack has settled.
+    settling: u32,
 }
 
 impl LiveDetector {
@@ -104,6 +126,9 @@ impl LiveDetector {
         let window = ((base * scale).round() as usize).max(64);
         let hop = ((HOP_48K * scale).round() as usize).max(1);
         let max_lag = window / 2;
+        let period = rate / f64::from(low_hz.max(1.0));
+        let onset_hops = ((period / hop as f64).ceil() as usize).clamp(1, MAX_ONSET_HOPS);
+        let settle_hops = ((window as f64 + SETTLE_MS / 1000.0 * rate) / hop as f64).ceil() as u32;
         // Zero padding to at least twice the window keeps the circular
         // autocorrelation from wrapping.
         let n = (2 * window).next_power_of_two();
@@ -131,6 +156,12 @@ impl LiveDetector {
             recent_len: 0,
             recent_next: 0,
             dropout: 0,
+            hop_energy: 0.0,
+            hop_samples: 0,
+            hop_power: [0.0; 2 * MAX_ONSET_HOPS],
+            onset_hops,
+            settle_hops,
+            settling: 0,
             fft,
             ifft,
         }
@@ -157,13 +188,20 @@ impl LiveDetector {
         self.recent_len = 0;
         self.recent_next = 0;
         self.dropout = 0;
+        self.hop_energy = 0.0;
+        self.hop_samples = 0;
+        self.hop_power.fill(0.0);
+        self.settling = 0;
     }
 
     /// Feeds mono samples (any count) and appends one reading to `out` for
     /// each hop completed. Reuse `out` between calls to avoid allocating.
     pub fn push(&mut self, samples: &[f32], out: &mut Vec<LiveReading>) {
         for &x in samples {
-            self.ring[self.pos] = self.high_pass.process(x);
+            let y = self.high_pass.process(x);
+            self.ring[self.pos] = y;
+            self.hop_energy += f64::from(y) * f64::from(y);
+            self.hop_samples += 1;
             self.pos += 1;
             if self.pos == self.window {
                 self.pos = 0;
@@ -187,7 +225,15 @@ impl LiveDetector {
 
     fn analyze(&mut self) -> LiveReading {
         let (clarity, level_db, lag) = self.detect();
-        let accepted = lag.filter(|_| clarity >= MIN_CLARITY && level_db >= QUIET_DB);
+        if self.attack() {
+            // The readings so far belong to the previous note or silence.
+            self.settling = self.settle_hops;
+            self.recent_len = 0;
+            self.recent_next = 0;
+        }
+        let settled = self.settling == 0;
+        self.settling = self.settling.saturating_sub(1);
+        let accepted = lag.filter(|_| settled && clarity >= MIN_CLARITY && level_db >= QUIET_DB);
         let hz = match accepted {
             Some(lag) => {
                 self.dropout = 0;
@@ -210,6 +256,32 @@ impl LiveDetector {
             clarity,
             level_db,
         }
+    }
+
+    /// Whether the hop just completed starts a new attack: the latest span
+    /// of hops is audible and clearly louder than the span before it.
+    /// Measured on hops rather than the window, so it reacts quickly.
+    fn attack(&mut self) -> bool {
+        let power = if self.hop_samples > 0 {
+            self.hop_energy / self.hop_samples as f64
+        } else {
+            0.0
+        };
+        self.hop_energy = 0.0;
+        self.hop_samples = 0;
+        self.hop_power.copy_within(..2 * MAX_ONSET_HOPS - 1, 1);
+        self.hop_power[0] = power;
+        let k = self.onset_hops;
+        let now: f64 = self.hop_power[..k].iter().sum::<f64>() / k as f64;
+        let before: f64 = self.hop_power[k..2 * k].iter().sum::<f64>() / k as f64;
+        let db = |p: f64| {
+            if p > 0.0 {
+                (10.0 * p.log10()) as f32
+            } else {
+                LEVEL_FLOOR_DB
+            }
+        };
+        db(now) >= QUIET_DB && db(now) >= db(before) + ONSET_RISE_DB
     }
 
     /// Median of the buffered readings (the upper middle one for an even
