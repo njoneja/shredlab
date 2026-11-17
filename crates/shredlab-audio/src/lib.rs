@@ -12,6 +12,9 @@
 //! - Playback-rate correction ([`Engine::set_rate_correction`],
 //!   [`RenderRequest::rate_cents`]) and reference tones
 //!   ([`Engine::play_tone`]) for tuning.
+//! - [`InputCapture`] and [`list_input_devices`]: one channel of an input
+//!   device as f32 blocks on a worker thread, for the live tuner;
+//!   independent of the engine.
 //!
 //! # Architecture
 //!
@@ -40,6 +43,7 @@
 pub mod click;
 mod encode;
 mod engine;
+mod input;
 pub mod limiter;
 pub mod mix;
 pub mod pipeline;
@@ -52,6 +56,7 @@ use std::sync::Arc;
 
 pub use encode::{encode, limiter_gain, peak, ExportFormat};
 pub use engine::{Engine, EngineStats};
+pub use input::{list_input_devices, InputCapture, InputDevice, InputInfo};
 pub use mix::{choose_mode, MixMode};
 pub use rate::MAX_RATE_CENTS;
 pub use render::{render, render_range, RenderRequest, EDGE_FADE_SECS};
@@ -261,6 +266,8 @@ pub struct Position {
 pub enum AudioError {
     #[error("audio output device: {0}")]
     Device(String),
+    #[error("audio input device: {0}")]
+    Input(String),
     #[error("cannot write {path}: {msg}")]
     Write { path: String, msg: String },
     #[error("encoder: {0}")]

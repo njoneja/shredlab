@@ -3,15 +3,16 @@
 Plays a song's stems (and the original mix) through a mixer on the default
 output device, and renders the same mix offline for export to WAV, FLAC or
 MP3. Playback and export run the same pipeline, so an exported file matches
-what was heard, including speed, pitch, Refine and the click track.
+what was heard, including speed, pitch, Refine and the click track. It also
+captures one channel of an audio input device for the live tuner.
 
 ## Boundaries
 
 Owns the real-time engine, the mixer (including the backing track built
 from the original and the per-stem Refine chains), the Signalsmith Stretch
 wrapper, click and count-in scheduling, both limiters, the playback-rate
-correction, the reference tone voice, the offline renderer and the
-encoders.
+correction, the reference tone voice, the offline renderer, the
+encoders and the input capture.
 
 It does not decode files (the caller passes `Track`s: planar stereo, each
 channel f32 or 16-bit integers times a step, all at the song rate, 44.1 kHz
@@ -20,7 +21,8 @@ in practice), implement the Refine DSP
 [shredlab-dsp](../shredlab-dsp/src/refine/mod.rs)), detect beats or the
 music start (they arrive in `ClickConfig`), map the mixer's on/solo/volume
 switches to gains, or re-derive stems for separation strength; the app does
-the last two and calls `set_mix` / `load_with_original`. No Tauri
+the last two and calls `set_mix` / `load_with_original`. It does not
+detect pitch in captured input (`shredlab-tuning` does). No Tauri
 dependency; the only path it touches is the one passed to `encode`.
 
 Dependencies: `shredlab-dsp`, cpal, rtrb, rubato, hound, flacenc,
@@ -43,9 +45,11 @@ Start with `src/lib.rs` (`Track`, `Channel`, `ClickConfig`, `Position`,
 - `src/limiter.rs`: playback safety limiter.
 - `src/rate.rs`: rate-correction math, the shared sinc parameters and the offline resampler used by export.
 - `src/tone.rs`: `ToneSound` and the reference tone generator (Karplus-Strong pluck, filtered sawtooth drone).
+- `src/input.rs`: input device listing and `InputCapture` (one channel of an input device, delivered on a worker thread).
 - `src/render.rs`, `src/encode.rs`: export (`render`, `RenderRequest`, `encode`, `ExportFormat`, the whole-file `limiter_gain`).
 - `tests/refine.rs`: Refine through the mixer, playback pipeline and export.
 - `examples/play.rs`: plays a folder of stem WAVs, or renders it to a file.
+- `examples/capture.rs`: lists input devices and prints the level of 2 s of input.
 
 ## How it works
 
@@ -152,6 +156,32 @@ the rate correction never touch it and the pipeline (and so export) never
 sees it. It sounds whether or not the transport plays; a new frequency
 releases the old tone over 10 ms first, `stop_tone` releases over 30 ms.
 
+### Input capture
+
+`InputCapture` is independent of the `Engine`; both can be open at once.
+`start` opens the chosen device (or the default input) at its default
+input config, on a worker thread that owns the stream for its whole life,
+since a cpal stream is not `Send` everywhere. The cpal callback takes one
+channel of the interleaved data (never a downmix), converts it to f32 and
+pushes it into an `rtrb` ring of about 1 s; when the ring is full the
+excess is dropped and counted. The worker drains the ring into the
+consumer in blocks of at most 4096 samples, in order, and sleeps 2 ms when
+it is empty, so the consumer (a pitch detector) can take milliseconds per
+call. `start` returns once the stream plays or with the error that stopped
+it; a stream error afterwards (an unplugged device) is kept for `error()`
+to report, and nothing more is delivered. Dropping the capture or calling
+`stop` stops the stream and joins the worker.
+
+Device ids come from `list_input_devices`. cpal 0.16 has no persistent
+device id, so the id is the device name, with `#2`, `#3`, ... appended to
+repeated names in enumeration order. A saved id survives restarts and
+reconnection as long as the system keeps the name; when it does not, the
+caller falls back to the default device.
+
+On Windows a denied microphone permission can give a running stream of
+digital silence instead of an error. The crate delivers the zeros as they
+are; detecting that case (level at zero for a while) is the caller's job.
+
 ### Click track and count-in
 
 Clicks are short synthesized sines (accent, beat, softer subdivision)
@@ -239,6 +269,9 @@ snapped to a standard rate), removing the partial file on error.
   paused ALSA stream through the PulseAudio plugin under WSLg hung the
   PulseAudio server for every client.
 - The master volume is playback only; exports ignore it.
+- The input callback, like the output one, takes no locks and does not
+  allocate; the error callback is separate and may lock. The consumer
+  runs on the input worker, never in the callback.
 - flacenc writes the last block's size as the minimum block size, which
   symphonia rejects; `fix_streaminfo_min_block` patches it (the same fix
   is in `shredlab-library`).
@@ -253,12 +286,21 @@ cargo test -p shredlab-audio --test refine   # Refine integration tests only
 ```
 
 No audio device, models or fixtures are needed, and nothing is ignored:
-engine tests drive the producer side without a device, encoder tests
-round-trip through a temp directory with `shredlab-io`. To listen:
+engine tests drive the producer side without a device, input tests cover
+channel extraction, sample conversion and ring draining without a device,
+and encoder tests round-trip through a temp directory with `shredlab-io`.
+To listen:
 
 ```sh
 cargo run --release -p shredlab-audio --example play -- <stems-dir> --speed 0.8 --pitch -2 --loop 10,20 --click --count-in 4
 cargo run --release -p shredlab-audio --example play -- <stems-dir> --render out.flac
+```
+
+To check input capture on a real device (arguments optional; the channel
+is 1-based):
+
+```sh
+cargo run -p shredlab-audio --example capture -- "<device id>" 2
 ```
 
 `SHREDLAB_AUDIO_DEVICE_RATE=48000` requests that device rate (if
@@ -278,4 +320,7 @@ supported) to exercise the resampler.
 - Changing a reference tone sound: `Tone::begin` and its per-sample
   function in `src/tone.rs`; `pluck_and_drone_are_in_tune` checks the
   pitch.
+- Changing what the input capture delivers: the callback side is
+  `push_channel` and the worker side `drain` in `src/input.rs`; both have
+  device-free tests.
 - Dropping MP3 export: see the LGPL note in [THIRD_PARTY.md](THIRD_PARTY.md).
