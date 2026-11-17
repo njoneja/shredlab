@@ -1,0 +1,12 @@
+[package]
+name = "shredlab-tuning"
+description = "Tuning analysis for ShredLab: how far a song is from A440, measured from its stems"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+realfft.workspace = true
