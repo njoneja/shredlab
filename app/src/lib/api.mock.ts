@@ -4,7 +4,8 @@
 // Browser mock of the backend so `pnpm dev` works without Tauri. Fakes a
 // song, separation progress, a beat grid, the tuning measurement, playback
 // position and export. Audio: a soft WebAudio click when the click track /
-// count-in is on, and the reference tones; otherwise silence.
+// count-in is on, and the reference tones; otherwise silence. The live
+// tuner gets fake input devices and a synthetic stream of readings.
 import type {
   AppSettingsInfo,
   AppSettingsUpdate,
@@ -13,6 +14,7 @@ import type {
   ClickState,
   EventMap,
   EventName,
+  InputDevice,
   LibraryEntry,
   LibraryListing,
   LoopState,
@@ -112,6 +114,8 @@ const LS_MASTER_VOLUME = "shredlab.mock.masterVolume";
 let masterVolume: number = lsGet<number>(LS_MASTER_VOLUME, 1);
 const LS_STEM_FORMAT = "shredlab.mock.stemFormat";
 let stemFormat: StemFormat = lsGet<StemFormat>(LS_STEM_FORMAT, "mp3");
+const LS_TUNER_INPUT = "shredlab.mock.tunerInput";
+let tunerInput = lsGet<{ device_id: string | null; channel: number }>(LS_TUNER_INPUT, { device_id: null, channel: 0 });
 
 function appSettings(): AppSettingsInfo {
   const model_id = appChoice.model_id && MODELS.some((m) => m.id === appChoice.model_id) ? appChoice.model_id : DEFAULT_MODEL;
@@ -129,6 +133,8 @@ function appSettings(): AppSettingsInfo {
     click_volume: clickVolume,
     master_volume: masterVolume,
     stem_format: stemFormat,
+    tuner_device_id: tunerInput.device_id,
+    tuner_channel: tunerInput.channel,
   };
 }
 
@@ -324,6 +330,56 @@ function measureTuning(ms: number) {
   lsSet(LS_TUNING + song.song_id, t);
   emit("tuning-ready", { song_id: song.song_id, tuning: t });
 };
+
+// Live tuner: fake input devices and a synthetic reading stream. The stream
+// plucks the strings of a 6-string tuning built on the lowest note it was
+// started with (fourths and a third, like standard tuning), lowest first: each
+// pluck starts up to 25 cents off and settles near its target (every third
+// one stays 8 cents sharp), with small jitter, then a short silence. "Line in"
+// gives digital silence, like a microphone blocked by Windows privacy settings.
+const INPUT_DEVICES: InputDevice[] = [
+  { id: "Focusrite USB Audio", name: "Focusrite USB Audio", channels: 2, default: false },
+  { id: "Microphone (Realtek Audio)", name: "Microphone (Realtek Audio)", channels: 1, default: true },
+  { id: "Line In (Realtek Audio)", name: "Line In (Realtek Audio)", channels: 2, default: false },
+];
+const PLUCK_S = 4.5;
+const GUITAR_STEPS = [0, 5, 10, 15, 19, 24];
+let tunerTimer: number | null = null;
+
+function startTunerStream(deviceId: string, lowHz: number) {
+  stopTunerStream();
+  const silent = deviceId.startsWith("Line In");
+  const base = Math.max(lowHz, 27);
+  const t0 = performance.now() / 1000;
+  let seed = 1;
+  const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647) * 2 - 1;
+  tunerTimer = window.setInterval(() => {
+    if (silent) {
+      emit("tuner-reading", { hz: null, clarity: 0, level_db: -120 });
+      return;
+    }
+    const t = performance.now() / 1000 - t0;
+    const n = Math.floor(t / PLUCK_S);
+    const u = t - n * PLUCK_S;
+    const i = n % GUITAR_STEPS.length;
+    if (u < 0.4 || u > PLUCK_S - 0.3) {
+      emit("tuner-reading", { hz: null, clarity: 0.3, level_db: -72 + 2 * rnd() });
+      return;
+    }
+    const start = 25 * Math.sin(n * 2.3 + 1);
+    const settle = n % 3 === 2 ? 8 : 0.4 * Math.sin(n);
+    const cents = settle + (start - settle) * Math.exp(-(u - 0.4) / 0.9) + 0.7 * rnd();
+    const hz = base * Math.pow(2, (GUITAR_STEPS[i] * 100 + cents) / 1200);
+    emit("tuner-reading", { hz, clarity: 0.97, level_db: -14 - 6 * (u - 0.4) + rnd() });
+  }, 33);
+}
+
+function stopTunerStream(reason?: "playback" | "song_closed") {
+  if (tunerTimer == null) return;
+  clearInterval(tunerTimer);
+  tunerTimer = null;
+  if (reason) emit("tuner-stopped", { reason });
+}
 
 // Reference tones: a decaying string retriggered every 2.5 s, or a filtered sawtooth drone.
 let tone: { stop: () => void } | null = null;
@@ -605,6 +661,7 @@ export const mockBackend: Backend = {
     return info;
   },
   async closeSong() {
+    stopTunerStream("song_closed");
     stopSeparation();
     if (tuningTimer != null) clearTimeout(tuningTimer);
     analysisStem = null;
@@ -714,6 +771,7 @@ export const mockBackend: Backend = {
   },
   async play() {
     if (!song) return;
+    stopTunerStream("playback");
     if (position >= song.duration_sec - 0.05) position = 0;
     if (loop.enabled && loop.a_sec != null && loop.b_sec != null && (position < loop.a_sec || position >= loop.b_sec)) {
       position = loop.a_sec;
@@ -874,6 +932,30 @@ export const mockBackend: Backend = {
   async stopTone() {
     tone?.stop();
     tone = null;
+  },
+  async listInputDevices() {
+    return INPUT_DEVICES.map((d) => ({ ...d }));
+  },
+  async startTuner(deviceId, channel, lowHz) {
+    if (!(lowHz > 0) || !Number.isFinite(lowHz)) throw new Error(`Invalid lowest note ${lowHz} Hz`);
+    playing = false;
+    countInLeft = 0;
+    emitPos();
+    tone?.stop();
+    tone = null;
+    const found = deviceId != null ? INPUT_DEVICES.find((d) => d.id === deviceId) : undefined;
+    const fell_back = deviceId != null && !found;
+    const dev = found ?? INPUT_DEVICES.find((d) => d.default)!;
+    const ch = !fell_back && channel < dev.channels ? channel : 0;
+    if (!fell_back) {
+      tunerInput = { device_id: deviceId, channel: ch };
+      lsSet(LS_TUNER_INPUT, tunerInput);
+    }
+    startTunerStream(dev.id, Math.min(2000, Math.max(20, lowHz)));
+    return { device_id: dev.id, device_name: dev.name, channels: dev.channels, channel: ch, sample_rate: 48000, fell_back };
+  },
+  async stopTuner() {
+    stopTunerStream();
   },
   async setTheme(theme) {
     if (!THEMES.includes(theme)) throw new Error(`Unknown theme: ${theme}`);

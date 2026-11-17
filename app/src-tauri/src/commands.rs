@@ -197,6 +197,33 @@ pub async fn stop_tone(b: B<'_>) -> R<()> {
 }
 
 #[tauri::command]
+pub async fn list_input_devices(b: B<'_>) -> R<Vec<InputDeviceInfo>> {
+    let b = b.inner().clone();
+    blocking(move || Ok(b.list_input_devices())).await
+}
+
+#[tauri::command]
+pub async fn start_tuner(
+    b: B<'_>,
+    device_id: Option<String>,
+    channel: u16,
+    low_hz: f32,
+) -> R<TunerStarted> {
+    let b = b.inner().clone();
+    blocking(move || b.start_tuner(device_id, channel, low_hz)).await
+}
+
+#[tauri::command]
+pub async fn stop_tuner(b: B<'_>) -> R<()> {
+    let b = b.inner().clone();
+    blocking(move || {
+        b.stop_tuner();
+        Ok(())
+    })
+    .await
+}
+
+#[tauri::command]
 pub async fn set_loop(b: B<'_>, loop_state: LoopState) -> R<()> {
     b.set_loop(loop_state);
     Ok(())

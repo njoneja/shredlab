@@ -2,8 +2,9 @@
 // SPDX-FileCopyrightText: 2026 Navneet Joneja
 
 //! App-wide settings persisted as `<data dir>/settings.json`: the chosen
-//! separation model, separation quality, UI theme and "count in to where
-//! the music starts". `None` means "use the default" (default model; High
+//! separation model, separation quality, UI theme, "count in to where
+//! the music starts", volumes, stem format and the live tuner's input
+//! device and channel. `None` means "use the default" (default model; High
 //! on GPU, Standard on CPU; Stage; on). Env overrides
 //! (`SHREDLAB_MODEL`, `SHREDLAB_DEVICE`) still win at runtime for development.
 
@@ -102,6 +103,12 @@ pub struct AppSettings {
     /// Format of newly written stems (`None` = MP3).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stem_format: Option<StemFormat>,
+    /// Live tuner input device id (`None` = the system default).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tuner_device_id: Option<String>,
+    /// Live tuner input channel, 0-based (`None` = 0).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tuner_channel: Option<u16>,
 }
 
 impl AppSettings {
@@ -196,6 +203,8 @@ mod tests {
             click_volume: Some(0.5),
             master_volume: Some(0.7),
             stem_format: Some(StemFormat::Flac),
+            tuner_device_id: Some("Focusrite USB Audio".into()),
+            tuner_channel: Some(1),
         };
         s.save(&d).unwrap();
         assert_eq!(AppSettings::load(&d).0, s);
@@ -234,6 +243,7 @@ mod tests {
             serde_json::from_str(r#"{"model_id":null,"quality":"high"}"#).unwrap();
         assert_eq!(old.theme, None);
         assert!(old.count_in_to_music_start());
+        assert_eq!((old.tuner_device_id, old.tuner_channel), (None, None));
     }
 
     #[test]

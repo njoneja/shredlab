@@ -26,6 +26,7 @@ pub mod log;
 pub mod models;
 pub mod music_start;
 pub mod settings;
+pub mod tuner;
 pub mod types;
 #[cfg(windows)]
 mod win_icon;
@@ -202,6 +203,9 @@ pub fn run() {
             commands::set_rate_correction,
             commands::play_tone,
             commands::stop_tone,
+            commands::list_input_devices,
+            commands::start_tuner,
+            commands::stop_tuner,
             commands::set_loop,
             commands::set_click,
             commands::set_meter_overrides,
@@ -232,9 +236,11 @@ pub fn run() {
     };
     app.run(|handle, event| {
         // A Refine or per-song settings change made just before quitting
-        // is still waiting for its debounced save.
+        // is still waiting for its debounced save. The tuner's input
+        // stream is closed too.
         if let tauri::RunEvent::Exit = event {
             if let Some(b) = handle.try_state::<Arc<Backend>>() {
+                b.stop_tuner();
                 b.flush_song_save(true);
             }
         }

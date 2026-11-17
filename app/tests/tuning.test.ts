@@ -5,7 +5,13 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   DEFAULT_TUNING,
+  centsOff,
   driftSummary,
+  holdStep,
+  matchString,
+  tuneAdvice,
+  tunerLowHz,
+  tunerTarget,
   formatPitch,
   fromSaved,
   medianSmooth,
@@ -147,4 +153,70 @@ test("drift summary", () => {
   assert.deepEqual(driftSummary(seg([-22, -20, -17, -14, -11, -9])), { kind: "from", a: -20, b: -11 });
   assert.deepEqual(driftSummary(seg([-20, -18, -10, -5, -4, -6, -12, -19, -20])), { kind: "between", a: -19, b: -6 });
   assert.equal(driftSummary([]), null);
+});
+
+test("live tuner: the string a reading belongs to", () => {
+  const std = strings(DEFAULT_TUNING); // E2 A2 D3 G3 B3 E4
+  const at = (hz: number) => matchString(hz, std)?.number ?? null;
+  assert.equal(at(82.41), 6);
+  assert.equal(at(110 * Math.pow(2, -20 / 1200)), 5); // A string, 20 cents flat
+  // Between E2 and A2 (500 cents apart) the nearer one wins.
+  assert.equal(at(82.41 * Math.pow(2, 240 / 1200)), 6);
+  assert.equal(at(82.41 * Math.pow(2, 260 / 1200)), 5);
+  // Below the lowest string: up to half the gap to its neighbor (250 cents).
+  assert.equal(at(82.41 * Math.pow(2, -240 / 1200)), 6);
+  assert.equal(at(82.41 * Math.pow(2, -260 / 1200)), null);
+  // Above the highest: half the B–E gap (250 cents).
+  assert.equal(at(329.63 * Math.pow(2, 240 / 1200)), 1);
+  assert.equal(at(329.63 * Math.pow(2, 260 / 1200)), null);
+  assert.equal(at(0), null);
+  assert.equal(matchString(100, []), null);
+});
+
+test("live tuner: target, cents and advice", () => {
+  // Eb standard at A430: 180.07 Hz is the G♭ string, a few cents flat.
+  const eb: MyTuning = { ...DEFAULT_TUNING, shift: -1, refHz: 430 };
+  const t = tunerTarget(180.07, eb, false)!;
+  assert.equal(t.string, 3);
+  assert.equal(`${t.name}${t.octave}`, "Gb3");
+  near(t.hz, 180.8, 0.05);
+  near(t.cents, -7, 0.1);
+  // Chromatic ignores the strings: the nearest note in the same reference.
+  const c = tunerTarget(185, eb, true)!;
+  assert.equal(c.string, null);
+  assert.equal(c.name, "Gb");
+  near(c.hz, 180.8, 0.05);
+  // No string near: the nearest note too.
+  const far = tunerTarget(1000, DEFAULT_TUNING, false)!;
+  assert.equal(far.string, null);
+  assert.equal(`${far.name}${far.octave}`, "B5");
+  assert.equal(tunerTarget(0, DEFAULT_TUNING, false), null);
+  near(centsOff(220, 110), 1200, 1e-9);
+
+  assert.deepEqual(tuneAdvice(-7.4), { state: "flat", text: "Flat: tune up", full: "7¢ flat: tune up" });
+  assert.deepEqual(tuneAdvice(12), { state: "sharp", text: "Sharp: tune down", full: "12¢ sharp: tune down" });
+  assert.equal(tuneAdvice(3.4).state, "in-tune");
+  assert.equal(tuneAdvice(-3.6).state, "flat");
+
+  assert.equal(tunerLowHz(DEFAULT_TUNING, true), 30);
+  near(tunerLowHz(DEFAULT_TUNING, false), 82.41, 0.01);
+  near(tunerLowHz({ ...DEFAULT_TUNING, instrument: "bass5" }, false), 30.87, 0.01);
+});
+
+test("live tuner: a string counts as in tune after holding for a second", () => {
+  let h = holdStep(null, 3, 1, 0);
+  assert.equal(h.settled, null);
+  h = holdStep(h.hold, 3, -2, 900);
+  assert.equal(h.settled, null);
+  h = holdStep(h.hold, 3, 2.4, 1000);
+  assert.deepEqual(h.settled, { string: 3, inTune: true });
+  // Out of tune starts a new hold; so does another string.
+  h = holdStep(h.hold, 3, 6, 1100);
+  assert.equal(h.settled, null);
+  assert.deepEqual(holdStep(h.hold, 3, 6, 2100).settled, { string: 3, inTune: false });
+  h = holdStep(h.hold, 2, 0, 1200);
+  assert.equal(h.hold?.since, 1200);
+  // No reading or no string: no hold.
+  assert.deepEqual(holdStep(h.hold, null, 0, 1300), { hold: null, settled: null });
+  assert.deepEqual(holdStep(h.hold, 2, null, 1300), { hold: null, settled: null });
 });

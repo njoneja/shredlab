@@ -110,6 +110,21 @@ you hear, including speed, pitch, the click track and the playback-rate
 correction (applied by resampling the finished file). Reference tones are
 never exported.
 
+## Live tuner
+
+The live tuner listens to one channel of an input device, never a downmix.
+`shredlab-audio`'s `InputCapture` opens the device on its own worker
+thread, independent of the playback engine; the cpal callback copies the
+channel into a ring buffer, and the worker drains it into a callback. In
+the app (`app/src-tauri/src/tuner.rs`) that callback feeds
+`shredlab-tuning`'s `LiveDetector` (McLeod pitch method, one reading per
+hop of about 10 ms) and passes the latest reading, with the highest level
+since the last one, to a `tuner-reading` event about 30 times a second.
+The backend's position thread checks the capture for a stream error. The
+UI maps a frequency to a string of the player's tuning or the nearest
+note, and smooths the needle (`app/src/lib/tuning.ts`). Starting playback
+stops the tuner, so the speakers don't feed the microphone.
+
 ## Library and stem cache
 
 `shredlab-library` keeps one folder per song under `<data dir>/library`,

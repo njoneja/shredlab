@@ -108,6 +108,8 @@ AppSettingsInfo {
   click_volume: number // click and count-in volume, linear 0..1; 0.8 when none is saved
   stem_format: "mp3" | "flac" // format of newly written stems; "mp3" when none is saved
   master_volume: number // master playback volume, linear 0..1; 1 when none is saved
+  tuner_device_id: string | null // live tuner input device id; null = the system default
+  tuner_channel: number // live tuner input channel, 0-based; 0 when none is saved
 }
 
 Theme = "stage" | "rosewood" | "valve" | "manuscript"
@@ -206,6 +208,26 @@ EndParams {
 BandParams { enabled: boolean, freq: number, gain_db: number, q: number }  // peaking; ±15 dB in the UI
 RefinePreset { id: string, name: string, eq: EqParams }
 
+// ---- Live tuner ----
+InputDevice { id: string, name: string, channels: number, default: boolean }
+  // id: what start_tuner takes and the settings save. There is no persistent
+  // device id, so it is the device name, with " #2", " #3", ... appended to
+  // repeated names. default: the system's default input device.
+TunerStarted {
+  device_id: string,         // the device opened
+  device_name: string,
+  channels: number,          // of the device's input configuration
+  channel: number,           // the one captured, 0-based (never a downmix)
+  sample_rate: number,
+  fell_back: boolean         // the requested device is gone: the default device is used
+                             // and the saved choice is kept
+}
+TunerReading {
+  hz: number | null,         // detected fundamental; null when nothing clear is heard
+  clarity: number,           // 0..1, how periodic the input is
+  level_db: number           // highest RMS level since the previous reading, dBFS; −120 = digital silence
+}
+
 // ---- Separation strength ----
 StrengthSetting { level: number, smooth: boolean }
   // level 0 = Natural (the cached stems), 1..4 = Light, Medium, Strong, Tight
@@ -221,7 +243,7 @@ StrengthSetting { level: number, smooth: boolean }
 | `pick_audio_file` | – | `string \| null` | Native open dialog (tauri-plugin-dialog). Filter: mp3, wav, flac, m4a, aac, ogg. `null` if canceled. |
 | `pick_export_path` | `default_name: String, format: ExportFormat` | `string \| null` | Native save dialog. `default_name` has no extension (e.g. `"Song (mix)"`); add `.<format>` and a filter for that format. Returns the full path or `null`. |
 | `open_song` | `path: String` | `SongInfo` | Decode (or start decoding) the file and make it current. Stops playback, position = 0, loop cleared. If stems are cached, load them so playback uses stems immediately. If a separation is running for another song it is canceled (emit `separation-error` with `canceled: true` for that song). Adds/updates the library entry. Kick off beat analysis in the background if the grid is not cached; emit `beats-ready` when done. May return before decoding finishes only if `duration_sec` is known. |
-| `close_song` | – | `()` | Stop playback, cancel separation, drop the current song. |
+| `close_song` | – | `()` | Stop playback and the live tuner, cancel separation, drop the current song. |
 | `get_library` | – | `LibraryEntry[]` | Recent songs, most recently opened first, max ~20. Songs hidden with `hide_recent` are left out. |
 | `hide_recent` | `song_id: String` | `()` | Removes a song from the recent list only (`hidden` in its `song.json`); stems and settings stay. `open_song` on the same file clears the flag. `Err` for an unknown song. |
 | `list_library` | – | `LibraryListing` | Every stored song, hidden ones included, for the Manage storage dialog. Walks the song folders for sizes on a blocking thread (the UI shows "Calculating…" meanwhile). `LibraryListing { dir, total_bytes, songs: StoredSongInfo[] }`, largest first; `StoredSongInfo { song_id, path, title, artist, size_bytes, last_opened_ms, source_exists, hidden, open }`. |
@@ -229,7 +251,7 @@ StrengthSetting { level: number, smooth: boolean }
 | `delete_song` | `song_id: String` | `number` (bytes freed) | Deletes the song's whole folder (stems of every model/quality, the cached original, `song.json` with mix/Refine/strength/beat settings). Only a direct child of `<library>/songs`, checked after canonicalizing (ids with separators, `..`, drive prefixes or a symlinked folder are refused). `Err` if the song is open (close it first); serialized with `open_song`. Missing folder: `0`. |
 | `start_separation` | – | `SeparationStarted` = `SeparatedWith` | Separates the current song with the **current settings** (model + quality, see `get_app_settings`) on a background thread. Returns immediately with the model, device and quality that will be used. If that (model, quality) is already cached for the song, the stems are loaded from the cache instead (well under a second; same events: optional `separation-progress`, then `separation-done`). `Err` if already running, no song, or the song can't be separated (original file gone and no cached set). Progress via events below; with quality "high" `fraction` stays smooth across both passes. |
 | `cancel_separation` | – | `()` | Cancel if running (no-op otherwise). Must emit `separation-error` with `canceled: true`. |
-| `play` | – | `()` | Start playback (see Playback rules). |
+| `play` | – | `()` | Start playback (see Playback rules). With a song open, stops the live tuner first and emits `tuner-stopped`. |
 | `pause` | – | `()` | Pause; also aborts a running count-in. |
 | `seek` | `position_sec: f64` | `()` | Clamp to `[0, duration]`. Works while playing or paused. |
 | `set_mix` | `stems: Vec<StemMixState>` | `()` | Always all 6 stems. Apply atomically (no glitch between stems). See Audibility. |
@@ -256,6 +278,9 @@ StrengthSetting { level: number, smooth: boolean }
 | `set_rate_correction` | `cents: i32` | `()` | Playback-rate correction for matching the song to the player's tuning: the song plays `2^(cents/1200)` faster or slower (pitch and tempo together, on top of Speed; no time-stretching). −200..200, 0 = off. Reset to 0 by `open_song`, so the UI sends it after every open. Exports take it as `ExportRequest.rate_cents`. |
 | `play_tone` | `hz: f32, sound: String` | `()` | Plays a reference tone at `hz` (the UI computes it, octave up included), replacing any playing tone. `sound`: `"pluck"` (a plucked string retriggered every 2.5 s) or `"drone"` (steady). About −12 dBFS under the master volume; ignores Speed, Pitch and the rate correction; never exported. Plays whether or not the song plays; the backend never pauses the song for it (the UI does, if asked). `Err` for an unknown sound. |
 | `stop_tone` | – | `()` | Stops the reference tone (no-op if none). |
+| `list_input_devices` | – | `InputDevice[]` | Audio input devices of the default host (enumerated on a blocking thread). Empty when there are none. |
+| `start_tuner` | `device_id: Option<String>, channel: u16, low_hz: f32` | `TunerStarted` | Starts the live tuner on `channel` (0-based) of `device_id` (null = the system default), replacing a running one. Pauses playback and stops the reference tone first. `low_hz` is the lowest note to detect (the UI sends the lowest string of My tuning, or 30 Hz for chromatic; below 45 Hz the detector uses a longer window); clamped to 20..2000. A device id that is not connected falls back to the default device (`fell_back: true`); a channel the device doesn't have falls back to 0. Otherwise the device and channel are saved with the app settings. Readings come as `tuner-reading` events. `Err` when there is no input device or it cannot be opened (message for the user). |
+| `stop_tuner` | – | `()` | Stops the live tuner and closes the input stream (no-op if not listening). |
 | `set_app_settings` | `settings: AppSettingsUpdate` | `AppSettingsInfo` | Saves the choice (null = default) and returns the new effective settings. Does **not** re-separate: if a song is open and its `separated_with` (model_id, quality) differs from the new effective `model_id`/`quality`, the UI asks "Re-separate this song?" and calls `start_separation` on yes. `Err` for an unknown model id. |
 
 ## Events
@@ -274,6 +299,9 @@ StrengthSetting { level: number, smooth: boolean }
 | `strength-progress` | `{ song_id, job: number, fraction: number }` | ≤ 10 Hz while re-deriving. |
 | `strength-done` | `{ song_id, job: number, strength: StrengthSetting }` | The derived stems are playing. |
 | `strength-error` | `{ song_id, job: number, message: string, canceled: boolean }` | Failure, or `canceled: true` when a newer job or a song switch replaced it. |
+| `tuner-reading` | `TunerReading` | About 30 Hz while the live tuner listens: the latest detector reading, with the highest level since the previous event. Starts once the detector's first window is full (85 to 170 ms). Digital silence (a blocked microphone on Windows) still sends readings, at −120 dB. |
+| `tuner-error` | `{ message: string }` | The tuner's input stream failed (device unplugged); the tuner has stopped. |
+| `tuner-stopped` | `{ reason: "playback" \| "song_closed" }` | The backend stopped the tuner by itself: `play` started playback (so the speakers don't feed the microphone), or `close_song`. Not sent for `stop_tuner`. |
 | `tuning-ready` | `{ song_id, tuning: TuningData }` | The tuning measurement finished: after a separation (on the new stems), or after `open_song` of a separated song with no measurement or one from an older algorithm version. A song that can't be measured still gets one (low confidence). |
 
 Events for a `song_id` that is no longer current are ignored by the UI.

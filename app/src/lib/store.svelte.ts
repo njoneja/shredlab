@@ -9,6 +9,7 @@ import type {
   BeatGrid,
   ClickState,
   ExportFormat,
+  InputDevice,
   LibraryEntry,
   LoopState,
   MatchMethod,
@@ -26,6 +27,8 @@ import type {
   Subdivision,
   Theme,
   ToneSound,
+  TunerReading,
+  TunerStarted,
   TuningData,
 } from "./types";
 import { STEMS } from "./types";
@@ -46,6 +49,7 @@ import {
   strings,
   toneHz,
   toSaved,
+  tunerLowHz,
   type MyTuning,
 } from "./tuning";
 
@@ -218,6 +222,23 @@ class AppState {
   toneStep = $state(true);
   tonePause = $state(true);
   private toneTimer: ReturnType<typeof setTimeout> | null = null;
+  /** The right column's tab in the Tuning panel. */
+  tuningTab = $state<"live" | "tones">("tones");
+  // live tuner (LiveTuner.svelte): listens while its tab is shown
+  inputDevices = $state.raw<InputDevice[]>([]);
+  /** What the tuner opened (kept after it stops, for the selects). */
+  tunerInput = $state.raw<TunerStarted | null>(null);
+  /** "paused": playback started and stopped it; "error": it could not start or its input failed. */
+  tunerStatus = $state<"off" | "starting" | "listening" | "paused" | "error">("off");
+  tunerError = $state<string | null>(null);
+  /** The requested (saved) input that wasn't found; the default device is used instead. */
+  tunerMissing = $state<string | null>(null);
+  tunerReading = $state.raw<TunerReading | null>(null);
+  /** Chromatic: ignore My tuning, show the nearest note. */
+  tunerChromatic = $state(false);
+  /** Bumped by every start and stop; a start that finishes late is undone. */
+  private tunerToken = 0;
+  private tunerLow = 0;
 
   // strength
   strength = $state<StrengthSetting>({ level: 0, smooth: false });
@@ -391,6 +412,16 @@ class AppState {
       // A saved match waits for the measurement; an active one follows a new one.
       if (this.match) this.rematch();
     });
+    await api.listen("tuner-reading", (p) => {
+      if (this.tunerStatus === "listening") this.tunerReading = p;
+    });
+    await api.listen("tuner-error", (p) => {
+      this.tunerToken++;
+      this.tunerStatus = "error";
+      this.tunerError = p.message;
+      this.tunerReading = null;
+    });
+    await api.listen("tuner-stopped", () => this.tunerHalted());
     await api.listen("export-progress", (p) => (this.exportFraction = p.fraction));
     await api.listen("export-done", (p) => {
       this.exporting = false;
@@ -707,7 +738,11 @@ class AppState {
   async togglePlay() {
     if (!this.song) return;
     if (this.playing) await api.pause();
-    else await api.play();
+    else {
+      // The backend stops the tuner too (and says so); the UI shows it at once.
+      this.tunerHalted();
+      await api.play();
+    }
   }
 
   async seek(sec: number) {
@@ -904,12 +939,82 @@ class AppState {
 
   // ---- tuning ----
   openTuning() {
-    if (this.song) this.tuningOpen = true;
+    // Always open on Reference tones: opening straight onto the live tuner
+    // would pause a playing song without the user asking for it.
+    if (this.song) {
+      this.tuningTab = "tones";
+      this.tuningOpen = true;
+    }
   }
 
   closeTuning() {
     this.tuningOpen = false;
     this.stopTone();
+    this.stopTuner();
+  }
+
+  // ---- live tuner ----
+  /**
+   * Starts listening (pausing the song and any tone): on `deviceId` and
+   * `channel` when given, else the input it used last, else the saved one.
+   */
+  async startTuner(deviceId?: string | null, channel?: number) {
+    const token = ++this.tunerToken;
+    const dev = deviceId !== undefined ? deviceId : (this.tunerInput?.device_id ?? this.appSettings?.tuner_device_id ?? null);
+    const ch = channel ?? (deviceId !== undefined ? 0 : (this.tunerInput?.channel ?? this.appSettings?.tuner_channel ?? 0));
+    const low = tunerLowHz(this.myTuning, this.tunerChromatic);
+    this.tunerStatus = "starting";
+    this.tunerError = null;
+    this.tunerReading = null;
+    this.clearToneState(); // the backend stops the tone
+    try {
+      const devices = await api.listInputDevices();
+      if (token !== this.tunerToken) return;
+      this.inputDevices = devices;
+      const started = await api.startTuner(dev, ch, low);
+      if (token !== this.tunerToken) {
+        // Stopped or paused meanwhile (a newer start replaces it by itself):
+        // this start may have reached the backend after the stop.
+        const now: string = this.tunerStatus;
+        if (now === "off" || now === "paused") api.stopTuner().catch(() => {});
+        return;
+      }
+      this.tunerInput = started;
+      this.tunerMissing = started.fell_back ? dev : null;
+      this.tunerLow = low;
+      this.tunerStatus = "listening";
+    } catch (e) {
+      if (token !== this.tunerToken) return;
+      this.tunerStatus = "error";
+      this.tunerError = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  /** Stops listening (leaving the tab, closing the panel). */
+  async stopTuner() {
+    if (this.tunerStatus === "off") return;
+    this.tunerToken++;
+    this.tunerStatus = "off";
+    this.tunerReading = null;
+    await api.stopTuner().catch((e) => console.warn("stop_tuner failed", e));
+  }
+
+  /** The backend stopped the tuner (playback started, song closed). */
+  private tunerHalted() {
+    if (this.tunerStatus !== "listening" && this.tunerStatus !== "starting") return;
+    this.tunerToken++;
+    this.tunerStatus = "paused";
+    this.tunerReading = null;
+  }
+
+  setTunerChromatic(on: boolean) {
+    this.tunerChromatic = on;
+    this.retuneDetector();
+  }
+
+  /** A new lowest note needs the detector made again (its window depends on it). */
+  private retuneDetector() {
+    if (this.tunerStatus === "listening" && tunerLowHz(this.myTuning, this.tunerChromatic) !== this.tunerLow) this.startTuner();
   }
 
   /** Whether a method can apply `cents` (Pitch's range, or the rate method's ±200 cents). */
@@ -998,6 +1103,7 @@ class AppState {
     this.tuningSaved = true;
     this.saveSettings();
     writeLastTuning(this.myTuning);
+    this.retuneDetector();
     if (this.toneString != null) {
       if (strings(this.myTuning).some((s) => s.number === this.toneString)) await this.playTone(this.toneString);
       else await this.stopTone();

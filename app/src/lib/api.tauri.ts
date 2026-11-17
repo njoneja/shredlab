@@ -50,6 +50,9 @@ export const tauriBackend: Backend = {
   setRateCorrection: (cents) => invoke("set_rate_correction", { cents }),
   playTone: (hz, sound) => invoke("play_tone", { hz, sound }),
   stopTone: () => invoke("stop_tone"),
+  listInputDevices: () => invoke("list_input_devices"),
+  startTuner: (deviceId, channel, lowHz) => invoke("start_tuner", { deviceId, channel, lowHz }),
+  stopTuner: () => invoke("stop_tuner"),
   async onFileDrop(cb) {
     return getCurrentWebview().onDragDropEvent((e) => {
       if (e.payload.type === "drop" && e.payload.paths.length) cb(e.payload.paths);

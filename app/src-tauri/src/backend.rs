@@ -14,7 +14,10 @@
 //! - strength: one background thread per re-derivation (canceled when a
 //!   newer one starts or the song changes).
 //! - position: a 30 Hz emitter thread (also the stereo-field events of the
-//!   open Refine panel and the debounced save of refine settings).
+//!   open Refine panel, the debounced save of refine settings and the check
+//!   for a failed tuner input).
+//! - live tuner: `shredlab-audio`'s input worker runs the pitch detector
+//!   and emits `tuner-reading` itself (see `tuner.rs`).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -33,6 +36,7 @@ use crate::audio::{self, ClickConfig, Engine, MixMode, Track};
 use crate::log;
 use crate::music_start;
 use crate::settings::{self, AppSettings};
+use crate::tuner;
 use crate::types::*;
 use shredlab_dsp::strength::{apply_strength, StrengthOptions};
 
@@ -267,6 +271,9 @@ pub struct Backend {
     beat_model: Mutex<Option<BeatModel>>,
     st: Mutex<State>,
     open_lock: Mutex<()>,
+    /// The live tuner's input capture while it listens. Never locked
+    /// together with `st` or `app_settings`.
+    tuner: Mutex<Option<audio::InputCapture>>,
 }
 
 /// [`music_start::detect`] on the original mix, logged.
@@ -605,6 +612,7 @@ impl Backend {
                 next_strength_job: 0,
             }),
             open_lock: Mutex::new(()),
+            tuner: Mutex::new(None),
         });
         if let Some(e) = &b.engine {
             let weak = Arc::downgrade(&b);
@@ -647,6 +655,7 @@ impl Backend {
                 std::thread::sleep(Duration::from_millis(33));
                 let Some(b) = weak.upgrade() else { break };
                 b.flush_song_save(false);
+                b.poll_tuner();
                 // Without an engine the thread stays alive for the flush.
                 let Some(e) = &b.engine else { continue };
                 let analysis = {
@@ -753,6 +762,8 @@ impl Backend {
             click_volume: saved.click_volume(),
             master_volume: saved.master_volume(),
             stem_format: saved.stem_format(),
+            tuner_device_id: saved.tuner_device_id.clone(),
+            tuner_channel: saved.tuner_channel.unwrap_or(0),
         }
     }
 
@@ -1277,6 +1288,7 @@ impl Backend {
     }
 
     pub fn close_song(&self) {
+        self.stop_tuner_because("song_closed");
         self.flush_song_save(true);
         let mut st = lock(&self.st);
         self.cancel_separation_locked(&mut st);
@@ -1892,6 +1904,10 @@ impl Backend {
 
     /// `Err` only when a song is open but there is no audio output device.
     pub fn play(&self) -> Result<(), String> {
+        // The speakers must not feed the tuner's microphone.
+        if lock(&self.st).song.is_some() {
+            self.stop_tuner_because("playback");
+        }
         let st = lock(&self.st);
         if st.song.is_none() {
             return Ok(());
@@ -1977,6 +1993,135 @@ impl Backend {
     pub fn stop_tone(&self) {
         if let Some(e) = &self.engine {
             e.stop_tone();
+        }
+    }
+
+    // ------------------------------------------------------------ live tuner
+
+    pub fn list_input_devices(&self) -> Vec<InputDeviceInfo> {
+        audio::list_input_devices()
+            .into_iter()
+            .map(|d| InputDeviceInfo {
+                id: d.id,
+                name: d.name,
+                channels: d.channels,
+                default: d.default,
+            })
+            .collect()
+    }
+
+    /// Starts listening on `channel` (0-based) of `device_id` (`None` = the
+    /// system default) for notes down to `low_hz`, replacing a running
+    /// tuner. Pauses playback and stops the reference tone first. A device
+    /// that is gone falls back to the default (`fell_back`); otherwise the
+    /// device and channel are saved with the app settings.
+    pub fn start_tuner(
+        &self,
+        device_id: Option<String>,
+        channel: u16,
+        low_hz: f32,
+    ) -> Result<TunerStarted, String> {
+        if !(low_hz.is_finite() && low_hz > 0.0) {
+            return Err(format!("Invalid lowest note {low_hz} Hz"));
+        }
+        let low_hz = low_hz.clamp(20.0, 2000.0);
+        self.stop_tuner();
+        self.pause();
+        self.stop_tone();
+        let devices = audio::list_input_devices();
+        let (id, fell_back) = tuner::resolve_device(device_id.as_deref(), &devices)?;
+        let channels = devices
+            .iter()
+            .find(|d| d.id == id)
+            .map_or(1, |d| d.channels);
+        let channel = if channel < channels && !fell_back {
+            channel
+        } else {
+            0
+        };
+        let sink = self.sink.clone();
+        let capture = tuner::start(&id, channel, low_hz, move |r| {
+            if let Ok(v) = serde_json::to_value(r) {
+                sink("tuner-reading", v);
+            }
+        })?;
+        let info = capture.info().clone();
+        log!(
+            "tuner listening: {} (input {} of {}, {} Hz), lowest note {low_hz:.1} Hz{}",
+            info.device_name,
+            info.channel + 1,
+            info.channels,
+            info.sample_rate,
+            if fell_back {
+                " (saved device not found; default used)"
+            } else {
+                ""
+            }
+        );
+        // Two starts at once: the later one wins, the other is closed.
+        let old = lock(&self.tuner).replace(capture);
+        drop(old);
+        if !fell_back {
+            let saved = lock(&self.app_settings).clone();
+            if saved.tuner_device_id != device_id || saved.tuner_channel.unwrap_or(0) != channel {
+                if let Err(e) = self.update_settings(true, |s| {
+                    s.tuner_device_id = device_id;
+                    s.tuner_channel = Some(channel);
+                }) {
+                    log!("tuner input not saved: {e}");
+                }
+            }
+        }
+        Ok(TunerStarted {
+            device_id: id,
+            device_name: info.device_name,
+            channels: info.channels,
+            channel: info.channel,
+            sample_rate: info.sample_rate,
+            fell_back,
+        })
+    }
+
+    /// Stops the tuner's input stream; true if it was listening.
+    pub fn stop_tuner(&self) -> bool {
+        let capture = lock(&self.tuner).take();
+        // Dropping joins the capture thread; done outside the lock.
+        match capture {
+            Some(c) => {
+                c.stop();
+                log!("tuner stopped");
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Stops the tuner on the backend's own initiative and tells the UI.
+    fn stop_tuner_because(&self, reason: &'static str) {
+        if self.stop_tuner() {
+            self.emit("tuner-stopped", &TunerStopped { reason });
+        }
+    }
+
+    /// Stops the tuner if its input stream failed (device unplugged) and
+    /// emits `tuner-error`. Called by the position thread.
+    pub fn poll_tuner(&self) {
+        let failed = {
+            let mut g = lock(&self.tuner);
+            match g.as_ref().and_then(|c| c.error()) {
+                Some(e) => g.take().map(|c| (c, e)),
+                None => None,
+            }
+        };
+        if let Some((c, e)) = failed {
+            c.stop();
+            log!("tuner input failed: {e}");
+            self.emit(
+                "tuner-error",
+                &TunerError {
+                    message: format!("The input stopped: {e}"),
+                },
+            );
         }
     }
 

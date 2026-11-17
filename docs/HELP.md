@@ -113,8 +113,21 @@ press `T`, to open the Tuning panel.
 - **Tune to the song** sets your reference to the song's instead, for
   tuning your instrument to the recording as it is.
 - **Reference tones** play each string of your tuning. Number keys play a
-  string while the panel is open (1 is the highest string), and `Space`
+  string while that tab is shown (1 is the highest string), and `Space`
   stops the tone.
+- **Live tuner** listens to your instrument through an audio interface or
+  a microphone. Pick the input device, and for an interface with several
+  inputs, the one your instrument is plugged into; both are remembered.
+  Play a string: the tuner shows the note, how many cents it is off and
+  which way to turn the peg ("7¢ flat: tune up"), and the string turns
+  "in tune" once it stays within 3 cents for a second. **Chromatic**
+  ignores your tuning and shows the nearest note. The song is paused while
+  the tuner listens, and pressing Play stops the tuner so the speakers
+  don't feed the microphone; **Listen again** starts it again. The tuner
+  stops when you switch tabs or close the panel.
+- If the level meter stays empty on Windows, the microphone may be blocked:
+  check Settings > Privacy & security > Microphone > Let desktop apps
+  access your microphone.
 
 ## Keyboard shortcuts
 

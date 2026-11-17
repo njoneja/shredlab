@@ -3,11 +3,13 @@
 
 <script lang="ts">
   // The Tuning panel: the song's measured tuning and the match to the
-  // player's tuning (left), reference tones for the strings (right). The
-  // song keeps playing while it is open. Opened by the transport's Tuning
-  // button or T; Esc closes it and stops any tone.
+  // player's tuning (left), reference tones for the strings or the live
+  // tuner (right). The song keeps playing while it is open, except while the
+  // live tuner listens. Opened by the transport's Tuning button or T; Esc
+  // closes it and stops any tone and the tuner.
   import { onMount, tick } from "svelte";
   import Icon from "./Icon.svelte";
+  import LiveTuner from "./LiveTuner.svelte";
   import { app } from "./store.svelte";
   import type { MatchMethod, ToneSound } from "./types";
   import {
@@ -77,7 +79,8 @@
     }
     if (e.ctrlKey || e.metaKey || e.altKey || isTyping(e.target)) return;
     const d = /^(?:Digit|Numpad)([1-9])$/.exec(e.code);
-    if (d) {
+    // Number keys play tones on the Reference tones tab only.
+    if (d && app.tuningTab === "tones") {
       const n = Number(d[1]);
       if (n <= strs.length) {
         e.preventDefault();
@@ -167,6 +170,22 @@
     pick(next);
     await tick();
     group.querySelector<HTMLElement>(`[data-v="${next}"]`)?.focus();
+  }
+
+  const TABS = [
+    { id: "tones", label: "Reference tones" },
+    { id: "live", label: "Live tuner" },
+  ] as const;
+
+  async function tabKeys(e: KeyboardEvent) {
+    const dir = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
+    if (!dir) return;
+    e.preventDefault();
+    const i = TABS.findIndex((t) => t.id === app.tuningTab);
+    const next = TABS[(i + dir + TABS.length) % TABS.length].id;
+    app.tuningTab = next;
+    await tick();
+    document.getElementById(`tab-${next}`)?.focus();
   }
 
   onMount(async () => {
@@ -363,56 +382,73 @@
       </div>
 
       <div class="right">
-        <div class="tabs" role="tablist" aria-label="Tuning tools">
-          <button class="tab on" role="tab" id="tab-tones" aria-selected="true" aria-controls="panel-tones">Reference tones</button>
+        <div class="tabs" role="tablist" aria-label="Tuning tools" tabindex="-1" onkeydown={tabKeys}>
+          {#each TABS as tb (tb.id)}
+            <button
+              class="tab"
+              class:on={app.tuningTab === tb.id}
+              role="tab"
+              id="tab-{tb.id}"
+              aria-selected={app.tuningTab === tb.id}
+              aria-controls="panel-{tb.id}"
+              tabindex={app.tuningTab === tb.id ? 0 : -1}
+              onclick={() => (app.tuningTab = tb.id)}>{tb.label}</button
+            >
+          {/each}
         </div>
-        <div class="tones" role="tabpanel" id="panel-tones" aria-labelledby="tab-tones">
-          <div class="strings">
-            {#each strs as s (s.number)}
-              {@const playing = app.toneString === s.number}
-              {@const shownMidi = s.midi + (app.toneOctaveUp ? 12 : 0)}
-              <div class="str" class:playing>
-                <span class="mono muted num">{s.number}</span>
-                <span class="note">{s.name}</span>
-                <span class="mono detail">{noteLabel(shownMidi, my.shift < 0)} · {(s.hz * (app.toneOctaveUp ? 2 : 1)).toFixed(2)} Hz</span>
-                {#if playing}
-                  <svg class="level" width="34" height="16" viewBox="0 0 34 16" aria-hidden="true">
-                    <rect x="0" y="6" width="4" height="10" rx="1" /><rect x="7" y="2" width="4" height="14" rx="1" /><rect x="14" y="0" width="4" height="16" rx="1" /><rect x="21" y="4" width="4" height="12" rx="1" /><rect x="28" y="8" width="4" height="8" rx="1" />
-                  </svg>
-                {/if}
-                <button
-                  class="btn small"
-                  class:primary={playing}
-                  aria-label="{playing ? 'Stop' : 'Play'} string {s.number} ({noteLabel(shownMidi, my.shift < 0)})"
-                  onclick={() => app.toggleTone(s.number)}
-                >
-                  <Icon name={playing ? "stop" : "play"} size={12} />
-                  {playing ? "Stop" : "Play"}
-                </button>
-              </div>
-            {/each}
+        {#if app.tuningTab === "live"}
+          <div role="tabpanel" id="panel-live" aria-labelledby="tab-live">
+            <LiveTuner />
           </div>
-
-          <div class="opts">
-            <div class="row">
-              <span class="muted">Sound</span>
-              <!-- svelte-ignore a11y_interactive_supports_focus -->
-              <div class="seg" role="radiogroup" aria-label="Sound" tabindex="-1" onkeydown={(e) => segKeys(e, ["pluck", "drone"], app.toneSound, (v) => app.setToneSound(v as ToneSound))}>
-                {#each [{ v: "pluck" as ToneSound, label: "Pluck" }, { v: "drone" as ToneSound, label: "Drone" }] as o (o.v)}
-                  <button role="radio" data-v={o.v} aria-checked={app.toneSound === o.v} tabindex={app.toneSound === o.v ? 0 : -1} onclick={() => app.setToneSound(o.v)}>{o.label}</button>
-                {/each}
-              </div>
+        {:else}
+          <div class="tones" role="tabpanel" id="panel-tones" aria-labelledby="tab-tones">
+            <div class="strings">
+              {#each strs as s (s.number)}
+                {@const playing = app.toneString === s.number}
+                {@const shownMidi = s.midi + (app.toneOctaveUp ? 12 : 0)}
+                <div class="str" class:playing>
+                  <span class="mono muted num">{s.number}</span>
+                  <span class="note">{s.name}</span>
+                  <span class="mono detail">{noteLabel(shownMidi, my.shift < 0)} · {(s.hz * (app.toneOctaveUp ? 2 : 1)).toFixed(2)} Hz</span>
+                  {#if playing}
+                    <svg class="level" width="34" height="16" viewBox="0 0 34 16" aria-hidden="true">
+                      <rect x="0" y="6" width="4" height="10" rx="1" /><rect x="7" y="2" width="4" height="14" rx="1" /><rect x="14" y="0" width="4" height="16" rx="1" /><rect x="21" y="4" width="4" height="12" rx="1" /><rect x="28" y="8" width="4" height="8" rx="1" />
+                    </svg>
+                  {/if}
+                  <button
+                    class="btn small"
+                    class:primary={playing}
+                    aria-label="{playing ? 'Stop' : 'Play'} string {s.number} ({noteLabel(shownMidi, my.shift < 0)})"
+                    onclick={() => app.toggleTone(s.number)}
+                  >
+                    <Icon name={playing ? "stop" : "play"} size={12} />
+                    {playing ? "Stop" : "Play"}
+                  </button>
+                </div>
+              {/each}
             </div>
-            <label class="chk"><input type="checkbox" checked={app.toneOctaveUp} onchange={(e) => app.setToneOctaveUp(e.currentTarget.checked)} /> Octave up</label>
-            <label class="chk" title="After 6 seconds, move to the next higher string; stop after the highest"
-              ><input type="checkbox" checked={app.toneStep} onchange={(e) => app.setToneStep(e.currentTarget.checked)} /> Step to next string</label
-            >
-            <label class="chk" title="Starting a tone pauses the song; it doesn't resume by itself"
-              ><input type="checkbox" bind:checked={app.tonePause} /> Pause song while tones play</label
-            >
+
+            <div class="opts">
+              <div class="row">
+                <span class="muted">Sound</span>
+                <!-- svelte-ignore a11y_interactive_supports_focus -->
+                <div class="seg" role="radiogroup" aria-label="Sound" tabindex="-1" onkeydown={(e) => segKeys(e, ["pluck", "drone"], app.toneSound, (v) => app.setToneSound(v as ToneSound))}>
+                  {#each [{ v: "pluck" as ToneSound, label: "Pluck" }, { v: "drone" as ToneSound, label: "Drone" }] as o (o.v)}
+                    <button role="radio" data-v={o.v} aria-checked={app.toneSound === o.v} tabindex={app.toneSound === o.v ? 0 : -1} onclick={() => app.setToneSound(o.v)}>{o.label}</button>
+                  {/each}
+                </div>
+              </div>
+              <label class="chk"><input type="checkbox" checked={app.toneOctaveUp} onchange={(e) => app.setToneOctaveUp(e.currentTarget.checked)} /> Octave up</label>
+              <label class="chk" title="After 6 seconds, move to the next higher string; stop after the highest"
+                ><input type="checkbox" checked={app.toneStep} onchange={(e) => app.setToneStep(e.currentTarget.checked)} /> Step to next string</label
+              >
+              <label class="chk" title="Starting a tone pauses the song; it doesn't resume by itself"
+                ><input type="checkbox" bind:checked={app.tonePause} /> Pause song while tones play</label
+              >
+            </div>
+            <p class="muted hint">Number keys 1–{strs.length} play a string. Space stops.</p>
           </div>
-          <p class="muted hint">Number keys 1–{strs.length} play a string. Space stops.</p>
-        </div>
+        {/if}
       </div>
     </div>
   </div>

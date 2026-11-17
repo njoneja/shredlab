@@ -121,7 +121,7 @@
           {/each}
         </dl>
         <p class="muted">Stems are numbered top to bottom: 1 vocals, 2 guitar, 3 bass, 4 drums, 5 piano / keys, 6 other.</p>
-        <p class="muted">In the Tuning panel, 1 to 8 play a reference tone for that string (1 = highest) and Space stops it.</p>
+        <p class="muted">In the Tuning panel's Reference tones tab, 1 to 8 play a reference tone for that string (1 = highest) and Space stops it.</p>
       </section>
     </div>
   </div>

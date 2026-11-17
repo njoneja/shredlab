@@ -344,3 +344,112 @@ export function songState(m: MeasuredTuning | null, measuring: boolean): SongTun
   if (Math.abs(m.offset_cents) <= IN_TUNE_CENTS && !m.drifts) return "in-tune";
   return "off";
 }
+
+// ---- live tuner ----
+
+/** Lowest note the chromatic tuner listens for (below the low B of a 5-string bass, 30.87 Hz). */
+export const CHROMATIC_LOW_HZ = 30;
+/** A string's state (in tune or not) changes after holding for this long. */
+export const IN_TUNE_HOLD_MS = 1000;
+/** Input at or below this level (dBFS) counts as digital silence. */
+export const NO_INPUT_DB = -119;
+/** Digital silence this long shows the "No input" hint. */
+export const NO_INPUT_MS = 2000;
+
+/** Cents from `targetHz` to `hz` (negative = flat). */
+export function centsOff(hz: number, targetHz: number): number {
+  return 1200 * Math.log2(hz / targetHz);
+}
+
+/** Lowest note the detector needs: the lowest string of `t`, or the chromatic floor. */
+export function tunerLowHz(t: MyTuning, chromatic: boolean): number {
+  if (chromatic) return CHROMATIC_LOW_HZ;
+  return Math.min(...strings(t).map((s) => s.hz));
+}
+
+/**
+ * The string whose target is nearest `hz`, or null when `hz` lies further
+ * below the lowest string (or above the highest) than half the gap to its
+ * neighbor. Between strings the nearest one always matches.
+ */
+export function matchString(hz: number, strs: TuningString[]): TuningString | null {
+  if (!(hz > 0) || !strs.length) return null;
+  const sorted = [...strs].sort((a, b) => a.hz - b.hz);
+  let best = sorted[0];
+  for (const s of sorted) if (Math.abs(centsOff(hz, s.hz)) < Math.abs(centsOff(hz, best.hz))) best = s;
+  const c = centsOff(hz, best.hz);
+  const lower = sorted.filter((s) => centsOff(best.hz, s.hz) > 0.5).pop();
+  const upper = sorted.find((s) => centsOff(s.hz, best.hz) > 0.5);
+  // Outside the range a missing neighbor mirrors the other one (one string: a semitone).
+  const gapDown = lower ? centsOff(best.hz, lower.hz) : upper ? centsOff(upper.hz, best.hz) : 100;
+  const gapUp = upper ? centsOff(upper.hz, best.hz) : gapDown;
+  return (c < 0 ? -c <= gapDown / 2 : c <= gapUp / 2) ? best : null;
+}
+
+export interface TunerTarget {
+  /** MIDI note of the target. */
+  midi: number;
+  /** Note name without octave ("Gb"). */
+  name: string;
+  octave: number;
+  /** Target frequency. */
+  hz: number;
+  /** The reading's offset from the target. */
+  cents: number;
+  /** String number (1 = highest) when the target is a string of My tuning. */
+  string: number | null;
+}
+
+/**
+ * What the live tuner shows for a reading: the matching string of `t`, or
+ * (chromatic, or no string near) the nearest note in `t`'s reference A.
+ * Flats when `t` is shifted down, like its string names.
+ */
+export function tunerTarget(hz: number, t: MyTuning, chromatic: boolean): TunerTarget | null {
+  if (!(hz > 0) || !Number.isFinite(hz)) return null;
+  const flats = t.shift < 0;
+  const s = chromatic ? null : matchString(hz, strings(t));
+  const midi = s ? s.midi : Math.round(69 + 12 * Math.log2(hz / t.refHz));
+  const target = s ? s.hz : noteHz(midi, t.refHz);
+  return {
+    midi,
+    name: noteName(midi, flats),
+    octave: Math.floor(midi / 12) - 1,
+    hz: target,
+    cents: centsOff(hz, target),
+    string: s ? s.number : null,
+  };
+}
+
+/** Which way to turn the peg: "In tune" within ±IN_TUNE_CENTS (whole cents, as shown), else flat or sharp. */
+export function tuneAdvice(cents: number): { state: "in-tune" | "flat" | "sharp"; text: string; full: string } {
+  const r = Math.round(cents);
+  if (Math.abs(r) <= IN_TUNE_CENTS) return { state: "in-tune", text: "In tune", full: "In tune" };
+  return r < 0
+    ? { state: "flat", text: "Flat: tune up", full: `${-r}¢ flat: tune up` }
+    : { state: "sharp", text: "Sharp: tune down", full: `${r}¢ sharp: tune down` };
+}
+
+/** A string held in or out of tune since `since` (ms). */
+export interface TuneHold {
+  string: number;
+  inTune: boolean;
+  since: number;
+}
+
+/**
+ * One reading of the strings strip: `string` (null = no string) at `cents`,
+ * at time `now` (ms). Returns the new hold, and the string's state once it
+ * has held in or out of tune for IN_TUNE_HOLD_MS (else null).
+ */
+export function holdStep(
+  hold: TuneHold | null,
+  string: number | null,
+  cents: number | null,
+  now: number,
+): { hold: TuneHold | null; settled: { string: number; inTune: boolean } | null } {
+  if (string == null || cents == null || !Number.isFinite(cents)) return { hold: null, settled: null };
+  const inTune = Math.abs(Math.round(cents)) <= IN_TUNE_CENTS;
+  const h = hold && hold.string === string && hold.inTune === inTune ? hold : { string, inTune, since: now };
+  return { hold: h, settled: now - h.since >= IN_TUNE_HOLD_MS ? { string, inTune } : null };
+}

@@ -53,6 +53,7 @@ pub fn event_tap() -> Option<Tap> {
             && name != "export-progress"
             && name != "strength-progress"
             && name != "refine-field"
+            && name != "tuner-reading"
         {
             if let Ok(tx) = tx.lock() {
                 let _ = tx.send((name.to_string(), v.clone()));

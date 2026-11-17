@@ -38,14 +38,14 @@ backend calls are in `lib/store.svelte.ts`; read it next.
 - `lib/mix.ts`: dB and linear gain, the volume slider law, the backing-track-from-original rule.
 - `lib/meter.ts`: effective downbeats from the grid and overrides, bar numbers, time formatting.
 - `lib/refine.ts`: Refine defaults, quick stereo presets, the stereo window and EQ response (same formulas as `shredlab-dsp`), strength names.
-- `lib/tuning.ts`: instruments and tuning presets, string notes and frequencies, the song-to-player match and its split into Pitch, the song's tuning state, names and formatting. Pure functions; the store holds the state.
+- `lib/tuning.ts`: instruments and tuning presets, string notes and frequencies, the song-to-player match and its split into Pitch, the song's tuning state, names and formatting, and the live tuner's math (the string or note a frequency belongs to, cents, the in-tune hold). Pure functions; the store holds the state.
 - `lib/theme.ts`, `lib/recent.ts`: theme application and the localStorage mirror; recent-list and size formatting.
 
 Components, all in `lib/`:
 
 - Frame: `Header.svelte` (with `OpenMenu.svelte` and `SettingsPopover.svelte`: model, quality, stem format, theme), `EmptyState.svelte` (start screen and recent songs), `SeparationBanner.svelte`.
 - Song view: `Waveform.svelte` (canvas: peaks, bars, loop handles, playhead), `Mixer.svelte` (stem rows; opens `RefinePanel.svelte`), `Transport.svelte` (play, master volume, click and count-in, speed, tuning and pitch; opens `MeterPanel.svelte`; `TuningButton.svelte` is its icon-only Tuning button, whose look shows the song's tuning state).
-- Dialogs: `ExportDialog.svelte`, `TuningPanel.svelte` (the song's tuning and the match, My tuning, reference tones), `ShortcutsHelp.svelte`, `AboutDialog.svelte`, `StorageDialog.svelte`, `RemoveRecentDialog.svelte`. Each has an open flag in `AppState`.
+- Dialogs: `ExportDialog.svelte`, `TuningPanel.svelte` (the song's tuning and the match, My tuning, and tabs for reference tones and `LiveTuner.svelte`), `ShortcutsHelp.svelte`, `AboutDialog.svelte`, `StorageDialog.svelte`, `RemoveRecentDialog.svelte`. Each has an open flag in `AppState`.
 - Small parts: `Icon.svelte` (inline SVG paths), `Wordmark.svelte`.
 
 ## How it works
@@ -98,6 +98,13 @@ match goes back to the previous Pitch before the next song opens. Exports
 send the active rate correction as `rate_cents`. Reference tones are
 played by the backend; the store keeps which string plays, steps to the
 next string after 6 s, and pauses the song when a tone starts if asked.
+The live tuner listens only while `LiveTuner.svelte` is mounted (its tab
+is shown): mounting calls `start_tuner`, unmounting `stop_tuner`. The
+store keeps the status, the input and the latest `tuner-reading`; the
+component turns readings into the note, the smoothed needle and the
+strings strip. Play stops the tuner in the backend, which emits
+`tuner-stopped`; the tab then offers to listen again. The backend saves
+the input device and channel with the app settings.
 
 **Live controls.** Sliders send on every input and save on release
 (`set_master_volume(v, save)`, click volume via `set_click` while dragging
@@ -121,7 +128,10 @@ is silent. It also fakes a tuning measurement a moment after
 separation or open: each demo song shows one state (see the comment on
 `fakeTuning`), and `__mockTuning({...})` in the console replaces the open
 song's measurement. Reference tones play through WebAudio, and the rate
-correction changes how fast the position moves. It persists to localStorage keys starting with `shredlab.mock.`
+correction changes how fast the position moves. The live tuner gets three
+fake inputs (a 2-channel interface, a microphone, and a line input that
+gives digital silence, for the "No input" hint) and a synthetic stream
+that plucks the strings in turn, each settling near its target. It persists to localStorage keys starting with `shredlab.mock.`
 (clear them to reset). A "Mock backend" badge shows in the corner.
 
 **Build.** `vite build` writes `app/dist`; the target is `chrome105` on

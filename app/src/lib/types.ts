@@ -174,6 +174,8 @@ export interface AppSettingsInfo {
   count_in_to_music_start: boolean; // "Count in to where the music starts" (on by default)
   click_volume: number; // click and count-in volume, linear 0..1 (0.8 by default)
   master_volume: number; // master playback volume, linear 0..1 (1 by default; not in exports)
+  tuner_device_id: string | null; // live tuner input device (null = the system default)
+  tuner_channel: number; // live tuner input channel, 0-based
   stem_format: StemFormat; // format of newly written stems ("mp3" by default)
 }
 
@@ -356,6 +358,34 @@ export interface SongTuningSettings {
 /** How a match shifts the song: through Pitch, or by changing the playback rate. */
 export type MatchMethod = "pitch" | "rate";
 
+/** An audio input device for the live tuner. */
+export interface InputDevice {
+  id: string;
+  name: string;
+  channels: number;
+  default: boolean;
+}
+
+/** What `startTuner` opened. */
+export interface TunerStarted {
+  device_id: string;
+  device_name: string;
+  channels: number;
+  /** 0-based. */
+  channel: number;
+  sample_rate: number;
+  /** The requested device is gone; the default device is used (the saved choice is kept). */
+  fell_back: boolean;
+}
+
+/** `tuner-reading`: about 30 per second while the tuner listens. */
+export interface TunerReading {
+  hz: number | null;
+  clarity: number;
+  /** Highest RMS level since the previous reading, dBFS (−120 = digital silence). */
+  level_db: number;
+}
+
 export interface EventMap {
   "separation-progress": SeparationProgress;
   "separation-done": SeparationDone;
@@ -370,6 +400,9 @@ export interface EventMap {
   "strength-done": StrengthDone;
   "strength-error": StrengthError;
   "tuning-ready": TuningReady;
+  "tuner-reading": TunerReading;
+  "tuner-error": { message: string };
+  "tuner-stopped": { reason: "playback" | "song_closed" };
 }
 export type EventName = keyof EventMap;
 export type Unlisten = () => void;
@@ -422,6 +455,10 @@ export interface Backend {
   /** Plays a reference tone (replaces any playing one); runs whether or not the song plays. */
   playTone(hz: number, sound: ToneSound): Promise<void>;
   stopTone(): Promise<void>;
+  listInputDevices(): Promise<InputDevice[]>;
+  /** Listens on `channel` (0-based) of `deviceId` (null = the default); pauses the song and stops the tone. */
+  startTuner(deviceId: string | null, channel: number, lowHz: number): Promise<TunerStarted>;
+  stopTuner(): Promise<void>;
   /** Paths dropped onto the window (Tauri drag-drop; HTML5 drop in the mock). */
   onFileDrop(cb: (paths: string[]) => void): Promise<Unlisten>;
   listen<E extends EventName>(event: E, cb: (payload: EventMap[E]) => void): Promise<Unlisten>;
