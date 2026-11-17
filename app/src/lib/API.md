@@ -70,7 +70,32 @@ SongInfo {
   strength: StrengthSetting,  // saved separation strength of the song
   strength_job: number,       // id of a strength job open_song started (re-applying a saved
                               // strength), 0 = none; its strength-done/-error has this id
-  tuning: TuningData | null   // measured tuning; null until the tuning job has run on the stems
+  tuning: TuningData | null,  // measured tuning; null until the tuning job has run on the stems
+  chords: ChordsData | null   // chords of the loaded stems; null until the chords job has run
+}
+
+ChordsData {
+  version: number,          // algorithm version; an older one is detected again on open
+  stems: string,            // stem set they come from, "<model id>_s<shifts>"
+  key?: { tonic: number, minor: boolean } | null,   // key estimate, tonic as a pitch class (C = 0)
+  segments: {               // contiguous, in time order, covering the whole song
+    start_s: number,
+    end_s: number,
+    root?: number | null,   // pitch class at concert pitch (the song's offset removed); missing = no chord
+    quality?: string,       // "", "m", "5", "7", "maj7", "m7", "sus2", "sus4", "dim"; missing = ""
+    bass?: number | null,   // bass pitch class of a slash chord (D/F#)
+    detail?: string | null, // suffix of the detailed name when it differs: "6", "m6", "add9", "9",
+                            // "7sus4" (same root and bass; the segments are the same either way)
+    push?: boolean,         // starts off the beat
+  }[],
+  passing?: {               // short chords passing by inside a segment (a quick Bm in a D bar);
+    start_s: number,        // in time order, missing = none
+    end_s: number,
+    root: number,
+    quality?: string,
+  }[],
+  figures?: { ... }[]       // same shape: the segment's chord moving to an extension of itself
+                            // for a beat or more (A to A6 and back); never overlaps a passing chord
 }
 
 TuningData {
@@ -308,6 +333,7 @@ StrengthSetting { level: number, smooth: boolean }
 | `tuner-reading` | `TunerReading` | About 30 Hz while the live tuner listens: the latest detector reading, with the highest level since the previous event. Starts once the detector's first window is full (85 to 170 ms). Digital silence (a blocked microphone on Windows) still sends readings, at −120 dB. |
 | `tuner-error` | `{ message: string }` | The tuner's input stream failed (device unplugged); the tuner has stopped. |
 | `tuner-stopped` | `{ reason: "playback" \| "song_closed" }` | The backend stopped the tuner by itself: `play` started playback (so the speakers don't feed the microphone), or `close_song`. Not sent for `stop_tuner`. |
+| `chords-ready` | `{ song_id, chords: ChordsData }` | Chord detection finished for the open song's loaded stems. It runs once the stems, the beats and a current tuning measurement are all in and the saved chords are missing, from another stem set, or from an older algorithm version. |
 | `tuning-ready` | `{ song_id, tuning: TuningData }` | The tuning measurement finished: after a separation (on the new stems), or after `open_song` of a separated song with no measurement or one from an older algorithm version. A song that can't be measured still gets one (low confidence). |
 
 Events for a `song_id` that is no longer current are ignored by the UI.

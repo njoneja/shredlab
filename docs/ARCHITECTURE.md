@@ -21,6 +21,8 @@ app/src-tauri                       commands → backend (state, background jobs
    ├─ shredlab-separation   ONNX Runtime sessions, model registry, adapters, self-test
    │    └─ shredlab-dsp     STFT/iSTFT, chunking, overlap-add, Refine DSP
    ├─ shredlab-beats        Beat This! pre/post-processing (ORT-free)
+   ├─ shredlab-tuning       tuning offset, tuning guess, live pitch detector
+   ├─ shredlab-chords       chord detection from the stems and beats
    ├─ shredlab-audio        real-time engine, offline render, WAV/FLAC/MP3 export
    ├─ shredlab-library      song folders, song.json, stem cache
    └─ shredlab-io           decode, resample, WAV writing
@@ -34,6 +36,8 @@ app/src-tauri                       commands → backend (state, background jobs
 | [crates/shredlab-io](../crates/shredlab-io/README.md) | Decoding, resampling, WAV writing; returns planar f32 stereo |
 | [crates/shredlab-separation](../crates/shredlab-separation/README.md) | ONNX Runtime, execution providers, model registry, adapters, self-test, `Separator`, the beat model session |
 | [crates/shredlab-beats](../crates/shredlab-beats/README.md) | Beat This! preprocessing and peak picking; tempo and meter helpers |
+| [crates/shredlab-tuning](../crates/shredlab-tuning/README.md) | The song's offset from A440 and a guess at its tuning, measured on the stems; the live tuner's pitch detector |
+| [crates/shredlab-chords](../crates/shredlab-chords/README.md) | Chord detection on the stems and the beat grid, at concert pitch, with a key estimate |
 | [crates/shredlab-audio](../crates/shredlab-audio/README.md) | Real-time engine, mixer, time stretch, click, limiter, offline render and export |
 | [crates/shredlab-library](../crates/shredlab-library/README.md) | One folder per song with a JSON manifest and cached stems |
 | [crates/shredlab-cli](../crates/shredlab-cli/README.md) | Headless CLI: models, self-tests, separation, decoding, info |
@@ -82,9 +86,12 @@ High on GPU and Standard on CPU.
 Beat and downbeat tracking uses Beat This! (CPJKU, MIT). `shredlab-beats`
 holds the model-agnostic parts and has no ONNX Runtime dependency; the app
 runs inference through `shredlab_separation::BeatModel`, on CPU by default
-because this model has no self-test. When detection is wrong, the user can
-mark which beat is "one" and change beats per bar from any beat onward; the
-overrides are saved with the song.
+because this model has no self-test. Beats come from the network's peaks;
+downbeats from a Viterbi decoder over the beats that keeps bars a
+consistent length. The per-beat downbeat scores are cached with the grid,
+so a decoder change re-decodes cached songs without the model. When
+detection is wrong, the user can mark which beat is "one" and change beats
+per bar from any beat onward; the overrides are saved with the song.
 
 ## Playback and export
 
@@ -109,6 +116,20 @@ Export runs the same mix and stretch path offline, so the file matches what
 you hear, including speed, pitch, the click track and the playback-rate
 correction (applied by resampling the finished file). Reference tones are
 never exported.
+
+## Chords
+
+After separation the app runs three analyses on the stems, each saved in
+`song.json` with its algorithm version and rerun only when that version
+changes or new stems arrive: beats (on the mix), the tuning offset, and the
+chords. The chords need the other two: `shredlab-chords` names pitch classes
+at the song's own reference (the measured offset removed) and segments the
+song on a grid of subdivisions of the detected beats, so a chord change
+pushed an eighth before the beat stays where it is played. Its result is
+concert pitch only. The UI names the chords: the shape in the song's tuning
+once the user has set "Song is in", and what is heard after any pitch shift
+when that differs (`app/src/lib/chords.ts`), so changing Pitch or the
+tuning never reruns the detection.
 
 ## Live tuner
 

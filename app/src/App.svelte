@@ -10,6 +10,7 @@
   import EmptyState from "./lib/EmptyState.svelte";
   import SeparationBanner from "./lib/SeparationBanner.svelte";
   import Waveform from "./lib/Waveform.svelte";
+  import ChordsPanel from "./lib/ChordsPanel.svelte";
   import Mixer from "./lib/Mixer.svelte";
   import Transport from "./lib/Transport.svelte";
   import ExportDialog from "./lib/ExportDialog.svelte";
@@ -65,6 +66,8 @@
       if (app.grid) app.toggleClick();
     } else if (e.code === "KeyT") {
       app.openTuning();
+    } else if (e.code === "KeyK") {
+      app.toggleChords();
     } else {
       handled = false;
     }
@@ -93,6 +96,7 @@
     <main>
       <SeparationBanner />
       <Waveform />
+      {#if app.chordsOpen}<ChordsPanel />{/if}
       <div class="mixer-scroll"><Mixer /></div>
       <Transport />
     </main>
@@ -125,6 +129,8 @@
   main {
     flex: 1;
     min-height: 0;
+    /* Last resort in a very small window: scroll rather than overlap. */
+    overflow-y: auto;
     display: flex;
     flex-direction: column;
     gap: var(--gap);
@@ -136,7 +142,9 @@
   }
   .mixer-scroll {
     flex: 0 1 auto;
-    min-height: 120px;
+    /* Scrolls inside; with the chords panel open in a small window it gives
+       way before the transport is pushed out of view. */
+    min-height: 68px;
     overflow: auto;
   }
   .error {

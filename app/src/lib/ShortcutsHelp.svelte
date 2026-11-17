@@ -19,6 +19,7 @@
     [["Shift", "↑ ↓"], "Pitch ±1 semitone"],
     [["C"], "Click on / off"],
     [["T"], "Tuning panel"],
+    [["K"], "Chords panel"],
     [["1–6"], "Toggle stem on / off"],
     [["Shift", "1–6"], "Solo stem on / off"],
     [["Alt", "1–6"], "All but this stem (play along)"],

@@ -44,7 +44,8 @@ backend calls are in `lib/store.svelte.ts`; read it next.
 Components, all in `lib/`:
 
 - Frame: `Header.svelte` (with `OpenMenu.svelte` and `SettingsPopover.svelte`: model, quality, stem format, theme), `EmptyState.svelte` (start screen and recent songs), `SeparationBanner.svelte`.
-- Song view: `Waveform.svelte` (canvas: peaks, bars, loop handles, playhead), `Mixer.svelte` (stem rows; opens `RefinePanel.svelte`), `Transport.svelte` (play, master volume, click and count-in, speed, tuning and pitch; opens `MeterPanel.svelte`; `TuningButton.svelte` is its icon-only Tuning button, whose look shows the song's tuning state).
+- `lib/chords.ts`: chord names from the backend's concert-pitch chords (spelling by key, the shape in the song's tuning and what is heard), the tuning line of the chords panel, and the panel's window. Pure functions; the store holds the state.
+- Song view: `Waveform.svelte` (canvas: peaks, bars, loop handles, playhead, the chord lane and the outline of what the chords panel shows; the readout has the chord at the playhead and the Chords toggle), `ChordsPanel.svelte` (a few bars with chord names, fitted to the loop or following the playhead, and the tuning line), `Mixer.svelte` (stem rows; opens `RefinePanel.svelte`), `Transport.svelte` (play, master volume, click and count-in, speed, tuning and pitch; opens `MeterPanel.svelte`; `TuningButton.svelte` is its icon-only Tuning button, whose look shows the song's tuning state).
 - Dialogs: `ExportDialog.svelte`, `TuningPanel.svelte` (reference pitch, tuning with the guess, the Shift split button, and tabs for reference tones and `LiveTuner.svelte`), `ShortcutsHelp.svelte`, `AboutDialog.svelte`, `StorageDialog.svelte`, `RemoveRecentDialog.svelte`. Each has an open flag in `AppState`.
 - Small parts: `Icon.svelte` (inline SVG paths), `Wordmark.svelte`.
 
@@ -123,6 +124,19 @@ theme wins once `get_app_settings` returns; `applyTheme` updates both.
 Canvas components read colors from CSS variables, so their draw effects
 depend on `app.theme`.
 
+**Chords.** The backend reports chords at concert pitch in
+`SongInfo.chords` or a later `chords-ready` event, and clears them for new
+stems. The store derives the names from them and the tuning state: until
+the user sets "Song is in" (`song_semitones_set` in `SongSettings.tuning`;
+missing means set when `song_semitones` is not 0) every name is what is
+heard; after that the main name is the shape in that tuning, with what is
+heard as a second name whenever the two differ. Detailed names
+(`ChordSpan.detail`), passing chords (`ChordsData.passing`, dashed tags)
+and figures (`ChordsData.figures`, solid tags) show only with the panel's
+Detailed switch. The panel's open state, its bars and
+that switch are kept in localStorage (`shredlab.chords`). The finer waveform
+the panel draws is fetched when it first opens for a song.
+
 **Mock.** `lib/api.ts` picks the mock when `window.__TAURI_INTERNALS__` is
 missing. It fakes demo songs (Open cycles through them; drops get fake
 paths), separation progress, cached stem sets per model and quality, a beat
@@ -131,7 +145,9 @@ jobs and a synthetic stereo field, and plays a WebAudio click; otherwise it
 is silent. It also fakes a tuning measurement a moment after
 separation or open: each demo song shows one state (see the comment on
 `fakeTuning`), and `__mockTuning({...})` in the console replaces the open
-song's measurement. Reference tones play through WebAudio, and the rate
+song's measurement. Made-up chords on the mock grid follow the
+measurement (a riff with pushes, a verse over a pedal, a chorus and a
+bridge; in Eb for a song whose guess is likely Eb). Reference tones play through WebAudio, and the rate
 correction changes how fast the position moves. The live tuner gets three
 fake inputs (a 2-channel interface, a microphone, and a line input that
 gives digital silence, for the "No input" hint) and a synthetic stream
@@ -199,7 +215,7 @@ the contract is covered by the backend tests and the autotest (see
 [app/src-tauri](../src-tauri/README.md)).
 
 ```sh
-pnpm --dir app test     # unit tests of the pure modules (lib/tuning.ts)
+pnpm --dir app test     # unit tests of the pure modules (lib/tuning.ts, lib/chords.ts)
 pnpm --dir app check    # svelte-check: TypeScript and Svelte diagnostics
 pnpm --dir app build    # production build into app/dist
 pnpm --dir app dev      # UI alone with the mock: http://localhost:1420

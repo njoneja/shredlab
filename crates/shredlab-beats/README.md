@@ -2,31 +2,33 @@
 
 The model-independent half of beat and downbeat tracking with Beat This!
 (CPJKU, MIT): audio to log-mel chunks for the network, network logits to
-beat and downbeat times, plus tempo and meter helpers. Inference is a
+beat times, a bar decoder for the downbeats, plus tempo and meter helpers. Inference is a
 closure, so the crate has no ONNX Runtime dependency.
 
 ## Boundaries
 
-Owns preprocessing, chunking and stitching, peak picking and the
-`BeatGrid` helpers. It does not load or run the model (the app backs the
+Owns preprocessing, chunking and stitching, peak picking, downbeat
+decoding and the `BeatGrid` helpers. It does not load or run the model (the app backs the
 closure with `BeatModel` from `crates/shredlab-separation/src/beat_model.rs`),
 pick a device, store the grid (`BeatData` in `shredlab-library`), apply the
 user's "this beat is one" and beats-per-bar overrides (app and UI), or
 schedule clicks (`shredlab-audio`). It takes no paths.
 
-Dependencies: realfft, rubato, thiserror. `ort` and symphonia are
-dev-dependencies for the end-to-end example only (`ort` pinned to the same
+Dependencies: realfft, rubato, thiserror. `ort`, symphonia and serde_json
+are dev-dependencies for the examples only (`ort` pinned to the same
 version as `shredlab-separation`). Used by `app/src-tauri` (the beat job and
 `app/src-tauri/src/music_start.rs` tests).
 
 ## Layout
 
-Everything is in `src/lib.rs`; `track` is the entry point (preprocess, infer,
-postprocess). The file is split into preprocessing, chunking,
-postprocessing and UI helper sections.
+Everything is in `src/lib.rs`; `track` (or `track_scored`, which also
+returns the per-beat downbeat scores) is the entry point: preprocess,
+infer, `postprocess_bars`. The file is split into preprocessing, chunking,
+postprocessing, downbeat decoding and UI helper sections.
 
 - `tests/reference.rs`: log-mel, resampling and peak picking against the Python reference.
 - `examples/beat_e2e.rs`: the full pipeline with ONNX Runtime on CPU, compared with PyTorch outputs.
+- `examples/library_meter.rs`: upstream downbeats vs the bar decoder on every song of a ShredLab library.
 
 ## How it works
 
@@ -46,12 +48,26 @@ ported from the Python reference `spikes/onnx_beat_this.py`.
    calls the closure once per chunk and checks that both outputs have 1500
    values. `aggregate` stitches with `keep_first` (earlier chunks win in
    the overlap); uncovered frames get −1000.
-3. `postprocess` (upstream "minimal" postprocessor): a frame is a peak if
-   it is the maximum of its 7-frame neighborhood and above 0; peaks at most
-   one frame apart merge into their mean; frames become seconds. Each
-   downbeat is then snapped to the nearest beat and duplicates are removed,
-   so every downbeat is also a beat.
-4. `BeatGrid` helpers: `tempo_bpm` (60 over the median beat interval),
+3. Beats: a frame is a peak if it is the maximum of its 7-frame
+   neighborhood and above 0; peaks at most one frame apart merge into their
+   mean; frames become seconds (upstream "minimal" postprocessor).
+4. Downbeats (`postprocess_bars`): each beat gets a downbeat score, the
+   largest downbeat logit within two frames of it (`downbeat_scores`).
+   `decode_downbeats` runs Viterbi over the beats with state (home meter
+   2..=7, length of the current bar, position in it). A beat costs
+   `softplus(-s)` as a downbeat and `softplus(s)` otherwise (`s` clamped to
+   ±8). After the last beat of a bar the next bar starts in the home meter
+   for free; a one-off bar of another length (1 to 7 beats) costs 6, or 2
+   when it lasts as long as a home bar in seconds (the beat tracker added
+   or missed a beat), interpolated up to 6 at a 15% timing error, plus 8
+   more for a one-beat bar; a lasting change of home meter costs 8. Bars
+   also pay a small per-length cost (4: 0, 3: 0.5, 2 and 6: 1, 5 and 7:
+   1.5). The first beat may sit anywhere in a bar (pickup) and the last bar
+   may be incomplete. The costs are `DecoderCosts::default()`.
+   `postprocess` keeps upstream's minimal downbeats (peak picking on the
+   downbeat logits, snapped to the nearest beat) for the reference tests
+   and comparisons.
+5. `BeatGrid` helpers: `tempo_bpm` (60 over the median beat interval),
    `beats_per_bar` (beats in each complete bar between downbeats, pickup
    excluded) and `most_common_beats_per_bar` (ties go to the smaller value).
 
@@ -62,6 +78,15 @@ output length matches soxr (`round(n · 22050 / rate)`) and the resampler
 delay is removed.
 
 ## Invariants and gotchas
+
+- The decoder never moves or adds beats: downbeats are a subset of the
+  beats, and `decode_bars` decodes for a given beat list, so a caller can
+  keep an earlier list (the app's meter overrides are beat indices).
+- `DOWNBEAT_DECODER_VERSION` must be bumped whenever the decoder's output
+  changes (costs included); the app stores it with the grid and decodes
+  older grids again, from the stored scores when it has them.
+- Scores are raw logits per beat, so they stay valid for any decoder that
+  works on the same beats.
 
 - The numerics follow torchaudio and NumPy on purpose: NumPy-style reflect
   padding (repeating for long pads), `linspace` with an exact last element,
@@ -86,7 +111,10 @@ delay is removed.
 cargo test -p shredlab-beats
 ```
 
-The unit tests always run. `tests/reference.rs` needs fixtures in
+The unit tests always run; the decoder tests use synthetic scores (steady
+4/4 with spurious and missed peaks, a lasting 3/4 to 4/4 change, a clear
+one-off 2-beat bar, 3/4, 2 and 6 beats per bar, pickups, an extra beat
+inside a bar). `tests/reference.rs` needs fixtures in
 `tests/fixtures/local/beat_this/` (local, not committed); without them each
 test prints `SKIP` and passes. Generate them with the dev Python
 environment:
@@ -102,10 +130,21 @@ with the PyTorch reference when fixtures exist:
 cargo run --release -p shredlab-beats --example beat_e2e -- [--model <onnx>] [--threads 8] <audio>...
 ```
 
+Upstream vs decoded downbeats on a library (the logits are cached per
+song with `--cache`, so decoder changes rerun in seconds):
+
+```sh
+cargo run --release -p shredlab-beats --example library_meter -- [--library <dir>] [--cache <dir>] [--song <title>] [--dump <t0> <t1>]
+```
+
 ## Common changes
 
-- Changing peak picking or the tempo and meter helpers: edit `postprocess`
-  or the `BeatGrid` methods. `postprocess_matches_upstream` (with local
+- Tuning the downbeat decoder: change `DecoderCosts::default()`, bump
+  `DOWNBEAT_DECODER_VERSION`, and compare with `library_meter` on real
+  songs before and after.
+
+- Changing beat peak picking or the tempo and meter helpers: edit
+  `peaks`/`dedup`, `postprocess` or the `BeatGrid` methods. `postprocess_matches_upstream` (with local
   fixtures) requires output identical to upstream's minimal postprocessor,
   so a deliberate change to `postprocess` means changing that test as well.
 - Supporting a beat model with a different input: change the constants at

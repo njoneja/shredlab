@@ -202,6 +202,15 @@ pub struct BeatData {
     pub downbeats: Vec<f64>,
     pub bpm: Option<f64>,
     pub beats_per_bar: Option<u32>,
+    /// Version of the downbeat decoder that produced `downbeats` (0: older
+    /// grids, from independent peak picking); an older one is decoded again.
+    #[serde(default)]
+    pub downbeat_version: u32,
+    /// Per-beat downbeat scores (network logits), one per beat, so a newer
+    /// decoder can redo `downbeats` without running the model. Empty in
+    /// older grids.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub downbeat_scores: Vec<f32>,
 }
 
 /// Measured tuning of a song: how far it sits from A440, from the stems.
@@ -226,6 +235,73 @@ pub struct TuningData {
     /// offset is reliable.
     #[serde(default)]
     pub guess: Option<TuningGuessData>,
+}
+
+/// Detected chords of a song, from its stems and beat grid. Pitch classes
+/// are at concert pitch (C = 0), relative to the song's own reference.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct ChordsData {
+    /// Algorithm version that produced this; an older one is recomputed.
+    pub version: u32,
+    /// Stem set the chords were detected on (`<model id>_s<shifts>`); the
+    /// chords of another set are recomputed.
+    pub stems: String,
+    /// Key estimate of the whole song.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<ChordKey>,
+    /// Contiguous, in time order, covering the whole song.
+    #[serde(default)]
+    pub segments: Vec<ChordSpan>,
+    /// Short chords passing by inside a segment (a quick Bm in a D bar),
+    /// in time order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub passing: Vec<PassingSpan>,
+    /// Figures: the segment's chord moving to an extension of itself for a
+    /// beat or more (A to A6 and back), in time order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub figures: Vec<PassingSpan>,
+}
+
+/// [`ChordsData::passing`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct PassingSpan {
+    pub start_s: f64,
+    pub end_s: f64,
+    pub root: u8,
+    /// Chord suffix, as in [`ChordSpan::quality`].
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub quality: String,
+}
+
+/// [`ChordsData::key`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct ChordKey {
+    pub tonic: u8,
+    pub minor: bool,
+}
+
+/// One stretch of a song with a single chord.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct ChordSpan {
+    pub start_s: f64,
+    pub end_s: f64,
+    /// Root pitch class; `None` for no chord.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root: Option<u8>,
+    /// Chord suffix after the root ("", "m", "5", "7", "maj7", "m7",
+    /// "sus2", "sus4", "dim").
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub quality: String,
+    /// Bass pitch class of a slash chord (D/F#).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bass: Option<u8>,
+    /// Suffix of the detailed name when it differs from `quality` ("6",
+    /// "m6", "add9", "9", "7sus4"): same root and bass.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    /// Starts off the beat.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub push: bool,
 }
 
 /// [`TuningData::guess`]: the lowest steadily played bass note (offset
@@ -285,6 +361,9 @@ pub struct SongMeta {
     /// Measured tuning (from the stems).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tuning: Option<TuningData>,
+    /// Detected chords (from the stems and beats).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chords: Option<ChordsData>,
     /// Opaque UI settings, stored and returned verbatim.
     #[serde(default)]
     pub settings: Option<serde_json::Value>,
@@ -322,6 +401,7 @@ impl SongMeta {
             original: None,
             beats: None,
             tuning: None,
+            chords: None,
             settings: None,
             refine: BTreeMap::new(),
             strength: StrengthSetting::default(),
@@ -1156,6 +1236,8 @@ mod tests {
             downbeats: vec![0.5],
             bpm: Some(120.0),
             beats_per_bar: Some(4),
+            downbeat_version: 1,
+            downbeat_scores: vec![3.0, -2.5, -4.0],
         });
         m.tuning = Some(TuningData {
             version: 1,
@@ -1175,7 +1257,47 @@ mod tests {
                 likely: true,
             }),
         });
+        m.chords = Some(ChordsData {
+            version: 1,
+            stems: "htdemucs_6s_s1".into(),
+            key: Some(ChordKey {
+                tonic: 3,
+                minor: false,
+            }),
+            segments: vec![
+                ChordSpan {
+                    start_s: 0.0,
+                    end_s: 1.0,
+                    ..Default::default()
+                },
+                ChordSpan {
+                    start_s: 1.0,
+                    end_s: 2.75,
+                    root: Some(1),
+                    quality: String::new(),
+                    bass: Some(3),
+                    detail: Some("6".into()),
+                    push: true,
+                },
+            ],
+            passing: vec![PassingSpan {
+                start_s: 2.0,
+                end_s: 2.25,
+                root: 11,
+                quality: "m".into(),
+            }],
+            figures: vec![PassingSpan {
+                start_s: 1.5,
+                end_s: 2.0,
+                root: 1,
+                quality: "6".into(),
+            }],
+        });
         lib.save(&mut m).unwrap();
+        // Empty fields stay out of the file.
+        let json = std::fs::read_to_string(lib.song_dir("abc").join("song.json")).unwrap();
+        assert!(!json.contains("\"bass\": null") && !json.contains("\"root\": null"));
+        assert!(!json.contains("\"push\": false") && !json.contains("\"quality\": \"\""));
         let back = lib.load("abc").unwrap().unwrap();
         assert_eq!(back, m);
         assert!(lib.update("abc", |m| m.title = "Other".into()).unwrap());

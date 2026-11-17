@@ -2,7 +2,7 @@
 
 The Tauri 2 shell of ShredLab (cargo package `shredlab`, library
 `shredlab_lib`): the commands and events the UI uses, the state of the open
-song, the background jobs (separation, beats, export, separation strength),
+song, the background jobs (separation, beats, tuning, chords, export, separation strength),
 app settings and model discovery. The audio, DSP, separation and library work
 itself lives in the crates under [crates/](../../crates).
 
@@ -81,7 +81,9 @@ are serialized by `open_lock`.
 | Thread | Started by | Cancellation |
 |---|---|---|
 | separation | `start_separation` | `AtomicBool`, set by `cancel_separation`, `open_song`, `close_song` |
-| beats | `open_song` when the grid isn't cached | none; the result is saved to `song.json` regardless and applied only if still current |
+| beats | `open_song` when the grid isn't cached, or its downbeats come from an older decoder and it has no per-beat scores to decode again from (then the cached beats are kept and only the downbeats replaced, because meter overrides are beat indices) | none; the result is saved to `song.json` regardless and applied only if still current |
+| tuning | `open_song` without a current measurement, a finished separation | none; saved to `song.json` regardless, applied and emitted only if still current |
+| chords | whenever the open song has stems, beats and a current tuning but no chords for that stem set and algorithm version (`maybe_spawn_chords`: after `open_song`, the tuning job and the beats job) | none; one job per (song, stem set) at a time; saved regardless, emitted only if still current, otherwise it checks again |
 | export | `export_mix` | `AtomicBool`, set by `cancel_export`; the partial file is deleted |
 | strength | `set_strength`, `open_song`, a finished separation | `AtomicBool`; a newer job, `open_song` or `close_song` cancels the older one |
 | position | `start_background` | runs for the life of the backend |

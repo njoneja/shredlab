@@ -3508,6 +3508,7 @@ dependencies = [
  "serde_json",
  "shredlab-audio",
  "shredlab-beats",
+ "shredlab-chords",
  "shredlab-dsp",
  "shredlab-io",
  "shredlab-library",
@@ -3541,8 +3542,18 @@ dependencies = [
  "ort",
  "realfft",
  "rubato",
+ "serde_json",
  "symphonia",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "shredlab-chords"
+version = "0.1.3"
+dependencies = [
+ "realfft",
+ "shredlab-library",
+ "shredlab-tuning",
 ]
 
 [[package]]

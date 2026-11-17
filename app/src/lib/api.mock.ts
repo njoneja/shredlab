@@ -32,6 +32,8 @@ import type {
   Theme,
   ToneSound,
   TuningData,
+  ChordsData,
+  ChordSpan,
 } from "./types";
 import { THEMES } from "./types";
 import { isIdentity, mockPresets } from "./refine";
@@ -319,6 +321,12 @@ function measureTuning(ms: number) {
     song.tuning = t;
     lsSet(LS_TUNING + song.song_id, t);
     emit("tuning-ready", { song_id: song.song_id, tuning: t });
+    // Chords follow the tuning (they need its offset), as in the app.
+    window.setTimeout(() => {
+      if (!song || song.song_id !== id) return;
+      song.chords = songChords();
+      if (song.chords) emit("chords-ready", { song_id: song.song_id, chords: song.chords });
+    }, 900);
   }, ms);
 }
 
@@ -475,6 +483,107 @@ function makeGrid(duration: number, bpm: number, music_start: number | null = nu
     t += period;
   }
   return { beats, downbeats, bpm, music_start };
+}
+
+/**
+ * Made-up chords on the mock beat grid: a riff with pushes on the "and" of 3
+ * and 4, a verse over an E pedal (slash chords), a chorus and a bridge, in E
+ * shapes moved by `shift` semitones (a song in Eb gets Eb at concert pitch).
+ */
+function fakeChords(g: BeatGrid, duration: number, shift: number): ChordsData {
+  const E = 4, D = 2, A = 9, G = 7, B = 11, Cs = 1, Fs = 6, C = 0;
+  type Ev = { bar: number; beat: number; root: number; quality: string; bass?: number; detail?: string };
+  const ev: Ev[] = [];
+  const add = (bar: number, beat: number, root: number, quality: string, bass?: number, detail?: string) =>
+    ev.push({ bar, beat, root, quality, bass, detail });
+  const passing: { bar: number; beat: number; len: number; root: number; quality: string }[] = [];
+  const riff = (b: number) => {
+    add(b, 0, E, "5");
+    add(b, 2.5, D, "5");
+    add(b, 3.5, A, "5");
+    add(b + 1, 2, E, "5");
+  };
+  const verse = (b0: number) => {
+    for (let b = b0; b < b0 + 16; b += 2) {
+      add(b, 0, E, "5");
+      // A quick G on the "and" of 3, inside the E5 bar (passing).
+      passing.push({ bar: b, beat: 2.5, len: 0.5, root: G, quality: "" });
+      add(b + 1, 0, D, "", E);
+      add(b + 1, 2.5, A, "", E);
+    }
+  };
+  const chorus = (b0: number) => {
+    for (let c = b0; c < b0 + 16; c += 4) {
+      add(c, 0, A, "5");
+      add(c + 1, 3.5, G, "5");
+      add(c + 2, 2, D, "", Fs, "add9");
+      add(c + 3, 0, E, "5");
+    }
+  };
+  const bridge = (b0: number) => {
+    add(b0, 0, Cs, "m7");
+    add(b0 + 1, 0, Fs, "m7");
+    add(b0 + 2, 0, B, "sus4", undefined, "7sus4");
+    add(b0 + 2, 2, B, "7");
+    add(b0 + 3, 0, C, "maj7");
+    add(b0 + 3, 2, D, "", undefined, "6");
+  };
+  const bars = g.downbeats.length;
+  for (let b = 0; b < 8; b += 2) riff(b);
+  for (let b = 8; b + 40 <= bars; b += 40) {
+    verse(b);
+    chorus(b + 16);
+    bridge(b + 32);
+    for (let r = b + 36; r < b + 40; r += 2) riff(r);
+  }
+  const beatIdx = new Map(g.beats.map((t, i) => [t, i]));
+  const timeAt = (bar: number, beat: number): number | null => {
+    if (bar >= g.downbeats.length) return null;
+    const i0 = beatIdx.get(g.downbeats[bar]);
+    if (i0 == null) return null;
+    const i = i0 + Math.floor(beat);
+    if (i + 1 >= g.beats.length) return null;
+    return g.beats[i] + (beat % 1) * (g.beats[i + 1] - g.beats[i]);
+  };
+  const tr = (n: number) => (((n + shift) % 12) + 12) % 12;
+  const segs: ChordSpan[] = [{ start_s: 0, end_s: 0 }];
+  for (const e of ev) {
+    const t = timeAt(e.bar, e.beat);
+    if (t == null) continue;
+    const last = segs[segs.length - 1];
+    const same = last.root === tr(e.root) && (last.quality ?? "") === e.quality && (last.bass ?? null) === (e.bass == null ? null : tr(e.bass));
+    if (same || t <= last.start_s) continue;
+    last.end_s = t;
+    segs.push({
+      start_s: t,
+      end_s: t,
+      root: tr(e.root),
+      quality: e.quality,
+      bass: e.bass == null ? null : tr(e.bass),
+      detail: e.detail ?? null,
+      push: e.beat % 1 !== 0,
+    });
+  }
+  const lastBeat = g.beats[g.beats.length - 1] ?? duration;
+  segs[segs.length - 1].end_s = lastBeat;
+  if (lastBeat < duration) segs.push({ start_s: lastBeat, end_s: duration });
+  const pass = passing.flatMap((p) => {
+    const a = timeAt(p.bar, p.beat);
+    const b = timeAt(p.bar, p.beat + p.len);
+    return a == null || b == null ? [] : [{ start_s: a, end_s: b, root: tr(p.root), quality: p.quality }];
+  });
+  // Figures: the chorus's A5 bar moves to A6 on beats 3–4 (A to A6 and back).
+  const figs = segs
+    .filter((s) => s.root === tr(A) && s.quality === "5" && s.end_s - s.start_s > 2)
+    .map((s) => ({ start_s: s.start_s + (s.end_s - s.start_s) / 2, end_s: s.start_s + (3 * (s.end_s - s.start_s)) / 4, root: tr(A), quality: "6" }));
+  return { version: 8, stems: "htdemucs_6s_s1", key: { tonic: tr(E), minor: false }, segments: segs, passing: pass, figures: figs };
+}
+
+/** Mock chords for the open song: in Eb when its tuning guess says Eb. */
+function songChords(): ChordsData | null {
+  if (!song || !song.tuning || !grid) return null;
+  const g = song.tuning.guess;
+  return fakeChords(grid, song.duration_sec, g?.likely ? g.below_standard : 0);
 }
 
 function localBeatPeriod(at: number) {
@@ -634,8 +743,10 @@ export const mockBackend: Backend = {
       strength: lsGet<StrengthSetting>(LS_STRENGTH + song_id, { level: 0, smooth: false }),
       strength_job: 0,
       tuning: cached ? lsGet<TuningData | null>(LS_TUNING + song_id, null) : null,
+      chords: null,
       bpmVal: d.bpm,
     };
+    song.chords = cached ? songChords() : null;
     if (tuningTimer != null) clearTimeout(tuningTimer);
     // An older algorithm version is measured again, as in the app.
     if (cached && (song.tuning?.version ?? 0) < 3) measureTuning(2500);
@@ -758,7 +869,8 @@ export const mockBackend: Backend = {
           song.separated_with = sw;
           song.original_available = true;
           addToLibrary(song);
-          // New stems: the tuning is measured again on them.
+          // New stems: the tuning is measured again on them (then the chords).
+          song.chords = null;
           measureTuning(1500);
         }
         emit("separation-done", { song_id: id, separated_with: sw, original_available: true });

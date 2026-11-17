@@ -156,7 +156,25 @@ impl Song {
             strength: m.strength,
             strength_job: 0,
             tuning: m.tuning.clone(),
+            chords: self.current_chords().cloned(),
         }
+    }
+
+    /// Key of the loaded stem set for [`ChordsData::stems`].
+    fn chords_stems_key(&self) -> Option<String> {
+        self.stems.as_ref()?;
+        self.stems_info
+            .as_ref()
+            .map(|i| format!("{}_s{}", i.model_id, i.shifts))
+    }
+
+    /// The saved chords, if they are current for the loaded stem set.
+    fn current_chords(&self) -> Option<&ChordsData> {
+        let key = self.chords_stems_key()?;
+        self.meta
+            .chords
+            .as_ref()
+            .filter(|c| c.version >= shredlab_chords::VERSION && c.stems == key)
     }
 }
 
@@ -258,6 +276,8 @@ struct State {
     analysis: Option<String>,
     strength_job: Option<StrengthJob>,
     next_strength_job: u64,
+    /// Chords job running: (song id, stem set key).
+    chords_job: Option<(String, String)>,
 }
 
 pub struct Backend {
@@ -391,19 +411,7 @@ fn measure_tuning(stems: &[Track]) -> shredlab_library::TuningData {
     let rate = stems.first().map_or(RATE, |t| t.sample_rate);
     let mono: Vec<(StemKind, Vec<f32>)> = stems
         .iter()
-        .filter_map(|t| {
-            let k = kind(&t.name)?;
-            let [l, r] = &t.channels;
-            let n = l.len().min(r.len());
-            let mut a = vec![0.0f32; n];
-            let mut b = vec![0.0f32; n];
-            l.read(0, &mut a);
-            r.read(0, &mut b);
-            for (x, y) in a.iter_mut().zip(&b) {
-                *x = 0.5 * (*x + *y);
-            }
-            Some((k, a))
-        })
+        .filter_map(|t| Some((kind(&t.name)?, mono_of(t))))
         .collect();
     let input: Vec<StemAudio> = mono
         .iter()
@@ -447,6 +455,119 @@ fn measure_tuning(stems: &[Track]) -> shredlab_library::TuningData {
             ..Default::default()
         },
     }
+}
+
+/// Runs chord detection on the pitched stems (mono, at the stem rate).
+fn detect_chords(
+    stems: &[Track],
+    beats: &[f64],
+    offset_cents: f64,
+    duration: f64,
+    stems_key: String,
+) -> shredlab_library::ChordsData {
+    use shredlab_chords::{StemAudio, StemKind};
+    let kind = |name: &str| match name {
+        "bass" => Some(StemKind::Bass),
+        "guitar" => Some(StemKind::Guitar),
+        "piano" | "keys" => Some(StemKind::Keys),
+        "other" => Some(StemKind::Other),
+        "vocals" => Some(StemKind::Vocals),
+        _ => None,
+    };
+    let rate = stems.first().map_or(RATE, |t| t.sample_rate);
+    let mono: Vec<(StemKind, Vec<f32>)> = stems
+        .iter()
+        .filter_map(|t| Some((kind(&t.name)?, mono_of(t))))
+        .collect();
+    let input: Vec<StemAudio> = mono
+        .iter()
+        .map(|(kind, s)| StemAudio {
+            kind: *kind,
+            samples: s,
+        })
+        .collect();
+    let a = shredlab_chords::detect_chords(&input, rate, beats, offset_cents, duration);
+    shredlab_library::ChordsData {
+        version: shredlab_chords::VERSION,
+        stems: stems_key,
+        key: a.key.map(|k| shredlab_library::ChordKey {
+            tonic: k.tonic,
+            minor: k.minor,
+        }),
+        segments: a
+            .segments
+            .iter()
+            .map(|s| shredlab_library::ChordSpan {
+                start_s: s.start_s,
+                end_s: s.end_s,
+                root: s.chord.map(|c| c.root),
+                quality: s
+                    .chord
+                    .map_or(String::new(), |c| c.quality.suffix().to_string()),
+                bass: s.chord.and_then(|c| c.bass),
+                detail: match (s.chord, s.detailed) {
+                    (Some(c), Some(d)) if d.quality != c.quality => {
+                        Some(d.quality.suffix().to_string())
+                    }
+                    _ => None,
+                },
+                push: s.push,
+            })
+            .collect(),
+        passing: a.passing.iter().map(passing_span).collect(),
+        figures: a.figures.iter().map(passing_span).collect(),
+    }
+}
+
+fn passing_span(p: &shredlab_chords::PassingChord) -> shredlab_library::PassingSpan {
+    shredlab_library::PassingSpan {
+        start_s: p.start_s,
+        end_s: p.end_s,
+        root: p.chord.root,
+        quality: p.chord.quality.suffix().to_string(),
+    }
+}
+
+/// Mono downmix of a stereo track.
+fn mono_of(t: &Track) -> Vec<f32> {
+    let [l, r] = &t.channels;
+    let n = l.len().min(r.len());
+    let mut a = vec![0.0f32; n];
+    let mut b = vec![0.0f32; n];
+    l.read(0, &mut a);
+    r.read(0, &mut b);
+    for (x, y) in a.iter_mut().zip(&b) {
+        *x = 0.5 * (*x + *y);
+    }
+    a
+}
+
+/// Cached beat data from a decoded grid and its downbeat scores.
+fn beat_data(t: shredlab_beats::Tracked) -> BeatData {
+    BeatData {
+        bpm: t.grid.tempo_bpm(),
+        beats_per_bar: t.grid.most_common_beats_per_bar().map(|n| n as u32),
+        downbeat_version: shredlab_beats::DOWNBEAT_DECODER_VERSION,
+        downbeat_scores: t.downbeat_scores,
+        beats: t.grid.beats,
+        downbeats: t.grid.downbeats,
+    }
+}
+
+/// Decodes the downbeats of a cached grid again from its stored scores,
+/// keeping the beats. `false` when it has no scores (the model must run).
+fn redecode_downbeats(b: &mut BeatData) -> bool {
+    if b.downbeat_scores.len() != b.beats.len() {
+        return false;
+    }
+    let beats = std::mem::take(&mut b.beats);
+    let downbeat_scores = std::mem::take(&mut b.downbeat_scores);
+    let downbeats = shredlab_beats::downbeats_from_scores(&beats, &downbeat_scores);
+    *b = beat_data(shredlab_beats::Tracked {
+        grid: shredlab_beats::BeatGrid { beats, downbeats },
+        downbeat_scores,
+    });
+    true
 }
 
 /// Snaps UI downbeats to grid beats within 1 ms so they compare equal.
@@ -621,6 +742,7 @@ impl Backend {
                 analysis: None,
                 strength_job: None,
                 next_strength_job: 0,
+                chords_job: None,
             }),
             open_lock: Mutex::new(()),
             tuner: Mutex::new(None),
@@ -1191,11 +1313,24 @@ impl Backend {
         if let Some(oi) = new_original_info {
             m.original = Some(oi);
         }
+        // Downbeats from an older decoder: decode them again from the stored
+        // scores, or else rerun the model below while keeping the beats
+        // (meter overrides are beat indices).
+        let mut keep_beats = None;
+        if let Some(b) = m
+            .beats
+            .as_mut()
+            .filter(|b| b.downbeat_version < shredlab_beats::DOWNBEAT_DECODER_VERSION)
+        {
+            if !redecode_downbeats(b) {
+                keep_beats = Some(b.beats.clone());
+            }
+        }
         if let Err(e) = self.library.save(&mut m) {
             log!("cannot save library entry: {e}");
         }
         let beats = m.beats.clone();
-        let need_beats = beats.is_none();
+        let need_beats = beats.is_none() || keep_beats.is_some();
         let music_start = beats
             .as_ref()
             .and_then(|b| detect_music_start(&m.song_id, &mix, &b.beats));
@@ -1271,8 +1406,9 @@ impl Backend {
         if let Some(stems) = tuning_stems {
             self.spawn_tuning(song_id.clone(), stems, generation);
         }
+        self.maybe_spawn_chords();
         if need_beats {
-            self.spawn_beats(song_id, mix, generation);
+            self.spawn_beats(song_id, mix, generation, keep_beats);
         }
         Ok(info)
     }
@@ -1819,12 +1955,116 @@ impl Backend {
                     tuning: data,
                 },
             );
+            b.maybe_spawn_chords();
+        });
+    }
+
+    // ------------------------------------------------------------ chords
+
+    /// Starts the chords job for the open song when its stems, beats and a
+    /// current tuning are in and its saved chords are missing, older than
+    /// the algorithm or from another stem set. Called whenever one of those
+    /// arrives; does nothing while a job for the same set runs.
+    fn maybe_spawn_chords(self: &Arc<Self>) {
+        let mut st = lock(&self.st);
+        let generation = st.generation;
+        let Some(song) = st.song.as_ref() else {
+            return;
+        };
+        let Some(key) = song.chords_stems_key() else {
+            return;
+        };
+        if song.current_chords().is_some() {
+            return;
+        }
+        let (Some(stems), Some(beats)) = (song.stems.clone(), song.beats.as_ref()) else {
+            return;
+        };
+        let Some(tuning) = song
+            .meta
+            .tuning
+            .as_ref()
+            .filter(|t| t.version >= shredlab_tuning::VERSION)
+        else {
+            return;
+        };
+        let song_id = song.meta.song_id.clone();
+        let job = (song_id.clone(), key.clone());
+        if st.chords_job.as_ref() == Some(&job) {
+            return;
+        }
+        let beats = beats.beats.clone();
+        // An unreliable offset is noise; center on A440 then.
+        let offset = if tuning.confidence >= shredlab_tuning::MIN_CONFIDENCE
+            && tuning.peaks >= shredlab_tuning::MIN_PEAKS
+        {
+            tuning.offset_cents as f64
+        } else {
+            0.0
+        };
+        let duration = song.meta.duration_sec;
+        st.chords_job = Some(job.clone());
+        drop(st);
+        let b = self.clone();
+        spawn("shredlab-chords", move || {
+            let t0 = Instant::now();
+            let data = detect_chords(&stems, &beats, offset, duration, key);
+            log!(
+                "chords for {song_id}: {} segments, {} pushes, key {:?} in {:.2}s",
+                data.segments.len(),
+                data.segments.iter().filter(|s| s.push).count(),
+                data.key,
+                t0.elapsed().as_secs_f64()
+            );
+            let current = {
+                let mut st = lock(&b.st);
+                if st.chords_job.as_ref() == Some(&job) {
+                    st.chords_job = None;
+                }
+                let current = st.generation == generation
+                    && st.song.as_ref().is_some_and(|s| {
+                        s.meta.song_id == song_id
+                            && s.chords_stems_key().as_deref() == Some(data.stems.as_str())
+                    });
+                if current {
+                    if let Some(s) = st.song.as_mut() {
+                        s.meta.chords = Some(data.clone());
+                    }
+                }
+                current
+            };
+            if let Err(e) = b
+                .library
+                .update(&song_id, |m| m.chords = Some(data.clone()))
+            {
+                log!("cannot save chords: {e}");
+            }
+            if current {
+                b.emit(
+                    "chords-ready",
+                    &ChordsReady {
+                        song_id,
+                        chords: data,
+                    },
+                );
+            } else {
+                // The song or its stems changed meanwhile.
+                b.maybe_spawn_chords();
+            }
         });
     }
 
     // ------------------------------------------------------------ beats
 
-    fn spawn_beats(self: &Arc<Self>, song_id: String, mix: Mix, generation: u64) {
+    /// Tracks beats and downbeats; with `keep_beats` (a cached grid from an
+    /// older downbeat decoder) only the downbeats are replaced.
+    fn spawn_beats(
+        self: &Arc<Self>,
+        song_id: String,
+        mix: Mix,
+        generation: u64,
+        keep_beats: Option<Vec<f64>>,
+    ) {
         let Some(model_path) = self.cfg.beat_model.clone() else {
             log!("no beat model; click track and count-in use defaults");
             return;
@@ -1832,7 +2072,7 @@ impl Backend {
         let b = self.clone();
         spawn("shredlab-beats", move || {
             let t0 = Instant::now();
-            match b.track_beats(&model_path, &mix) {
+            match b.track_beats(&model_path, &mix, keep_beats) {
                 Ok(data) => {
                     log!(
                         "beats for {song_id}: {} beats, {} downbeats, {:.1} BPM, {:?}/bar in {:.1}s",
@@ -1859,13 +2099,21 @@ impl Backend {
                     b.apply_click(&st);
                     drop(st);
                     b.emit("beats-ready", &SongIdPayload { song_id });
+                    b.maybe_spawn_chords();
                 }
                 Err(e) => log!("beat tracking for {song_id} failed: {e}"),
             }
         });
     }
 
-    fn track_beats(&self, model_path: &Path, mix: &Mix) -> Result<BeatData, String> {
+    fn track_beats(
+        &self,
+        model_path: &Path,
+        mix: &Mix,
+        keep_beats: Option<Vec<f64>>,
+    ) -> Result<BeatData, String> {
+        let spec =
+            shredlab_beats::preprocess(&[&mix[0], &mix[1]], RATE).map_err(|e| e.to_string())?;
         let mut guard = lock(&self.beat_model);
         if guard.is_none() {
             let t0 = Instant::now();
@@ -1882,11 +2130,11 @@ impl Backend {
         }
         let model = guard.as_mut().ok_or("beat model not loaded")?;
         let run = |model: &mut BeatModel| {
-            shredlab_beats::track(&[&mix[0], &mix[1]], RATE, |inp: &[f32], shape| {
+            shredlab_beats::infer(&spec, |inp: &[f32], shape| {
                 model.run(inp, shape).map_err(|e| BeatErr(e.to_string()))
             })
         };
-        let grid = match run(model) {
+        let logits = match run(model) {
             Ok(g) => g,
             Err(e) if model.ep().is_gpu() => {
                 log!("beat model failed on GPU ({}); retrying on CPU", e.0);
@@ -1898,12 +2146,11 @@ impl Backend {
             }
             Err(e) => return Err(e.0),
         };
-        Ok(BeatData {
-            bpm: grid.tempo_bpm(),
-            beats_per_bar: grid.most_common_beats_per_bar().map(|n| n as u32),
-            beats: grid.beats,
-            downbeats: grid.downbeats,
-        })
+        let tracked = match keep_beats {
+            Some(beats) => shredlab_beats::decode_bars(&logits, beats),
+            None => shredlab_beats::postprocess_bars(&logits),
+        };
+        Ok(beat_data(tracked))
     }
 
     pub fn get_beats(&self) -> Result<Option<BeatGrid>, String> {
@@ -2771,6 +3018,31 @@ mod tests {
     }
 
     #[test]
+    fn old_downbeats_are_decoded_again_from_scores() {
+        let beats: Vec<f64> = (0..12).map(|i| 0.5 * i as f64).collect();
+        let scores: Vec<f32> = (0..12)
+            .map(|i| if i % 4 == 1 { 4.0 } else { -4.0 })
+            .collect();
+        let mut b = BeatData {
+            beats: beats.clone(),
+            downbeats: vec![0.5, 1.0, 2.5, 4.5],
+            downbeat_scores: scores,
+            ..Default::default()
+        };
+        assert!(redecode_downbeats(&mut b));
+        assert_eq!(b.beats, beats);
+        assert_eq!(b.downbeats, [0.5, 2.5, 4.5]);
+        assert_eq!(b.beats_per_bar, Some(4));
+        assert_eq!(b.downbeat_version, shredlab_beats::DOWNBEAT_DECODER_VERSION);
+        // Without scores the model has to run again.
+        let mut old = BeatData {
+            beats,
+            ..Default::default()
+        };
+        assert!(!redecode_downbeats(&mut old));
+    }
+
+    #[test]
     fn audibility_rule() {
         let names: Vec<String> = ["vocals", "bass", "drums"]
             .iter()
@@ -3101,6 +3373,7 @@ mod tests {
                 downbeats: vec![],
                 bpm: Some(120.0),
                 beats_per_bar: Some(4),
+                ..Default::default()
             });
         }
         let ms = b.get_beats().unwrap().unwrap().music_start.unwrap();

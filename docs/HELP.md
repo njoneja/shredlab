@@ -140,6 +140,46 @@ press `T`, to open the Tuning panel.
   check Settings > Privacy & security > Microphone > Let desktop apps
   access your microphone.
 
+## Chords
+
+Once the stems are ready, ShredLab works out the chords from the guitar,
+bass, keys and other stems, on the song's beats. They show along the bottom
+of the waveform, colored by root so verse and chorus look alike wherever
+they come back, and the chord at the playhead is next to the time. Press
+**Chords** (or `K`) for the chords panel: a few bars with the names written
+out, in the same colors. With a loop on it shows the loop (**Fit loop**); otherwise it follows
+the playhead (**Follow playhead**). `−` and `+`, or `Ctrl` and the mouse
+wheel, show more or fewer bars. Click a chord to jump to it; hover for where
+it starts.
+
+- A chord that starts off the beat, like a riff that pushes the change an
+  eighth note early, starts where it is played, before the beat line, with
+  a small amber corner.
+- A slash chord such as D/E means the bass holds that note under the chord.
+- **N.C.** means no chord (silence, drums only).
+- **Simple** names major, minor, power, seventh and sus chords. **Detailed**
+  also names 6, add9, 9 and 7sus4 chords where the added note keeps
+  sounding (A6 rather than A), and shows short passing chords, such as a
+  quick Bm on the way back to D, as small tags above the chord they pass
+  through. It also shows figures, where a chord moves to a richer version
+  of itself and back (A to A6 in a boogie or rock rhythm part, or A to
+  Asus4 and back), as tags with a solid outline. The chords' boundaries are the same either way.
+
+The names depend on how the song is tuned. Until you set **Song is in** in
+the Tuning panel, every name is what you hear; if the guess thinks the song
+is tuned down, the panel offers **Use Eb standard shapes** (or similar).
+Once it is set, the main name is the shape you would play in that tuning,
+and when what you hear is different (a song in Eb, not shifted to your
+Standard guitar), a second, dimmer name under it says what you hear: E5
+over Eb5. The line at the end of the panel's header says which way round it
+is, and turns amber when the shapes won't match your instrument, with
+**Shift song to my tuning** and **I'm tuned down** (which sets My tuning).
+
+Chord detection makes mistakes, more with dense or distorted parts and
+with chords beyond major, minor, power chords, sevenths and sus chords.
+The panel says so ("best guess"): treat the names as a starting point and
+trust your ears.
+
 ## Keyboard shortcuts
 
 | Keys | What |
@@ -153,6 +193,7 @@ press `T`, to open the Tuning panel.
 | `Shift` + `↑` `↓` | Pitch ±1 semitone |
 | `C` | Click on / off |
 | `T` | Tuning panel |
+| `K` | Chords panel |
 | `1`–`6` | Toggle stem on / off |
 | `Shift` + `1`–`6` | Solo stem on / off |
 | `Alt` + `1`–`6` | All but this stem (play along) |

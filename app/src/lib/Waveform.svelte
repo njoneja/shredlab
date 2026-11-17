@@ -4,6 +4,7 @@
 <script lang="ts">
   import { app } from "./store.svelte";
   import { barAt, barEndingAt, formatTime, nearestBeatIndex } from "./meter";
+  import { isDark, rootFill, rootHighlight, type ChordView } from "./chords";
 
   let canvas: HTMLCanvasElement;
   let wrap: HTMLDivElement;
@@ -11,6 +12,7 @@
   let height = $state(150);
 
   const RULER = 18; // bar-number strip at the top
+  const LANE = 16; // chord lane at the bottom, when there are chords
   const HANDLE_PX = 7;
 
   type Drag =
@@ -37,7 +39,7 @@
   $effect(() => {
     const ro = new ResizeObserver(([e]) => {
       width = Math.max(100, e.contentRect.width);
-      height = Math.max(80, e.contentRect.height);
+      height = Math.max(56, e.contentRect.height);
     });
     ro.observe(wrap);
     return () => ro.disconnect();
@@ -47,6 +49,7 @@
   $effect(() => {
     void app.theme;
     draw(app.peaks, app.position, app.loop.a_sec, app.loop.b_sec, app.loop.enabled, app.downbeats, width, height);
+    drawChords(app.chordViews, app.chords?.segments.map((s) => s.root ?? null) ?? [], app.chordFrame.main, app.position, app.chordsOpen ? app.chordWindow : null);
   });
 
   function draw(
@@ -69,8 +72,9 @@
     ctx.clearRect(0, 0, w, h);
 
     const top = RULER;
-    const mid = top + (h - top) / 2;
-    const amp = (h - top) / 2 - 4;
+    const bottom = app.chords ? h - LANE : h;
+    const mid = top + (bottom - top) / 2;
+    const amp = (bottom - top) / 2 - 4;
 
     // Loop region
     if (a != null && b != null) {
@@ -152,6 +156,55 @@
     // Playhead
     ctx.fillStyle = cssVar("--playhead");
     ctx.fillRect(Math.round(px) - 1, 0, 2, h);
+  }
+
+  /**
+   * The chord lane along the bottom: one block per chord, tinted by its root
+   * so sections read as patterns, names only where they fit. Then the
+   * outline of what the chords panel shows.
+   */
+  function drawChords(
+    views: ChordView[],
+    roots: (number | null)[],
+    shift: number,
+    pos: number,
+    detail: { start: number; end: number } | null,
+  ) {
+    const ctx = canvas?.getContext("2d");
+    if (!ctx || !views.length) return;
+    const w = width;
+    const h = height;
+    const y = h - LANE;
+    ctx.fillStyle = cssVar("--bg");
+    ctx.fillRect(0, y - 1, w, LANE + 1);
+    const dark = isDark(cssVar("--bg"));
+    const font = cssVar("--font");
+    ctx.font = `600 10.5px ${font}`;
+    ctx.textBaseline = "middle";
+    for (let i = 0; i < views.length; i++) {
+      const v = views[i];
+      if (!v.main) continue;
+      const x0 = tToX(v.start);
+      const x1 = tToX(v.end);
+      const cur = pos >= v.start && pos < v.end;
+      ctx.fillStyle = cur ? rootHighlight(roots[i], shift, dark).fill : rootFill(roots[i], shift, dark);
+      ctx.fillRect(x0 + 0.5, y + 1, Math.max(0.5, x1 - x0 - 1), LANE - 2);
+      if (x1 - x0 >= ctx.measureText(v.main).width + 6) {
+        ctx.fillStyle = cssVar("--fg");
+        ctx.fillText(v.main, x0 + 3, y + LANE / 2);
+      }
+    }
+    if (detail) {
+      const xa = tToX(detail.start);
+      const xb = tToX(detail.end);
+      ctx.strokeStyle = cssVar("--muted");
+      ctx.lineWidth = 1;
+      ctx.setLineDash([3, 2]);
+      ctx.strokeRect(Math.round(xa) + 0.5, RULER + 0.5, Math.max(2, xb - xa - 1), h - RULER - 1);
+      ctx.setLineDash([]);
+    }
+    ctx.fillStyle = cssVar("--playhead");
+    ctx.fillRect(Math.round(tToX(pos)) - 1, y, 2, LANE);
   }
 
   function localX(e: PointerEvent) {
@@ -255,9 +308,16 @@
       <strong>{formatTime(app.position, true)}</strong>
       <span class="muted"> / {formatTime(app.song?.duration_sec ?? 0)}</span>
       {#if app.downbeats.length}
-        <span class="muted"> · {barAt(app.downbeats, app.position) ? `bar ${barAt(app.downbeats, app.position)}` : "pickup"}</span>
+        <span class="muted bar"> · {barAt(app.downbeats, app.position) ? `bar ${barAt(app.downbeats, app.position)}` : "pickup"}</span>
       {/if}
     </span>
+    {#if app.chords}
+      <span class="now" title={app.chordNow?.second ? "Shape you fret, then what you hear" : "Chord at the playhead"}>
+        <b>{app.chordNow?.main ?? "N.C."}</b>
+        {#if app.chordNow?.second}<span class="muted">{app.chordNow.second}</span>{/if}
+      </span>
+    {/if}
+    <span class="grow"></span>
     {#if loopText}
       <span class="mono loopinfo" class:off={!app.loop.enabled}>
         Loop {loopText}{app.loop.enabled ? "" : " (off)"}
@@ -265,13 +325,20 @@
     {:else}
       <span class="muted hint">Drag on the waveform to set a loop</span>
     {/if}
+    <button
+      class="btn small toggle"
+      aria-pressed={app.chordsOpen}
+      title="{app.chordsOpen ? 'Hide' : 'Show'} chords (K)"
+      onclick={() => app.toggleChords()}>Chords</button
+    >
   </div>
 </section>
 
 <style>
   .wave {
     flex: 1 1 140px;
-    min-height: 0;
+    /* Canvas floor plus the readout: the chords panel below never covers it. */
+    min-height: 88px;
     max-height: 180px;
     display: flex;
     flex-direction: column;
@@ -280,7 +347,7 @@
   .canvas-wrap {
     position: relative;
     flex: 1;
-    min-height: 90px;
+    min-height: 58px;
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: var(--radius);
@@ -299,10 +366,29 @@
   }
   .readout {
     display: flex;
-    justify-content: space-between;
+    align-items: center;
     gap: 12px;
     font-size: 12.5px;
     flex-wrap: wrap;
+  }
+  .grow {
+    flex: 1;
+  }
+  .now {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 6px;
+    min-width: 96px;
+    padding: 0 8px;
+    border-radius: 4px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+  }
+  .now b {
+    font-weight: 650;
+  }
+  .now span {
+    font-size: 11.5px;
   }
   .loopinfo {
     color: var(--loop);

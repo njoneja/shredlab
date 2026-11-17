@@ -16,7 +16,9 @@ the offset into a Pitch setting; those belong to the app and
 `shredlab-library`. For the live tuner it does not open the input device,
 pick a channel, run a thread, map a frequency to a note or string, or
 smooth the needle; the audio engine feeds it samples and the UI does the
-rest. It takes no paths and opens no audio device.
+rest. It takes no paths and opens no audio device. The `spectrum` module
+(the Hann analyzer with interpolated peaks and the non-octave harmonic
+filter) is public for `shredlab-chords`, which builds its chroma on it.
 
 Dependencies: realfft. Results are plain structs without serde; callers
 map them to their own storage types.

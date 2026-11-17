@@ -17,7 +17,7 @@ mod cents;
 mod guess;
 mod live;
 mod song;
-mod spectrum;
+pub mod spectrum;
 
 pub use guess::{guess_song_tuning, TuningGuess, BASS_STANDARD_LOW, GUITAR_STANDARD_LOW};
 pub use live::{LiveDetector, LiveReading, LEVEL_FLOOR_DB, MIN_CLARITY, QUIET_DB};

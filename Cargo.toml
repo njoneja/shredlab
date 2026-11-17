@@ -6,6 +6,7 @@ members = [
     "crates/shredlab-separation",
     "crates/shredlab-beats",
     "crates/shredlab-tuning",
+    "crates/shredlab-chords",
     "crates/shredlab-audio",
     "crates/shredlab-library",
     "crates/shredlab-cli",
@@ -25,6 +26,7 @@ shredlab-io = { path = "crates/shredlab-io" }
 shredlab-separation = { path = "crates/shredlab-separation" }
 shredlab-beats = { path = "crates/shredlab-beats" }
 shredlab-tuning = { path = "crates/shredlab-tuning" }
+shredlab-chords = { path = "crates/shredlab-chords" }
 shredlab-audio = { path = "crates/shredlab-audio" }
 shredlab-library = { path = "crates/shredlab-library" }
 
@@ -75,4 +77,7 @@ opt-level = 3
 opt-level = 3
 
 [profile.dev.package.shredlab-audio]
+opt-level = 3
+
+[profile.dev.package.shredlab-chords]
 opt-level = 3

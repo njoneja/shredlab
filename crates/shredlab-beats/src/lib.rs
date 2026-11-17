@@ -14,6 +14,9 @@
 //!    with a 6-frame border, `keep_first` overlap.
 //! 3. [`postprocess`]: "minimal" peak picking (7-frame max-pool, logit > 0,
 //!    merge adjacent peaks, snap downbeats to the nearest beat).
+//!    [`postprocess_bars`] (what [`track`] uses) keeps those beats but takes
+//!    the downbeats from [`decode_downbeats`], a Viterbi decoder over the
+//!    beats that keeps bars a consistent length.
 //! 4. UI helpers: [`BeatGrid::tempo_bpm`], [`BeatGrid::beats_per_bar`],
 //!    [`BeatGrid::most_common_beats_per_bar`].
 //!
@@ -489,14 +492,277 @@ pub fn postprocess(logits: &Logits) -> BeatGrid {
     BeatGrid { beats, downbeats }
 }
 
+// ------------------------------------------------------ downbeat decoding
+
+/// Version of the downbeat decoder ([`decode_downbeats`] with
+/// [`DecoderCosts::default`]). Bump it whenever its output changes, so
+/// cached grids are decoded again.
+pub const DOWNBEAT_DECODER_VERSION: u32 = 1;
+/// Smallest home meter (beats per bar) the decoder keeps up.
+pub const MIN_METER: usize = 2;
+/// Largest meter (beats per bar) the decoder considers, for home meters
+/// and one-off bars alike.
+pub const MAX_METER: usize = 7;
+/// Frames on each side of a beat searched for its downbeat logit.
+const SCORE_RADIUS: isize = 2;
+/// Intervals on each side of a beat used for its local beat period.
+const PERIOD_RADIUS: usize = 8;
+
+/// Costs of the downbeat decoder, in nats (negative log-probabilities).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DecoderCosts {
+    /// Weight of the downbeat evidence: a beat with downbeat logit `s` costs
+    /// `evidence * softplus(-s)` as a downbeat, `evidence * softplus(s)`
+    /// otherwise.
+    pub evidence: f64,
+    /// Logits are clamped to `±clip` first, so one very confident frame
+    /// cannot outweigh the bar structure on its own.
+    pub clip: f64,
+    /// Changing the home meter (a lasting meter change).
+    pub switch: f64,
+    /// One bar of a length other than the home meter, after which the home
+    /// meter resumes.
+    pub odd_bar: f64,
+    /// Cost of an odd bar that lasts as long as a home bar (to within a few
+    /// percent): the beat tracker added or missed a beat.
+    pub odd_bar_in_time: f64,
+    /// Relative timing error (as |ln(duration / home bar duration)|) at
+    /// which an odd bar costs the full `odd_bar`; in between it is
+    /// interpolated linearly.
+    pub time_tolerance: f64,
+    /// Extra cost of a one-beat bar (on top of `odd_bar`).
+    pub one_beat_bar: f64,
+    /// Cost per bar by its length in beats, a mild preference for common
+    /// meters when the evidence is ambiguous.
+    pub bar_length: [f64; MAX_METER + 1],
+}
+
+impl Default for DecoderCosts {
+    fn default() -> Self {
+        DecoderCosts {
+            evidence: 1.0,
+            clip: 8.0,
+            switch: 8.0,
+            odd_bar: 6.0,
+            odd_bar_in_time: 2.0,
+            time_tolerance: 0.15,
+            one_beat_bar: 8.0,
+            bar_length: [0.0, 0.0, 1.0, 0.5, 0.0, 1.5, 1.0, 1.5],
+        }
+    }
+}
+
+/// Per-beat downbeat score: the largest downbeat logit within
+/// `SCORE_RADIUS` frames of the beat. Input of [`decode_downbeats`].
+pub fn downbeat_scores(logits: &Logits, beats: &[f64]) -> Vec<f32> {
+    let n = logits.downbeat.len() as isize;
+    beats
+        .iter()
+        .map(|&t| {
+            let f = t * FPS;
+            let lo = (f.floor() as isize - SCORE_RADIUS).max(0);
+            let hi = (f.ceil() as isize + SCORE_RADIUS).min(n - 1);
+            (lo..=hi)
+                .map(|i| logits.downbeat[i as usize])
+                .fold(-1000.0, f32::max)
+        })
+        .collect()
+}
+
+fn softplus(x: f64) -> f64 {
+    if x > 30.0 {
+        x
+    } else {
+        x.exp().ln_1p()
+    }
+}
+
+/// Downbeat beat indices from per-beat scores ([`downbeat_scores`]).
+///
+/// Viterbi over the beats. The state is (home meter `h` in
+/// [`MIN_METER`]..=[`MAX_METER`], length `l` of the current bar, position
+/// `p` in it). `p` advances by one per beat; after the last beat of a bar
+/// the next bar starts (`p = 0`): in the home meter for free, as a one-off
+/// bar of another length (1..=[`MAX_METER`]) for `odd_bar` (less when it
+/// lasts as long as a home bar, see [`DecoderCosts::odd_bar_in_time`]), or
+/// in a new home meter for `switch`. Each bar pays `bar_length[l]`. The
+/// first beat may be at any position (pickup) and the last bar may be
+/// incomplete. `beats` (seconds) are only used for bar durations.
+pub fn decode_downbeats(beats: &[f64], scores: &[f32], costs: &DecoderCosts) -> Vec<usize> {
+    let n = scores.len().min(beats.len());
+    if n == 0 {
+        return Vec::new();
+    }
+    let period = local_period(&beats[..n]);
+    // States (h, l, p) flattened: per home, bar lengths 1..=MAX_METER.
+    const PER_HOME: usize = MAX_METER * (MAX_METER + 1) / 2;
+    const N_HOMES: usize = MAX_METER - MIN_METER + 1;
+    const N_STATES: usize = N_HOMES * PER_HOME;
+    let idx = |h: usize, l: usize, p: usize| (h - MIN_METER) * PER_HOME + l * (l - 1) / 2 + p;
+    let emit = |i: usize, p: usize| {
+        let s = (scores[i] as f64).clamp(-costs.clip, costs.clip);
+        costs.evidence * if p == 0 { softplus(-s) } else { softplus(s) }
+    };
+    // Cost of starting a bar of length l with home meter h.
+    // Cost of a bar of length l starting at beat i with home meter h.
+    let start = |h: usize, l: usize, i: usize| {
+        if l == h {
+            return costs.bar_length[l];
+        }
+        // An odd bar as long in time as a home bar is an extra or missing
+        // beat rather than an odd bar of music: it costs less.
+        let mut odd = costs.odd_bar;
+        if let (Some(&end), Some(&t)) = (beats.get(i + l), period.get(i)) {
+            let expected = h as f64 * t;
+            let off = ((end - beats[i]) / expected).ln().abs();
+            let full = (off / costs.time_tolerance).min(1.0);
+            odd = costs.odd_bar_in_time + (costs.odd_bar - costs.odd_bar_in_time) * full;
+        }
+        if l == 1 {
+            odd += costs.one_beat_bar;
+        }
+        odd + costs.bar_length[l]
+    };
+
+    let mut cost = [f64::INFINITY; N_STATES];
+    for h in MIN_METER..=MAX_METER {
+        for l in 1..=MAX_METER {
+            for p in 0..l {
+                cost[idx(h, l, p)] = start(h, l, 0) + emit(0, p);
+            }
+        }
+    }
+    // back[i][s]: state at beat i - 1 on the best path to s.
+    let mut back = vec![[0u8; N_STATES]; n];
+    let mut next = [0f64; N_STATES];
+    for (i, back) in back.iter_mut().enumerate().skip(1) {
+        // Best completed bar per home meter, and overall.
+        let mut ended = [(f64::INFINITY, 0usize); MAX_METER + 1];
+        for (h, e) in ended.iter_mut().enumerate().skip(MIN_METER) {
+            for l in 1..=MAX_METER {
+                let s = idx(h, l, l - 1);
+                if cost[s] < e.0 {
+                    *e = (cost[s], s);
+                }
+            }
+        }
+        let best_any = ended[MIN_METER..]
+            .iter()
+            .copied()
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .unwrap_or((f64::INFINITY, 0));
+        for (h, &stay) in ended.iter().enumerate().skip(MIN_METER) {
+            let from = if best_any.0 + costs.switch < stay.0 {
+                (best_any.0 + costs.switch, best_any.1)
+            } else {
+                stay
+            };
+            for l in 1..=MAX_METER {
+                let s = idx(h, l, 0);
+                next[s] = from.0 + start(h, l, i) + emit(i, 0);
+                back[s] = from.1 as u8;
+                for p in 1..l {
+                    let s = idx(h, l, p);
+                    next[s] = cost[s - 1] + emit(i, p);
+                    back[s] = (s - 1) as u8;
+                }
+            }
+        }
+        std::mem::swap(&mut cost, &mut next);
+    }
+    let mut s = (0..N_STATES)
+        .min_by(|&a, &b| cost[a].total_cmp(&cost[b]))
+        .unwrap_or(0);
+    let is_start: Vec<bool> = (0..N_STATES)
+        .map(|s| (MIN_METER..=MAX_METER).any(|h| (1..=MAX_METER).any(|l| s == idx(h, l, 0))))
+        .collect();
+    let mut out = Vec::new();
+    for i in (0..n).rev() {
+        if is_start[s] {
+            out.push(i);
+        }
+        s = back[i][s] as usize;
+    }
+    out.reverse();
+    out
+}
+
+/// Local beat period at each beat: the median of the intervals within
+/// `PERIOD_RADIUS` beats.
+fn local_period(beats: &[f64]) -> Vec<f64> {
+    let d: Vec<f64> = beats.windows(2).map(|w| w[1] - w[0]).collect();
+    (0..beats.len())
+        .filter_map(|i| {
+            let lo = i.saturating_sub(PERIOD_RADIUS);
+            let hi = (i + PERIOD_RADIUS).min(d.len());
+            let mut w = d.get(lo..hi)?.to_vec();
+            if w.is_empty() {
+                return None;
+            }
+            w.sort_by(f64::total_cmp);
+            Some(w[w.len() / 2])
+        })
+        .collect()
+}
+
+/// A beat grid with the per-beat downbeat scores it was decoded from.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Tracked {
+    pub grid: BeatGrid,
+    /// [`downbeat_scores`] for `grid.beats`; [`downbeats_from_scores`] on
+    /// them gives `grid.downbeats` again without the network.
+    pub downbeat_scores: Vec<f32>,
+}
+
+/// Beats as in [`postprocess`]; downbeats from [`decode_downbeats`] with
+/// the default costs instead of independent peak picking.
+pub fn postprocess_bars(logits: &Logits) -> Tracked {
+    let beats: Vec<f64> = dedup(&peaks(&logits.beat), 1.0)
+        .into_iter()
+        .map(|f| f / FPS)
+        .collect();
+    decode_bars(logits, beats)
+}
+
+/// Downbeats for given `beats` (seconds) from the network's downbeat
+/// logits, with the default costs. Lets a caller keep an earlier beat list
+/// (and everything indexed by it) while the downbeats are decoded again.
+pub fn decode_bars(logits: &Logits, beats: Vec<f64>) -> Tracked {
+    let downbeat_scores = downbeat_scores(logits, &beats);
+    let downbeats = downbeats_from_scores(&beats, &downbeat_scores);
+    Tracked {
+        grid: BeatGrid { beats, downbeats },
+        downbeat_scores,
+    }
+}
+
+/// Downbeat times for `beats` from their scores, with the default costs.
+pub fn downbeats_from_scores(beats: &[f64], scores: &[f32]) -> Vec<f64> {
+    let n = beats.len().min(scores.len());
+    decode_downbeats(&beats[..n], &scores[..n], &DecoderCosts::default())
+        .into_iter()
+        .map(|i| beats[i])
+        .collect()
+}
+
 /// Full pipeline: planar audio -> beat grid, with `model` as in [`infer`].
+/// Downbeats come from [`postprocess_bars`].
 pub fn track<E, F>(channels: &[&[f32]], sample_rate: u32, model: F) -> Result<BeatGrid, E>
 where
     E: From<Error>,
     F: FnMut(&[f32], [usize; 3]) -> Result<(Vec<f32>, Vec<f32>), E>,
 {
+    Ok(track_scored(channels, sample_rate, model)?.grid)
+}
+
+/// [`track`], also returning the per-beat downbeat scores.
+pub fn track_scored<E, F>(channels: &[&[f32]], sample_rate: u32, model: F) -> Result<Tracked, E>
+where
+    E: From<Error>,
+    F: FnMut(&[f32], [usize; 3]) -> Result<(Vec<f32>, Vec<f32>), E>,
+{
     let spec = preprocess(channels, sample_rate)?;
-    Ok(postprocess(&infer(&spec, model)?))
+    Ok(postprocess_bars(&infer(&spec, model)?))
 }
 
 // ------------------------------------------------------------ UI helpers
@@ -630,5 +896,124 @@ mod tests {
             resample_mono(&vec![0.0; 48000], 48000).unwrap().len(),
             22050
         );
+    }
+
+    /// Evenly spaced beats (0.5 s) and scores: `strong` at the given bar
+    /// starts, `-strong` elsewhere.
+    fn synth(bars: &[usize], pickup: usize, strong: f32) -> (Vec<f64>, Vec<f32>, Vec<usize>) {
+        let n = pickup + bars.iter().sum::<usize>();
+        let mut downs = Vec::new();
+        let mut i = pickup;
+        for &b in bars {
+            downs.push(i);
+            i += b;
+        }
+        let beats = (0..n).map(|i| 0.5 * i as f64).collect();
+        let scores = (0..n)
+            .map(|i| if downs.contains(&i) { strong } else { -strong })
+            .collect();
+        (beats, scores, downs)
+    }
+
+    fn decode(beats: &[f64], scores: &[f32]) -> Vec<usize> {
+        decode_downbeats(beats, scores, &DecoderCosts::default())
+    }
+
+    /// Deterministic noise in [-1, 1).
+    fn noise(seed: &mut u64) -> f32 {
+        *seed = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        ((*seed >> 33) as f32 / (1u64 << 31) as f32) * 2.0 - 1.0
+    }
+
+    #[test]
+    fn decoder_keeps_steady_four_through_noise() {
+        let (beats, mut scores, want) = synth(&[4; 40], 0, 3.0);
+        let mut seed = 7;
+        for s in scores.iter_mut() {
+            *s += 1.5 * noise(&mut seed);
+        }
+        // Spurious mid-bar peaks and missed downbeats, as in unclear intros.
+        for i in [6, 13, 30, 51, 98] {
+            scores[i] = 2.0;
+        }
+        for i in [8, 40, 92] {
+            scores[i] = -2.0;
+        }
+        let old_style: Vec<usize> = (0..scores.len()).filter(|&i| scores[i] > 0.0).collect();
+        assert_ne!(old_style, want);
+        assert_eq!(decode(&beats, &scores), want);
+    }
+
+    #[test]
+    fn decoder_follows_a_lasting_meter_change() {
+        let mut bars = vec![3; 12];
+        bars.extend([4; 12]);
+        let (beats, scores, want) = synth(&bars, 0, 3.0);
+        assert_eq!(decode(&beats, &scores), want);
+    }
+
+    #[test]
+    fn decoder_keeps_a_clear_one_off_bar() {
+        let mut bars = vec![4; 8];
+        bars.push(2);
+        bars.extend([4; 8]);
+        let (beats, scores, want) = synth(&bars, 0, 5.0);
+        assert_eq!(decode(&beats, &scores), want);
+        // A single weak peak at the same place is noise, not a 2-beat bar.
+        let (beats, mut scores, want) = synth(&[4; 17], 0, 3.0);
+        scores[34] = 2.0;
+        assert_eq!(decode(&beats, &scores), want);
+    }
+
+    #[test]
+    fn decoder_handles_three_and_compound_meters() {
+        for bars in [[3; 30], [2; 30], [6; 30]] {
+            let (beats, scores, want) = synth(&bars, 0, 3.0);
+            let got = decode(&beats, &scores);
+            assert_eq!(got, want, "{} beats per bar", bars[0]);
+        }
+    }
+
+    #[test]
+    fn decoder_keeps_the_pickup() {
+        for pickup in 1..4 {
+            let (beats, scores, want) = synth(&[4; 10], pickup, 3.0);
+            assert_eq!(decode(&beats, &scores), want, "pickup {pickup}");
+        }
+        assert!(decode(&[], &[]).is_empty());
+        assert_eq!(decode(&[0.0], &[2.0]), [0]);
+    }
+
+    #[test]
+    fn decoder_absorbs_an_extra_beat() {
+        // An extra beat squeezed into bar 5 (the bar still lasts 2 s): a
+        // 5-beat bar, not a phase shift of the following bars.
+        let (mut beats, mut scores, _) = synth(&[4; 12], 0, 3.0);
+        beats.insert(21, 10.25);
+        scores.insert(21, -3.0);
+        let want: Vec<usize> = (0..12)
+            .map(|k| if k <= 5 { 4 * k } else { 4 * k + 1 })
+            .collect();
+        let got = decode(&beats, &scores);
+        assert_eq!(got, want);
+        let grid = BeatGrid {
+            downbeats: got.iter().map(|&i| beats[i]).collect(),
+            beats,
+        };
+        assert_eq!(grid.beats_per_bar().iter().filter(|&&b| b == 5).count(), 1);
+    }
+
+    #[test]
+    fn scores_take_the_max_near_each_beat() {
+        let mut downbeat = vec![-5.0f32; 200];
+        downbeat[50] = 3.0; // beat at frame 49
+        downbeat[103] = 1.0; // beat at frame 100: too far
+        let l = Logits {
+            beat: vec![0.0; 200],
+            downbeat,
+        };
+        assert_eq!(downbeat_scores(&l, &[0.98, 2.0, 3.99]), [3.0, -5.0, -5.0]);
     }
 }

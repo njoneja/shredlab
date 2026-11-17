@@ -30,15 +30,18 @@ import type {
   TunerReading,
   TunerStarted,
   TuningData,
+  ChordsData,
 } from "./types";
 import { STEMS } from "./types";
 import { backingFromOriginal, clampGain } from "./mix";
 import { applyTheme, currentTheme, isTheme } from "./theme";
 import { defaultRefine, exceptionSide, hasException, isIdentity, mockPresets, normalize, STRENGTH_NAMES } from "./refine";
 import { barAt, commonBeatsPerBar, effectiveDownbeats, formatTime, nearestBeatIndex, normalizeOverrides } from "./meter";
+import { chordFrame, chordIndexAt, chordViews, detailWindow, passingViews, tuningLine, type ChordView, type PassingView } from "./chords";
 import {
   DEFAULT_TUNING,
   fromSaved,
+  guessCandidates,
   matchCents,
   RATE_MAX_CENTS,
   sanitize,
@@ -49,6 +52,7 @@ import {
   strings,
   toneHz,
   toSaved,
+  totalCents,
   tunerLowHz,
   type MyTuning,
 } from "./tuning";
@@ -107,6 +111,34 @@ function writeLastTuning(t: MyTuning) {
     localStorage.setItem(LAST_TUNING_KEY, JSON.stringify(toSaved(t)));
   } catch {
     /* storage unavailable: new songs start from the default tuning */
+  }
+}
+
+/** Chords panel: open, and the bars it shows when following the playhead. Kept in localStorage. */
+const CHORDS_KEY = "shredlab.chords";
+export const CHORD_ZOOMS = [2, 4, 8, 16, 32, 64];
+
+interface ChordsPrefs {
+  open: boolean;
+  bars: number;
+  /** Detailed names (A6, Aadd9) and passing chords, rather than the simple names. */
+  detailed: boolean;
+}
+
+function readChordsPrefs(): ChordsPrefs {
+  try {
+    const v = JSON.parse(localStorage.getItem(CHORDS_KEY) ?? "null");
+    return { open: v?.open === true, bars: CHORD_ZOOMS.includes(v?.bars) ? v.bars : 8, detailed: v?.detailed === true };
+  } catch {
+    return { open: false, bars: 8, detailed: false };
+  }
+}
+
+function writeChordsPrefs(p: ChordsPrefs) {
+  try {
+    localStorage.setItem(CHORDS_KEY, JSON.stringify(p));
+  } catch {
+    /* storage unavailable: the panel starts closed next time */
   }
 }
 
@@ -223,6 +255,21 @@ class AppState {
   myTuning = $state.raw<MyTuning>({ ...DEFAULT_TUNING });
   /** "Song is in": semitones the song sits below or above its written pitch. */
   songSemitones = $state(0);
+  /** "Song is in" was set by the user for this song; chord names follow it only then. */
+  songSemitonesSet = $state(false);
+
+  // chords (ChordsPanel.svelte, the lane in Waveform.svelte)
+  /** The open song's chords for its loaded stems; null while detecting or before separation. */
+  chords = $state.raw<ChordsData | null>(null);
+  chordsOpen = $state(readChordsPrefs().open);
+  /** Bars the panel shows when following the playhead. */
+  chordsBars = $state(readChordsPrefs().bars);
+  /** Detailed names and passing chords (the panel's Simple / Detailed switch). */
+  chordsDetailed = $state(readChordsPrefs().detailed);
+  /** The panel fits the loop (when one is on) or follows the playhead. */
+  chordsFit = $state(true);
+  /** A finer waveform for the panel (fetched when it opens). */
+  detailPeaks = $state.raw<number[] | null>(null);
   /** The Guess button was pressed for this song (saved with it); it stops hinting. */
   guessAnswered = $state(false);
   /** The Shift method (the Shift button's menu); new songs start with the last one used. */
@@ -378,6 +425,54 @@ class AppState {
   );
   matched = $derived(this.match != null && this.matchActive);
 
+  /** Which names the chords get (shape in the confirmed tuning, and what you hear). */
+  chordFrame = $derived(
+    chordFrame({
+      songSemitones: this.songSemitones,
+      confirmed: this.songSemitonesSet,
+      offsetCents: this.tuningUsable && this.tuning ? this.tuning.offset_cents : 0,
+      shiftCents: 100 * this.semitones + this.cents + this.rateCents,
+    }),
+  );
+  chordViews = $derived<ChordView[]>(chordViews(this.chords, this.chordFrame, this.chordsDetailed));
+  /** Passing chords, shown with the detailed names only. */
+  passingViews = $derived<PassingView[]>(this.chordsDetailed ? passingViews(this.chords, this.chordFrame) : []);
+  chordNow = $derived<ChordView | null>(this.chordViews[chordIndexAt(this.chordViews, this.position)] ?? null);
+  /** What the chords panel shows. */
+  chordWindow = $derived(
+    detailWindow({
+      position: this.position,
+      duration: this.song?.duration_sec ?? 1,
+      loop: this.loop,
+      fit: this.chordsFit,
+      bars: this.chordsBars,
+      downbeats: this.downbeats,
+    }),
+  );
+  /** Chords are expected but not detected yet. */
+  chordsPending = $derived(!!this.song && !this.chords && (this.separating || this.stemsReady));
+  /**
+   * Semitones the song would still have to move to match My tuning after the
+   * current shift; 0 when what the player frets matches what is heard.
+   */
+  chordMismatch = $derived.by(() => {
+    const need =
+      this.matchNow ??
+      Math.round(totalCents(this.myTuning) - 100 * this.songSemitones - (this.tuningUsable && this.tuning ? this.tuning.offset_cents : 0));
+    return Math.round((need - (100 * this.semitones + this.cents + this.rateCents)) / 100);
+  });
+  chordTuningLine = $derived.by(() => {
+    const g = this.tuning?.guess;
+    const c = g ? guessCandidates(g.below_standard)[0] : null;
+    return tuningLine({
+      frame: this.chordFrame,
+      songSemitones: this.songSemitones,
+      guess: c ? { semitones: c.semitones, label: c.label } : null,
+      mismatch: this.chordMismatch,
+      sample: this.chordViews.find((v) => v.main && v.second) ?? null,
+    });
+  });
+
   private started = false;
 
   /**
@@ -414,7 +509,9 @@ class AppState {
       if (p.song_id !== this.song?.song_id) return;
       this.separating = false;
       this.stemsReady = true;
-      this.song = { ...this.song, stems_cached: true, separated_with: p.separated_with, original_available: p.original_available };
+      // New stems: their chords are detected again once their tuning is in.
+      this.chords = null;
+      this.song = { ...this.song, stems_cached: true, separated_with: p.separated_with, original_available: p.original_available, chords: null };
       this.showToast("Stems ready");
       this.refreshLibrary();
     });
@@ -425,6 +522,11 @@ class AppState {
     });
     await api.listen("beats-ready", (p) => {
       if (p.song_id === this.song?.song_id) this.loadBeats();
+    });
+    await api.listen("chords-ready", (p) => {
+      if (p.song_id !== this.song?.song_id) return;
+      this.chords = p.chords;
+      this.song = { ...this.song, chords: p.chords };
     });
     await api.listen("tuning-ready", (p) => {
       if (p.song_id !== this.song?.song_id) return;
@@ -609,6 +711,9 @@ class AppState {
       api.stopTone().catch(() => {});
       this.rateCents = 0; // the backend resets the rate correction on open
       this.tuning = info.tuning ?? null;
+      this.chords = info.chords ?? null;
+      this.detailPeaks = null;
+      this.detailFor = null;
       this.song = info;
       this.stemsReady = info.stems_cached;
       this.separating = false;
@@ -649,6 +754,7 @@ class AppState {
           if (this.song?.song_id === info.song_id) this.peaks = w.peaks;
         })
         .catch((e) => console.warn("get_waveform failed", e));
+      if (this.chordsOpen) this.loadDetailPeaks();
       if (info.beats_ready) await this.loadBeats();
       if (!info.stems_cached) await this.startSeparation();
       this.refreshLibrary();
@@ -704,6 +810,7 @@ class AppState {
     this.tuningSaved = !!ts;
     this.myTuning = ts ? fromSaved(ts.my_tuning) : readLastTuning();
     this.songSemitones = clamp(Math.round(Number(ts?.song_semitones) || 0), -SHIFT_MAX, SHIFT_MAX);
+    this.songSemitonesSet = ts?.song_semitones_set ?? this.songSemitones !== 0;
     this.guessAnswered = ts?.guess_answered === true;
     const m = ts?.match;
     this.match = m && (m.method === "pitch" || m.method === "rate") ? { method: m.method, cents: Math.round(Number(m.cents) || 0) } : null;
@@ -720,6 +827,7 @@ class AppState {
             tuning: {
               my_tuning: toSaved(this.myTuning),
               song_semitones: this.songSemitones,
+              song_semitones_set: this.songSemitonesSet,
               match: this.match ? { ...this.match } : null,
               guess_answered: this.guessAnswered,
             },
@@ -1145,6 +1253,7 @@ class AppState {
   /** "Song is in": the song's own semitones (Eb standard = −1). */
   async setSongSemitones(n: number) {
     this.songSemitones = clamp(Math.round(n), -SHIFT_MAX, SHIFT_MAX);
+    this.songSemitonesSet = true;
     this.tuningSaved = true;
     this.saveSettings();
     if (this.matchActive) await this.rematch();
@@ -1162,6 +1271,62 @@ class AppState {
   async tuneToSong() {
     if (!this.tuning || !this.tuningUsable) return;
     await this.setMyTuning({ ...this.myTuning, refHz: songRefHz(this.tuning.offset_cents), shift: this.songSemitones });
+  }
+
+  // ---- chords ----
+  toggleChords() {
+    this.chordsOpen = !this.chordsOpen;
+    this.saveChordsPrefs();
+    if (this.chordsOpen) this.loadDetailPeaks();
+  }
+
+  /** −1: show more bars, +1: fewer. Switches the panel to following the playhead. */
+  zoomChords(dir: number) {
+    const i = CHORD_ZOOMS.indexOf(this.chordsBars);
+    const next = CHORD_ZOOMS[clamp((i < 0 ? 2 : i) - dir, 0, CHORD_ZOOMS.length - 1)];
+    this.chordsBars = next;
+    this.chordsFit = false;
+    this.saveChordsPrefs();
+  }
+
+  setChordsDetailed(on: boolean) {
+    this.chordsDetailed = on;
+    this.saveChordsPrefs();
+  }
+
+  private saveChordsPrefs() {
+    writeChordsPrefs({ open: this.chordsOpen, bars: this.chordsBars, detailed: this.chordsDetailed });
+  }
+
+  /** "Use Eb shapes": confirms the tuning guess as "Song is in". */
+  async useGuessShapes(semitones: number) {
+    this.seeGuess();
+    await this.setSongSemitones(semitones);
+  }
+
+  /** "I'm tuned down/up": My tuning moves so what the player frets matches what is heard. */
+  async setTunedToHeard() {
+    const m = this.chordMismatch;
+    if (m === 0) return;
+    await this.setMyTuning({ ...this.myTuning, shift: clamp(this.myTuning.shift - m, -SHIFT_MAX, SHIFT_MAX) });
+  }
+
+  private detailFor: string | null = null;
+  /** About 50 points per second (20 ms), enough for a few bars across the panel. */
+  private loadDetailPeaks() {
+    const song = this.song;
+    if (!song || this.detailFor === song.song_id) return;
+    this.detailFor = song.song_id;
+    const n = Math.min(40000, Math.max(1200, Math.round(song.duration_sec * 50)));
+    api
+      .getWaveform(n)
+      .then((w) => {
+        if (this.song?.song_id === song.song_id) this.detailPeaks = w.peaks;
+      })
+      .catch((e) => {
+        this.detailFor = null;
+        console.warn("get_waveform failed", e);
+      });
   }
 
   // ---- reference tones ----

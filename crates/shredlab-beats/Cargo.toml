@@ -17,4 +17,5 @@ thiserror.workspace = true
 # Only for the end-to-end example / tests; the library API is ORT-free.
 # Same pin as crates/shredlab-separation.
 ort = { version = "=2.0.0-rc.15", default-features = false, features = ["std", "download-binaries", "copy-dylibs", "tls-native"] }
+serde_json.workspace = true
 symphonia.workspace = true

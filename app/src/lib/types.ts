@@ -47,6 +47,55 @@ export interface SongInfo {
   strength_job: number;
   /** Measured tuning; null until the tuning job has run on the stems. */
   tuning: TuningData | null;
+  /** Detected chords of the loaded stems; null until the chords job has run. */
+  chords: ChordsData | null;
+}
+
+// ---- Chords ----
+
+/** One stretch of the song with a single chord, at concert pitch (C = 0). */
+export interface ChordSpan {
+  start_s: number;
+  end_s: number;
+  /** Root pitch class; absent for no chord. */
+  root?: number | null;
+  /** Suffix after the root: "", "m", "5", "7", "maj7", "m7", "sus2", "sus4", "dim". */
+  quality?: string;
+  /** Bass pitch class of a slash chord (D/F#). */
+  bass?: number | null;
+  /** Suffix of the detailed name when it differs ("6", "m6", "add9", "9", "7sus4"). */
+  detail?: string | null;
+  /** Starts off the beat. */
+  push?: boolean;
+}
+
+/** A short chord passing by inside a segment (a quick Bm in a D bar). */
+export interface PassingSpan {
+  start_s: number;
+  end_s: number;
+  root: number;
+  quality?: string;
+}
+
+/** The song's detected chords (`song.json`). */
+export interface ChordsData {
+  /** Algorithm version; an older one is detected again on open. */
+  version: number;
+  /** Stem set they come from (`<model id>_s<shifts>`). */
+  stems: string;
+  /** Key estimate of the whole song. */
+  key?: { tonic: number; minor: boolean } | null;
+  /** Contiguous, in time order, covering the whole song. */
+  segments: ChordSpan[];
+  /** Passing chords in time order; missing = none. */
+  passing?: PassingSpan[];
+  /** Figures: the chord moving to an extension of itself (A to A6 and back), in time order; missing = none. */
+  figures?: PassingSpan[];
+}
+
+export interface ChordsReady {
+  song_id: string;
+  chords: ChordsData;
 }
 
 // ---- Tuning ----
@@ -357,6 +406,11 @@ export interface SongTuningSettings {
   match: { method: MatchMethod; cents: number } | null;
   /** The Guess button was pressed; it stops hinting. Missing = false. */
   guess_answered?: boolean;
+  /**
+   * "Song is in" was set by the user (chord names follow it only then).
+   * Missing: true when `song_semitones` is not 0.
+   */
+  song_semitones_set?: boolean;
 }
 
 /** How a match shifts the song: through Pitch, or by changing the playback rate. */
@@ -404,6 +458,7 @@ export interface EventMap {
   "strength-done": StrengthDone;
   "strength-error": StrengthError;
   "tuning-ready": TuningReady;
+  "chords-ready": ChordsReady;
   "tuner-reading": TunerReading;
   "tuner-error": { message: string };
   "tuner-stopped": { reason: "playback" | "song_closed" };

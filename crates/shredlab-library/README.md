@@ -49,7 +49,10 @@ else the file name), duration and decoded format, then:
   `format` and one `{name, scale}` per stem. `put_stem_set` replaces the
   entry for the same model and shifts.
 - `original`: sample rate, length, scale and file name of the cached original.
-- `beats`: the beat grid (beats, downbeats, tempo, beats per bar).
+- `beats`: the beat grid (beats, downbeats, tempo, beats per bar), the
+  version of the downbeat decoder that produced the downbeats and the
+  per-beat downbeat scores (optional), so the app can decode the downbeats
+  again without the model when the decoder changes.
 - `tuning`: the measured offset from A440 (cents and the implied A4),
   confidence, peak count, the drift flag, per-segment offsets and an
   optional `guess` of the song's tuning (lowest steady bass note, semitones

@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 pub use crate::settings::{Quality, StemFormat};
 pub use shredlab_dsp::refine::{EqParams, RefineParams};
-pub use shredlab_library::{StrengthSetting, TuningData};
+pub use shredlab_library::{ChordsData, StrengthSetting, TuningData};
 
 pub const STEMS: [&str; 6] = ["vocals", "guitar", "bass", "drums", "piano", "other"];
 
@@ -52,6 +52,9 @@ pub struct SongInfo {
     pub strength_job: u64,
     /// Measured tuning; `None` until the tuning job has run on the stems.
     pub tuning: Option<TuningData>,
+    /// Detected chords of the loaded stem set; `None` until the chords job
+    /// has run (it needs the stems, the beats and the tuning).
+    pub chords: Option<ChordsData>,
 }
 
 /// One separation model from the registry.
@@ -341,6 +344,13 @@ pub struct SeparationError {
 #[derive(Debug, Clone, Serialize)]
 pub struct SongIdPayload {
     pub song_id: String,
+}
+
+/// `chords-ready` payload.
+#[derive(Debug, Clone, Serialize)]
+pub struct ChordsReady {
+    pub song_id: String,
+    pub chords: ChordsData,
 }
 
 /// `tuning-ready` payload.
