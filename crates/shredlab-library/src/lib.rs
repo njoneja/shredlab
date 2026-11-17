@@ -203,6 +203,34 @@ pub struct BeatData {
     pub beats_per_bar: Option<u32>,
 }
 
+/// Measured tuning of a song: how far it sits from A440, from the stems.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct TuningData {
+    /// Algorithm version that produced this; an older one is recomputed.
+    pub version: u32,
+    /// Cents from the nearest A440 semitone, −50..=50.
+    pub offset_cents: f32,
+    /// The A4 the offset implies, in Hz.
+    pub reference_hz: f32,
+    /// 0..1; below the measuring crate's threshold the UI says it couldn't measure.
+    pub confidence: f32,
+    /// Spectral peaks the estimate used.
+    pub peaks: u32,
+    /// The tuning moves over the song (tape transfers, varispeed).
+    pub drifts: bool,
+    /// Per-segment offsets, for the drift curve.
+    #[serde(default)]
+    pub segments: Vec<TuningSegment>,
+}
+
+/// One segment of [`TuningData::segments`].
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+pub struct TuningSegment {
+    pub start_s: f32,
+    pub offset_cents: f32,
+    pub weight: f32,
+}
+
 /// Separation strength of a song (the Natural → Tight slider): `level` 0 = Natural (the
 /// cached stems), 1..=4 = mask exponents 1.5, 2, 3, 4 ("Tight").
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -238,6 +266,9 @@ pub struct SongMeta {
     pub original: Option<OriginalInfo>,
     #[serde(default)]
     pub beats: Option<BeatData>,
+    /// Measured tuning (from the stems).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tuning: Option<TuningData>,
     /// Opaque UI settings, stored and returned verbatim.
     #[serde(default)]
     pub settings: Option<serde_json::Value>,
@@ -274,6 +305,7 @@ impl SongMeta {
             stem_sets: Vec::new(),
             original: None,
             beats: None,
+            tuning: None,
             settings: None,
             refine: BTreeMap::new(),
             strength: StrengthSetting::default(),
@@ -1061,6 +1093,19 @@ mod tests {
             downbeats: vec![0.5],
             bpm: Some(120.0),
             beats_per_bar: Some(4),
+        });
+        m.tuning = Some(TuningData {
+            version: 1,
+            offset_cents: -18.0,
+            reference_hz: 435.5,
+            confidence: 0.8,
+            peaks: 5000,
+            drifts: false,
+            segments: vec![TuningSegment {
+                start_s: 0.0,
+                offset_cents: -18.0,
+                weight: 1.0,
+            }],
         });
         lib.save(&mut m).unwrap();
         let back = lib.load("abc").unwrap().unwrap();
