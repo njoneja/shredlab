@@ -184,13 +184,18 @@ fn quantize_stems(stems: RawStems) -> Vec<Track> {
         .collect()
 }
 
-/// Sum of the stems: the mix when the original is unavailable.
-fn stem_sum(stems: &RawStems) -> [Vec<f32>; 2] {
-    let len = stems.iter().map(|(_, c)| c[0].len()).max().unwrap_or(0);
+/// Sum of the stems: the mix when the original is unavailable. Only built
+/// in that case (rare: an old cache entry whose source file is gone); it
+/// walks every sample of every stem.
+fn stem_sum(stems: &[Track]) -> [Vec<f32>; 2] {
+    let len = stems.iter().map(Track::len).max().unwrap_or(0);
     let mut sum = [vec![0.0f32; len], vec![0.0f32; len]];
-    for (_, ch) in stems {
-        for (s, c) in sum.iter_mut().zip(ch) {
-            for (s, x) in s.iter_mut().zip(c) {
+    let mut buf = vec![0.0f32; len];
+    for t in stems {
+        for (s, c) in sum.iter_mut().zip(&t.channels) {
+            let n = c.len().min(len);
+            c.read(0, &mut buf[..n]);
+            for (s, x) in s.iter_mut().zip(&buf[..n]) {
                 *s += x;
             }
         }
@@ -1055,7 +1060,6 @@ impl Backend {
         let want_shifts = self.current_quality(want.as_ref()).0.shifts();
         let mut stems: Option<Vec<Track>> = None;
         let mut stems_info: Option<StemsInfo> = None;
-        let mut stems_sum: Option<[Vec<f32>; 2]> = None;
         if let Some(m) = &meta {
             let mut candidates: Vec<StemsInfo> = Vec::new();
             if let Some(s) = want.as_ref().and_then(|e| m.stem_set(e.id(), want_shifts)) {
@@ -1069,7 +1073,6 @@ impl Backend {
             for info in candidates {
                 match self.read_cached_stems(&song_id, &info) {
                     Ok(data) => {
-                        stems_sum = Some(stem_sum(&data));
                         stems = Some(quantize_stems(data));
                         stems_info = Some(info);
                         break;
@@ -1134,7 +1137,10 @@ impl Backend {
             );
         }
         let mix_is_original = original.is_some();
-        let mix: Mix = original.or(stems_sum).unwrap_or_default().map(Arc::new);
+        let mix: Mix = original
+            .or_else(|| stems.as_deref().map(stem_sum))
+            .unwrap_or_default()
+            .map(Arc::new);
         let original_tr = mix_is_original.then(|| original_track(&mix));
         let duration = mix[0].len() as f64 / RATE as f64;
 
