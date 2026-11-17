@@ -258,12 +258,12 @@ fn offsets_near_the_wrap() {
 
 #[test]
 fn linear_drift_is_detected() {
-    let (from, to, seconds) = (-22.0, -9.0, 60.0);
+    let (from, to, seconds) = (-24.0, -8.0, 90.0);
     let cents_at = |t: f64| from + (to - from) * t / seconds;
     let song = Song::new(seconds, 42, cents_at);
     let e = estimate(&song.stems());
     assert!(e.drifts, "{e:?}");
-    assert_eq!(e.segments.len(), 6, "{:?}", e.segments);
+    assert_eq!(e.segments.len(), 9, "{:?}", e.segments);
     for s in &e.segments {
         let mid = cents_at(f64::from(s.start_s) + 5.0);
         assert!(
@@ -351,6 +351,48 @@ fn noise_lowers_confidence_only() {
     println!("confidence clean {clean:.3}, noisy {:.3}", e.confidence);
     assert!(e.confidence < clean);
     assert!((e.offset_cents + 27.0).abs() <= 1.0, "{e:?}");
+}
+
+/// Unpitched audio (noise in every stem) must not be reported as measured,
+/// however many peaks it yields.
+#[test]
+fn noise_alone_is_not_reliable() {
+    for (seed, seconds) in [(21u64, 30usize), (22, 60), (23, 180)] {
+        let mut rng = Rng(seed);
+        let noise: Vec<Vec<f32>> = (0..4)
+            .map(|_| {
+                (0..RATE as usize * seconds)
+                    .map(|_| (0.3 * (rng.next() - 0.5)) as f32)
+                    .collect()
+            })
+            .collect();
+        let kinds = [
+            StemKind::Bass,
+            StemKind::Guitar,
+            StemKind::Keys,
+            StemKind::Other,
+        ];
+        let stems: Vec<StemAudio> = kinds
+            .iter()
+            .zip(&noise)
+            .map(|(&kind, s)| StemAudio { kind, samples: s })
+            .collect();
+        let e = estimate(&stems);
+        println!(
+            "noise {seconds} s: confidence {:.3}, {} peaks",
+            e.confidence, e.peak_count
+        );
+        assert!(!e.is_reliable(), "{e:?}");
+    }
+}
+
+/// A clip shorter than four blocks can't be measured.
+#[test]
+fn short_clip_is_not_reliable() {
+    let song = Song::new(15.0, 31, |_| 10.0);
+    let e = estimate(&song.stems());
+    assert_eq!(e.confidence, 0.0, "{e:?}");
+    assert!(!e.is_reliable());
 }
 
 /// A bass holding one low note: no averaging over notes, so any

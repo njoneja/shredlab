@@ -16,16 +16,21 @@ pub use song::estimate_song_tuning;
 /// Algorithm version of [`estimate_song_tuning`]. Stored results with an
 /// older version should be recomputed. Bump it whenever a change can move
 /// the measured numbers.
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
 
-/// Below this confidence (resultant length) the estimate is not usable.
-pub const MIN_CONFIDENCE: f32 = 0.3;
+/// Below this confidence (agreement between blocks) the estimate is not
+/// usable.
+pub const MIN_CONFIDENCE: f32 = 0.7;
 
 /// Below this many spectral peaks the estimate is not usable.
 pub const MIN_PEAKS: u32 = 200;
 
 /// Length of a drift segment in seconds.
 pub const SEGMENT_SECONDS: f32 = 10.0;
+
+/// Length of a confidence block in seconds. Songs need at least four
+/// blocks with pitched content to be measured.
+pub const BLOCK_SECONDS: f32 = 5.0;
 
 /// Separated stems the estimator understands. Drums are never used.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -88,13 +93,15 @@ pub struct TuningEstimate {
     pub offset_cents: f32,
     /// The A4 reference the offset implies, `440·2^(offset/1200)`.
     pub reference_hz: f32,
-    /// Resultant length of the weighted circular mean, 0..1.
+    /// How well the song's [`BLOCK_SECONDS`] blocks agree on the offset,
+    /// 0..1: the weighted resultant length of the block means. 0 when
+    /// fewer than four blocks have pitched content.
     pub confidence: f32,
     /// True when the segment offsets spread by more than 8 cents after a
     /// 3-segment moving median.
     pub drifts: bool,
-    /// Usable segments in time order. Segments with too few peaks or low
-    /// confidence are left out, so there can be gaps.
+    /// Usable segments in time order. Segments with too few peaks or little
+    /// pitched content (fades, breaks) are left out, so there can be gaps.
     pub segments: Vec<Segment>,
     /// Spectral peaks that went into the estimate.
     pub peak_count: u32,

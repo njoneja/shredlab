@@ -5,7 +5,7 @@
 
 use crate::cents::{cents_from_a440, fold, Circular};
 use crate::spectrum::{drop_non_octave_harmonics, Analyzer, Peak};
-use crate::{Segment, StemAudio, StemKind, TuningEstimate, SEGMENT_SECONDS};
+use crate::{Segment, StemAudio, StemKind, TuningEstimate, BLOCK_SECONDS, SEGMENT_SECONDS};
 
 /// Window length at 44.1 kHz; other rates scale it to keep the same
 /// duration and frequency resolution.
@@ -17,12 +17,26 @@ const MAX_HZ: f64 = 2000.0;
 const FRAME_GATE: f32 = 0.01;
 /// A stem whose loudest frame is below −90 dBFS RMS counts as silent.
 const SILENT_RMS: f32 = 3.0e-5;
-/// Segments need at least this resultant length to count for drift.
-const SEGMENT_MIN_CONFIDENCE: f64 = 0.5;
+/// Segments need at least this share of the heaviest segment's peak weight
+/// to count for drift (leaves out fades and near-silent stretches).
+const SEGMENT_MIN_WEIGHT: f64 = 0.25;
 /// Segments need at least this many peaks to count for drift.
 const SEGMENT_MIN_PEAKS: u32 = 40;
+/// Confidence blocks need at least this share of the heaviest block's peak
+/// weight, and this many peaks, to count.
+const BLOCK_MIN_WEIGHT: f64 = 0.1;
+const BLOCK_MIN_PEAKS: u32 = 20;
+/// With fewer usable blocks than this the confidence is 0.
+const MIN_BLOCKS: usize = 4;
 /// Spread of the smoothed segment offsets above which the song drifts.
 const DRIFT_CENTS: f64 = 8.0;
+/// Width of the moving median over segment offsets (odd). Five segments
+/// (50 s) keep a song's normal section-to-section swing of a few cents
+/// from counting as drift.
+const DRIFT_SMOOTHING: usize = 5;
+/// Segments further than this from the song's offset are left out as
+/// outliers (a fade, a sound effect, a section on another instrument).
+const SEGMENT_MAX_DEVIATION: f64 = 12.0;
 
 /// Measures how far a song is from A440 from its separated stems (mono, at
 /// `sample_rate`). Bass, guitar, keys and other stems are combined with
@@ -46,12 +60,17 @@ pub fn estimate_song_tuning(stems: &[StemAudio], sample_rate: u32) -> Option<Tun
 
     let mut total = Circular::default();
     let segment_count = results.iter().map(|r| r.segments.len()).max()?;
+    let block_count = results.iter().map(|r| r.blocks.len()).max()?;
     let mut segments = vec![Circular::default(); segment_count];
+    let mut blocks = vec![Circular::default(); block_count];
     for r in &results {
         let w = r.kind.weight();
         total.merge(&r.total, w);
         for (sum, s) in segments.iter_mut().zip(&r.segments) {
             sum.merge(s, w);
+        }
+        for (sum, b) in blocks.iter_mut().zip(&r.blocks) {
+            sum.merge(b, w);
         }
     }
     if total.count == 0 {
@@ -63,7 +82,11 @@ pub fn estimate_song_tuning(stems: &[StemAudio], sample_rate: u32) -> Option<Tun
     let segments: Vec<Segment> = segments
         .iter()
         .enumerate()
-        .filter(|(_, s)| s.count >= SEGMENT_MIN_PEAKS && s.resultant() >= SEGMENT_MIN_CONFIDENCE)
+        .filter(|(_, s)| {
+            s.count >= SEGMENT_MIN_PEAKS
+                && s.weight >= SEGMENT_MIN_WEIGHT * max_weight
+                && fold(s.mean_cents() - offset).abs() <= SEGMENT_MAX_DEVIATION
+        })
         .map(|(i, s)| Segment {
             start_s: i as f32 * SEGMENT_SECONDS,
             offset_cents: (offset + fold(s.mean_cents() - offset)) as f32,
@@ -74,15 +97,34 @@ pub fn estimate_song_tuning(stems: &[StemAudio], sample_rate: u32) -> Option<Tun
     Some(TuningEstimate {
         offset_cents: offset as f32,
         reference_hz: (440.0 * 2f64.powf(offset / 1200.0)) as f32,
-        confidence: total.resultant() as f32,
+        confidence: block_agreement(&blocks) as f32,
         drifts: drifts(&segments),
         segments,
         peak_count: total.count,
     })
 }
 
-/// True when the 3-segment moving median of the offsets spreads by more
-/// than [`DRIFT_CENTS`].
+/// How well the [`BLOCK_SECONDS`] blocks agree: the weighted resultant
+/// length of their mean offsets, 0..1. Individual peaks scatter widely in
+/// real recordings (vibrato, bends, bleed, inharmonic partials), so their
+/// own resultant says little; but if the song has a tuning, every block's
+/// mean lands near it, while unpitched audio gives block means at random.
+fn block_agreement(blocks: &[Circular]) -> f64 {
+    let max_weight = blocks.iter().map(|b| b.weight).fold(0.0, f64::max);
+    let mut agreement = Circular::default();
+    for b in blocks {
+        if b.count >= BLOCK_MIN_PEAKS && b.weight >= BLOCK_MIN_WEIGHT * max_weight {
+            agreement.add(b.mean_cents(), b.weight);
+        }
+    }
+    if (agreement.count as usize) < MIN_BLOCKS {
+        return 0.0;
+    }
+    agreement.resultant()
+}
+
+/// True when the [`DRIFT_SMOOTHING`]-segment moving median of the offsets
+/// spreads by more than [`DRIFT_CENTS`].
 fn drifts(segments: &[Segment]) -> bool {
     let v: Vec<f64> = segments.iter().map(|s| f64::from(s.offset_cents)).collect();
     if v.len() < 2 {
@@ -90,7 +132,8 @@ fn drifts(segments: &[Segment]) -> bool {
     }
     let smoothed: Vec<f64> = (0..v.len())
         .map(|i| {
-            let window = &v[i.saturating_sub(1)..(i + 2).min(v.len())];
+            let h = DRIFT_SMOOTHING / 2;
+            let window = &v[i.saturating_sub(h)..(i + h + 1).min(v.len())];
             median(window)
         })
         .collect();
@@ -115,6 +158,7 @@ struct StemResult {
     kind: StemKind,
     total: Circular,
     segments: Vec<Circular>,
+    blocks: Vec<Circular>,
 }
 
 fn analyze_all(stems: &[&StemAudio], rate: f64) -> Vec<StemResult> {
@@ -137,10 +181,13 @@ fn analyze_stem(stem: &StemAudio, rate: f64) -> StemResult {
     let samples = stem.samples;
     let segment_len = SEGMENT_SECONDS as f64 * rate;
     let segment_count = (samples.len() as f64 / segment_len).ceil() as usize;
+    let block_len = BLOCK_SECONDS as f64 * rate;
+    let block_count = (samples.len() as f64 / block_len).ceil() as usize;
     let mut result = StemResult {
         kind: stem.kind,
         total: Circular::default(),
         segments: vec![Circular::default(); segment_count],
+        blocks: vec![Circular::default(); block_count],
     };
 
     let starts: Vec<usize> = (0..samples.len()).step_by(hop).collect();
@@ -170,11 +217,13 @@ fn analyze_stem(stem: &StemAudio, rate: f64) -> StemResult {
         drop_non_octave_harmonics(&mut peaks);
         let center = start as f64 + n as f64 / 2.0;
         let segment = ((center / segment_len) as usize).min(segment_count - 1);
+        let block = ((center / block_len) as usize).min(block_count - 1);
         for p in &peaks {
             let cents = cents_from_a440(p.hz);
             let w = p.mag.sqrt();
             result.total.add(cents, w);
             result.segments[segment].add(cents, w);
+            result.blocks[block].add(cents, w);
         }
     }
     result

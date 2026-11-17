@@ -275,10 +275,10 @@ function fakeTuning(path: string, duration: number): TuningData {
       weight: 1,
     }));
   const make = (offset: number, extra: Partial<TuningData> = {}): TuningData => ({
-    version: 1,
+    version: 2,
     offset_cents: offset,
     reference_hz: 440 * Math.pow(2, offset / 1200),
-    confidence: 0.82,
+    confidence: 0.98,
     peaks: 4200,
     drifts: false,
     segments: seg((x) => offset + 0.6 * Math.sin(x * 23)),
@@ -288,7 +288,7 @@ function fakeTuning(path: string, duration: number): TuningData {
     case "Houses Of The Holy": {
       const segments = seg((x) => -22 + 13 * x + Math.sin(x * 17) * 0.8);
       const offset = segments.reduce((n, s) => n + s.offset_cents, 0) / segments.length;
-      return make(Math.round(offset * 10) / 10, { drifts: true, segments, confidence: 0.64 });
+      return make(Math.round(offset * 10) / 10, { drifts: true, segments, confidence: 0.93 });
     }
     case "Green-Tinted Sixties Mind":
       return make(1.2);

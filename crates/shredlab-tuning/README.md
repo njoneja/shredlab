@@ -52,18 +52,32 @@ Each stem (mono, song rate) is analyzed on its own thread:
 Stems are combined by summing their vectors scaled by stem weight: bass
 1.0, guitar 1.0, keys 0.8, other 0.6. Vocals (0.5) are analyzed only when
 every other stem yields no peaks. The offset is the angle of the sum
-(−50..+50 cents) and the confidence is its resultant length.
+(−50..+50 cents).
+
+The confidence is how well 5-second blocks agree, not how tightly the
+peaks cluster. In real recordings the individual peaks scatter widely
+(vibrato, bends, bleed between stems, inharmonic partials), so the
+resultant length of all peaks sits around 0.2 to 0.4 even when every
+block lands within a few cents of the same offset. Each block with at
+least 20 peaks and a tenth of the heaviest block's weight adds a unit
+vector at its own mean offset, weighted by its peak weight; the confidence
+is the resultant length of those. Unpitched audio gives block means at
+random. Fewer than four usable blocks (a clip under 20 seconds) gives 0.
 
 The same sum per 10-second segment gives the drift curve. Segments with
-fewer than 40 peaks or a resultant length below 0.5 are left out. Segment
-offsets are unwrapped around the song offset so the curve stays
-continuous near ±50. The song drifts when the 3-segment moving median of
-the segment offsets spreads by more than 8 cents; the reported offset is
-still the whole-song mean.
+fewer than 40 peaks, less than a quarter of the heaviest segment's weight
+(fades, breaks), or more than 12 cents from the song offset (outliers) are
+left out. Segment offsets are unwrapped around the song offset so the
+curve stays continuous near ±50. The song drifts when the 5-segment moving
+median of the segment offsets spreads by more than 8 cents; a narrower
+median lets the normal section-to-section swing of a few cents count as
+drift. The reported offset is still the whole-song mean.
 
-`TuningEstimate::is_reliable` is false when the confidence is below 0.3 or
-fewer than 200 peaks were used; the app shows "can't measure" then. The
-estimator returns `None` only when there were no peaks at all.
+`TuningEstimate::is_reliable` is false when the confidence is below 0.7 or
+fewer than 200 peaks were used; the app shows "can't measure" then. On
+real songs the confidence is typically 0.95 or more, and white noise
+scores about 0.4 to 0.5. The estimator returns `None` only when there were
+no peaks at all.
 
 ## Invariants and gotchas
 
@@ -75,21 +89,30 @@ estimator returns `None` only when there were no peaks at all.
 - The peak interpolation exponent is tied to the Hann window. A different
   window needs a different exponent (or the bias check in the spectrum
   tests fails).
-- Drums must not be passed: their peaks are not pitched and only lower the
-  confidence.
+- Drums must not be passed: their peaks are not pitched and only blur
+  the estimate.
+- The UI repeats `MIN_CONFIDENCE` and the drift smoothing width; keep them
+  in step.
 
 ## Testing
 
 ```sh
 cargo test -p shredlab-tuning
 cargo test -p shredlab-tuning --release -- --nocapture five_minute
+cargo run --release -p shredlab-tuning --example measure_library -- <library root>
 ```
+
+The `measure_library` example runs the estimate on the stems of every song
+in a ShredLab library (the `library` folder in the app's data folder) and
+prints the offset, confidence, drift and segment offsets per song. Use it
+to check a change on real recordings before bumping `VERSION`.
 
 The tests synthesize their audio (plucked notes with several partials and
 mild inharmonicity, chords, a weak-fundamental guitar voice) and need no
 fixtures. They cover offsets from −45 to +45 cents and near the wrap
 (within 1 cent), a linear drift, a held low bass note, noise, silence,
-bass only, the vocals fallback and a 48 kHz input. The five-minute test
+bass only, the vocals fallback, a 48 kHz input, and that noise alone and
+clips shorter than 20 seconds are not reported as measured. The five-minute test
 prints the runtime; its bound is loose so it doesn't depend on the
 machine.
 

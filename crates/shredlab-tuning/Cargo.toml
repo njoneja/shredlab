@@ -10,3 +10,6 @@ publish = false
 
 [dependencies]
 realfft.workspace = true
+
+[dev-dependencies]
+shredlab-library.workspace = true

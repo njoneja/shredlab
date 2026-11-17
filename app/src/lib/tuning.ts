@@ -84,8 +84,8 @@ export const REF_MIN = 400;
 export const REF_MAX = 480;
 /** Within this many cents of A440 a song counts as in tune. */
 export const IN_TUNE_CENTS = 3;
-/** Below this confidence, or with fewer peaks, the song couldn't be measured. */
-export const MIN_CONFIDENCE = 0.3;
+/** Below this confidence (agreement between 5 s blocks), or with fewer peaks, the song couldn't be measured. */
+export const MIN_CONFIDENCE = 0.7;
 export const MIN_PEAKS = 200;
 /** The playback-rate method is offered up to this shift. */
 export const RATE_MAX_CENTS = 200;
@@ -254,11 +254,16 @@ export function toneHz(t: MyTuning, stringNumber: number, octaveUp: boolean): nu
 export const CUSTOM_NOTE_MIN = 23;
 export const CUSTOM_NOTE_MAX = 76;
 
-/** Running median over 3 values (ends keep their 2-value median), as the drift test uses. */
-export function median3(v: number[]): number[] {
+/** Segments in the running median over segment offsets, as the backend's drift test uses. */
+export const DRIFT_SMOOTHING = 5;
+
+/** Running median over `width` values (odd); windows are cut short at the ends. */
+export function medianSmooth(v: number[], width = DRIFT_SMOOTHING): number[] {
+  const h = Math.floor(width / 2);
   return v.map((_, i) => {
-    const w = v.slice(Math.max(0, i - 1), i + 2).sort((a, b) => a - b);
-    return w.length === 3 ? w[1] : (w[0] + w[w.length - 1]) / 2;
+    const w = v.slice(Math.max(0, i - h), i + h + 1).sort((a, b) => a - b);
+    const m = w.length >> 1;
+    return w.length % 2 ? w[m] : (w[m - 1] + w[m]) / 2;
   });
 }
 
@@ -275,7 +280,7 @@ export interface TuningSegment {
  */
 export function driftSummary(segments: TuningSegment[]): { kind: "from" | "between"; a: number; b: number } | null {
   if (!segments.length) return null;
-  const m = median3(segments.map((s) => s.offset_cents));
+  const m = medianSmooth(segments.map((s) => s.offset_cents));
   const lo = Math.min(...m);
   const hi = Math.max(...m);
   const first = m[0];

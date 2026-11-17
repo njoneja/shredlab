@@ -25,7 +25,7 @@
     formatHz,
     formatPitch,
     instrument,
-    median3,
+    medianSmooth,
     noteLabel,
     offsetText,
     rateTempoPercent,
@@ -147,7 +147,7 @@
   // ---- drift curve ----
   const curve = $derived.by(() => {
     if (!t?.drifts || t.segments.length < 2) return null;
-    const v = median3(t.segments.map((s) => s.offset_cents));
+    const v = medianSmooth(t.segments.map((s) => s.offset_cents));
     const end = Math.max(app.song?.duration_sec ?? 0, t.segments[t.segments.length - 1].start_s + 10);
     const lo = Math.min(...v, t.offset_cents) - 2;
     const hi = Math.max(...v, t.offset_cents) + 2;

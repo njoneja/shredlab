@@ -8,7 +8,7 @@ import {
   driftSummary,
   formatPitch,
   fromSaved,
-  median3,
+  medianSmooth,
   offsetText,
   toneHz,
   toSaved,
@@ -141,9 +141,10 @@ test("reference tone frequencies", () => {
 });
 
 test("drift summary", () => {
-  assert.deepEqual(median3([1, 9, 2, 3]), [5, 2, 3, 2.5]);
+  assert.deepEqual(medianSmooth([1, 9, 2, 3], 3), [5, 2, 3, 2.5]);
+  assert.deepEqual(medianSmooth([1, 9, 2, 3, 40, 4]), [2, 2.5, 3, 4, 3.5, 4]);
   const seg = (vals: number[]) => vals.map((v, i) => ({ start_s: i * 10, offset_cents: v, weight: 1 }));
-  assert.deepEqual(driftSummary(seg([-22, -20, -17, -14, -11, -9])), { kind: "from", a: -21, b: -10 });
-  assert.deepEqual(driftSummary(seg([-20, -10, -5, -10, -20])), { kind: "between", a: -15, b: -10 });
+  assert.deepEqual(driftSummary(seg([-22, -20, -17, -14, -11, -9])), { kind: "from", a: -20, b: -11 });
+  assert.deepEqual(driftSummary(seg([-20, -18, -10, -5, -4, -6, -12, -19, -20])), { kind: "between", a: -19, b: -6 });
   assert.equal(driftSummary([]), null);
 });
