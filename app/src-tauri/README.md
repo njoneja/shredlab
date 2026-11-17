@@ -47,6 +47,7 @@ then `src/backend.rs`.
 - `src/settings.rs`: `AppSettings` (`<data dir>/settings.json`), `Quality`, `StemFormat`, theme names.
 - `src/models.rs`: separation model search dirs, beat model lookup, default model choice.
 - `src/music_start.rs`: detects where the music starts after a quiet intro (pure function of the mix and the beats).
+- `src/tuner.rs`: the live tuner's input: picks the device (falling back to the default when the saved one is gone), runs `shredlab-tuning`'s `LiveDetector` on the captured channel and throttles readings to about 30 Hz.
 - `src/audio.rs` re-exports `shredlab-audio`; `src/log.rs` is the `log!` macro (stderr and `<data dir>/shredlab.log`).
 - `src/autotest.rs`: debug-only headless end-to-end check.
 - `src/win_icon.rs`: Windows only; sharper window and taskbar icons.
@@ -85,6 +86,7 @@ are serialized by `open_lock`.
 | strength | `set_strength`, `open_song`, a finished separation | `AtomicBool`; a newer job, `open_song` or `close_song` cancels the older one |
 | position | `start_background` | runs for the life of the backend |
 | preload | `start_background` | loads the current model once (skipped with `SHREDLAB_NO_PRELOAD`) |
+| input (in `shredlab-audio`) | `start_tuner` | `stop_tuner`, a newer `start_tuner`, `play`, `close_song`, app exit, or a stream error |
 
 The canceler, not the job, emits the `*-error` event with `canceled: true`
 for separation and export; a job that sees its flag just returns. A
@@ -100,7 +102,8 @@ the id of the job it started in `SongInfo.strength_job`.
 per-song settings, 600 ms after the last `set_refine` or
 `save_song_settings` for the open song; this part runs without an audio
 engine too), emits `refine-field` for the analyzed stem
-when the engine has new data, and emits `playback-position` while playing
+when the engine has new data, stops the live tuner and emits `tuner-error`
+if its input stream failed, and emits `playback-position` while playing
 or counting in, plus once when that stops. Play, pause, seek, `open_song`,
 end of song and loop wraps emit a position immediately (the engine calls
 back through weak references to the backend).
@@ -171,6 +174,12 @@ so no DLL of the app itself lands in the installers. Icons are made with
   `separator` or `beat_model` from a command path.
 - Lock order is `st` then `app_settings` (`click_config` takes the second
   while holding the first). Never take `st` while holding `app_settings`.
+  The `tuner` lock is never held with either, and the capture is stopped
+  (which joins its thread) after the lock is released.
+- The live tuner and playback never run together: `play` stops the tuner
+  (and emits `tuner-stopped`), `start_tuner` pauses playback and stops the
+  reference tone. `tuner-reading` is emitted from the capture's worker
+  thread, not the position thread.
   Jobs drop `st` before emitting events.
 - Check `generation` (and the song id) before applying any background
   result; the UI separately ignores events for a song that isn't current.

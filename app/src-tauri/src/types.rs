@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 pub use crate::settings::{Quality, StemFormat};
 pub use shredlab_dsp::refine::{EqParams, RefineParams};
-pub use shredlab_library::StrengthSetting;
+pub use shredlab_library::{StrengthSetting, TuningData};
 
 pub const STEMS: [&str; 6] = ["vocals", "guitar", "bass", "drums", "piano", "other"];
 
@@ -50,6 +50,8 @@ pub struct SongInfo {
     /// saved strength), 0 when none; its `strength-done`/`-error` event
     /// carries the same id.
     pub strength_job: u64,
+    /// Measured tuning; `None` until the tuning job has run on the stems.
+    pub tuning: Option<TuningData>,
 }
 
 /// One separation model from the registry.
@@ -94,6 +96,10 @@ pub struct AppSettingsInfo {
     pub master_volume: f32,
     /// Format of newly written stems: "mp3" (default) or "flac".
     pub stem_format: StemFormat,
+    /// Live tuner input device id (null = the system default).
+    pub tuner_device_id: Option<String>,
+    /// Live tuner input channel, 0-based (default 0).
+    pub tuner_channel: u16,
 }
 
 /// `set_app_settings` payload. Null = use the default.
@@ -293,6 +299,10 @@ pub struct ExportRequest {
     /// Range end in song seconds. Missing = the song end.
     #[serde(default)]
     pub end_sec: Option<f64>,
+    /// Playback-rate correction in cents (-200..200), as in playback.
+    /// Missing = 0.
+    #[serde(default)]
+    pub rate_cents: i32,
 }
 
 // ------------------------------------------------------------------ events
@@ -331,6 +341,13 @@ pub struct SeparationError {
 #[derive(Debug, Clone, Serialize)]
 pub struct SongIdPayload {
     pub song_id: String,
+}
+
+/// `tuning-ready` payload.
+#[derive(Debug, Clone, Serialize)]
+pub struct TuningReady {
+    pub song_id: String,
+    pub tuning: TuningData,
 }
 
 /// `set_refine` payload.
@@ -399,6 +416,58 @@ pub struct ExportDone {
 pub struct ExportError {
     pub message: String,
     pub canceled: bool,
+}
+
+// ------------------------------------------------------------- live tuner
+
+/// An audio input device (`list_input_devices`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct InputDeviceInfo {
+    /// Saved in settings and passed to `start_tuner`.
+    pub id: String,
+    pub name: String,
+    pub channels: u16,
+    /// The system's default input device.
+    pub default: bool,
+}
+
+/// `start_tuner` result: what the tuner listens to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct TunerStarted {
+    /// Id of the device opened.
+    pub device_id: String,
+    pub device_name: String,
+    /// Channels of the device; `channel` (0-based) is the one captured.
+    pub channels: u16,
+    pub channel: u16,
+    pub sample_rate: u32,
+    /// The requested device was not found, so the default device is used
+    /// (the saved choice is kept).
+    pub fell_back: bool,
+}
+
+/// `tuner-reading` event, about 30 per second while the tuner listens.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub struct TunerReading {
+    /// Detected fundamental in Hz; `None` when nothing clear is heard.
+    pub hz: Option<f32>,
+    pub clarity: f32,
+    /// Highest input level (RMS dBFS, −120 = digital silence) since the
+    /// previous event.
+    pub level_db: f32,
+}
+
+/// `tuner-error` event: the input stream failed; the tuner has stopped.
+#[derive(Debug, Clone, Serialize)]
+pub struct TunerError {
+    pub message: String,
+}
+
+/// `tuner-stopped` event: the backend stopped the tuner by itself.
+#[derive(Debug, Clone, Serialize)]
+pub struct TunerStopped {
+    /// `"playback"`: playback started; `"song_closed"`: the song was closed.
+    pub reason: &'static str,
 }
 
 #[cfg(test)]

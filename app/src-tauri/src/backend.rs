@@ -14,7 +14,10 @@
 //! - strength: one background thread per re-derivation (canceled when a
 //!   newer one starts or the song changes).
 //! - position: a 30 Hz emitter thread (also the stereo-field events of the
-//!   open Refine panel and the debounced save of refine settings).
+//!   open Refine panel, the debounced save of refine settings and the check
+//!   for a failed tuner input).
+//! - live tuner: `shredlab-audio`'s input worker runs the pitch detector
+//!   and emits `tuner-reading` itself (see `tuner.rs`).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -33,6 +36,7 @@ use crate::audio::{self, ClickConfig, Engine, MixMode, Track};
 use crate::log;
 use crate::music_start;
 use crate::settings::{self, AppSettings};
+use crate::tuner;
 use crate::types::*;
 use shredlab_dsp::strength::{apply_strength, StrengthOptions};
 
@@ -151,6 +155,7 @@ impl Song {
             refine: m.refine.clone(),
             strength: m.strength,
             strength_job: 0,
+            tuning: m.tuning.clone(),
         }
     }
 }
@@ -183,13 +188,18 @@ fn quantize_stems(stems: RawStems) -> Vec<Track> {
         .collect()
 }
 
-/// Sum of the stems: the mix when the original is unavailable.
-fn stem_sum(stems: &RawStems) -> [Vec<f32>; 2] {
-    let len = stems.iter().map(|(_, c)| c[0].len()).max().unwrap_or(0);
+/// Sum of the stems: the mix when the original is unavailable. Only built
+/// in that case (rare: an old cache entry whose source file is gone); it
+/// walks every sample of every stem.
+fn stem_sum(stems: &[Track]) -> [Vec<f32>; 2] {
+    let len = stems.iter().map(Track::len).max().unwrap_or(0);
     let mut sum = [vec![0.0f32; len], vec![0.0f32; len]];
-    for (_, ch) in stems {
-        for (s, c) in sum.iter_mut().zip(ch) {
-            for (s, x) in s.iter_mut().zip(c) {
+    let mut buf = vec![0.0f32; len];
+    for t in stems {
+        for (s, c) in sum.iter_mut().zip(&t.channels) {
+            let n = c.len().min(len);
+            c.read(0, &mut buf[..n]);
+            for (s, x) in s.iter_mut().zip(&buf[..n]) {
                 *s += x;
             }
         }
@@ -230,6 +240,8 @@ struct State {
     speed_percent: u32,
     semitones: i32,
     cents: i32,
+    /// Tuning's playback-rate correction in cents; reset on every open.
+    rate_cents: i32,
     loop_state: LoopState,
     click: ClickState,
     /// Effective downbeats from the UI (`set_meter_overrides`).
@@ -259,6 +271,9 @@ pub struct Backend {
     beat_model: Mutex<Option<BeatModel>>,
     st: Mutex<State>,
     open_lock: Mutex<()>,
+    /// The live tuner's input capture while it listens. Never locked
+    /// together with `st` or `app_settings`.
+    tuner: Mutex<Option<audio::InputCapture>>,
 }
 
 /// [`music_start::detect`] on the original mix, logged.
@@ -360,6 +375,78 @@ pub fn mix_mode(mix: &[StemMixState], names: &[String], has_original: bool) -> M
         .filter(|n| mix.iter().find(|m| &m.stem == *n).is_none_or(|m| m.on))
         .count();
     audio::choose_mode(names.len(), n_on, any_solo)
+}
+
+/// Runs the tuning estimate on the pitched stems (mono, at the stem rate).
+fn measure_tuning(stems: &[Track]) -> shredlab_library::TuningData {
+    use shredlab_tuning::{StemAudio, StemKind};
+    let kind = |name: &str| match name {
+        "bass" => Some(StemKind::Bass),
+        "guitar" => Some(StemKind::Guitar),
+        "piano" | "keys" => Some(StemKind::Keys),
+        "other" => Some(StemKind::Other),
+        "vocals" => Some(StemKind::Vocals),
+        _ => None,
+    };
+    let rate = stems.first().map_or(RATE, |t| t.sample_rate);
+    let mono: Vec<(StemKind, Vec<f32>)> = stems
+        .iter()
+        .filter_map(|t| {
+            let k = kind(&t.name)?;
+            let [l, r] = &t.channels;
+            let n = l.len().min(r.len());
+            let mut a = vec![0.0f32; n];
+            let mut b = vec![0.0f32; n];
+            l.read(0, &mut a);
+            r.read(0, &mut b);
+            for (x, y) in a.iter_mut().zip(&b) {
+                *x = 0.5 * (*x + *y);
+            }
+            Some((k, a))
+        })
+        .collect();
+    let input: Vec<StemAudio> = mono
+        .iter()
+        .map(|(kind, s)| StemAudio {
+            kind: *kind,
+            samples: s,
+        })
+        .collect();
+    match shredlab_tuning::estimate_song_tuning(&input, rate) {
+        Some(e) => shredlab_library::TuningData {
+            guess: if e.is_reliable() {
+                shredlab_tuning::guess_song_tuning(&input, rate, e.offset_cents).map(|g| {
+                    shredlab_library::TuningGuessData {
+                        lowest_midi: g.lowest_midi,
+                        below_standard: g.below_standard,
+                        likely: g.likely,
+                    }
+                })
+            } else {
+                None
+            },
+            version: shredlab_tuning::VERSION,
+            offset_cents: e.offset_cents,
+            reference_hz: e.reference_hz,
+            confidence: e.confidence,
+            peaks: e.peak_count,
+            drifts: e.drifts,
+            segments: e
+                .segments
+                .iter()
+                .map(|s| shredlab_library::TuningSegment {
+                    start_s: s.start_s,
+                    offset_cents: s.offset_cents,
+                    weight: s.weight,
+                })
+                .collect(),
+        },
+        None => shredlab_library::TuningData {
+            version: shredlab_tuning::VERSION,
+            reference_hz: 440.0,
+            ..Default::default()
+        },
+    }
 }
 
 /// Snaps UI downbeats to grid beats within 1 ms so they compare equal.
@@ -522,6 +609,7 @@ impl Backend {
                 speed_percent: 100,
                 semitones: 0,
                 cents: 0,
+                rate_cents: 0,
                 loop_state: LoopState::default(),
                 click,
                 downbeats: None,
@@ -535,6 +623,7 @@ impl Backend {
                 next_strength_job: 0,
             }),
             open_lock: Mutex::new(()),
+            tuner: Mutex::new(None),
         });
         if let Some(e) = &b.engine {
             let weak = Arc::downgrade(&b);
@@ -577,6 +666,7 @@ impl Backend {
                 std::thread::sleep(Duration::from_millis(33));
                 let Some(b) = weak.upgrade() else { break };
                 b.flush_song_save(false);
+                b.poll_tuner();
                 // Without an engine the thread stays alive for the flush.
                 let Some(e) = &b.engine else { continue };
                 let analysis = {
@@ -683,6 +773,8 @@ impl Backend {
             click_volume: saved.click_volume(),
             master_volume: saved.master_volume(),
             stem_format: saved.stem_format(),
+            tuner_device_id: saved.tuner_device_id.clone(),
+            tuner_channel: saved.tuner_channel.unwrap_or(0),
         }
     }
 
@@ -926,6 +1018,7 @@ impl Backend {
         self.apply_gains(st);
         e.set_speed(st.speed_percent as f64 / 100.0);
         e.set_pitch(st.semitones as f64 + st.cents as f64 / 100.0);
+        e.set_rate_correction(st.rate_cents);
         e.set_loop(st.loop_state.range());
         self.apply_click(st);
     }
@@ -989,7 +1082,6 @@ impl Backend {
         let want_shifts = self.current_quality(want.as_ref()).0.shifts();
         let mut stems: Option<Vec<Track>> = None;
         let mut stems_info: Option<StemsInfo> = None;
-        let mut stems_sum: Option<[Vec<f32>; 2]> = None;
         if let Some(m) = &meta {
             let mut candidates: Vec<StemsInfo> = Vec::new();
             if let Some(s) = want.as_ref().and_then(|e| m.stem_set(e.id(), want_shifts)) {
@@ -1003,7 +1095,6 @@ impl Backend {
             for info in candidates {
                 match self.read_cached_stems(&song_id, &info) {
                     Ok(data) => {
-                        stems_sum = Some(stem_sum(&data));
                         stems = Some(quantize_stems(data));
                         stems_info = Some(info);
                         break;
@@ -1068,7 +1159,10 @@ impl Backend {
             );
         }
         let mix_is_original = original.is_some();
-        let mix: Mix = original.or(stems_sum).unwrap_or_default().map(Arc::new);
+        let mix: Mix = original
+            .or_else(|| stems.as_deref().map(stem_sum))
+            .unwrap_or_default()
+            .map(Arc::new);
         let original_tr = mix_is_original.then(|| original_track(&mix));
         let duration = mix[0].len() as f64 / RATE as f64;
 
@@ -1117,6 +1211,16 @@ impl Backend {
             loaded_strength: StrengthSetting::default(),
         };
         song.check_alignment();
+        let need_tuning = song
+            .meta
+            .tuning
+            .as_ref()
+            .is_none_or(|t| t.version < shredlab_tuning::VERSION);
+        let tuning_stems = if need_tuning {
+            song.stems.clone()
+        } else {
+            None
+        };
         let mut info = song.info();
         let generation = {
             let mut st = lock(&self.st);
@@ -1139,6 +1243,7 @@ impl Backend {
             st.loop_state = LoopState::default();
             st.downbeats = None;
             st.last_separation_error = None;
+            st.rate_cents = 0;
             self.apply_all(&st);
             info.strength_job = self.start_strength_locked(&mut st);
             st.generation
@@ -1163,6 +1268,9 @@ impl Backend {
                 "pending"
             },
         );
+        if let Some(stems) = tuning_stems {
+            self.spawn_tuning(song_id.clone(), stems, generation);
+        }
         if need_beats {
             self.spawn_beats(song_id, mix, generation);
         }
@@ -1191,6 +1299,7 @@ impl Backend {
     }
 
     pub fn close_song(&self) {
+        self.stop_tuner_because("song_closed");
         self.flush_song_save(true);
         let mut st = lock(&self.st);
         self.cancel_separation_locked(&mut st);
@@ -1426,7 +1535,7 @@ impl Backend {
                         song.meta.stem_sets = m.stem_sets;
                         song.meta.original = m.original;
                     }
-                    song.stems = Some(tracks);
+                    song.stems = Some(tracks.clone());
                     song.stems_info = Some(info);
                     song.loaded_strength = StrengthSetting::default();
                     if song.original.is_none() && song.mix_is_original {
@@ -1443,6 +1552,8 @@ impl Backend {
                 // strength to it (no-op at Natural).
                 self.start_strength_locked(&mut st);
                 drop(st);
+                // New stems: measure the tuning again on them.
+                self.spawn_tuning(song_id.clone(), tracks, generation);
                 self.emit(
                     "separation-done",
                     &SeparationDone {
@@ -1654,6 +1765,63 @@ impl Backend {
         lock(&self.st).last_separation_error.clone()
     }
 
+    // ------------------------------------------------------------ tuning
+
+    /// Measures the song's offset from A440 on its stems, saves it and
+    /// emits `tuning-ready`. A song that can't be measured still gets a
+    /// result (zero confidence), so the job doesn't rerun on every open.
+    fn spawn_tuning(self: &Arc<Self>, song_id: String, stems: Vec<Track>, generation: u64) {
+        let b = self.clone();
+        spawn("shredlab-tuning", move || {
+            let t0 = Instant::now();
+            let data = measure_tuning(&stems);
+            log!(
+                "tuning for {song_id}: {:+.1} cents (A{:.1}), confidence {:.2}, {} peaks{}{} in {:.2}s",
+                data.offset_cents,
+                data.reference_hz,
+                data.confidence,
+                data.peaks,
+                if data.drifts { ", drifts" } else { "" },
+                data.guess.map_or(String::new(), |g| format!(
+                    ", guess {:+} (lowest {}{})",
+                    g.below_standard,
+                    g.lowest_midi,
+                    if g.likely { ", likely" } else { "" }
+                )),
+                t0.elapsed().as_secs_f64()
+            );
+            // In memory first, so a settings save of the open song between
+            // here and the file update can't drop the new result.
+            let current = {
+                let mut st = lock(&b.st);
+                let current = st.generation == generation
+                    && st.song.as_ref().is_some_and(|s| s.meta.song_id == song_id);
+                if current {
+                    if let Some(s) = st.song.as_mut() {
+                        s.meta.tuning = Some(data.clone());
+                    }
+                }
+                current
+            };
+            if let Err(e) = b
+                .library
+                .update(&song_id, |m| m.tuning = Some(data.clone()))
+            {
+                log!("cannot save tuning: {e}");
+            }
+            if !current {
+                return;
+            }
+            b.emit(
+                "tuning-ready",
+                &TuningReady {
+                    song_id,
+                    tuning: data,
+                },
+            );
+        });
+    }
+
     // ------------------------------------------------------------ beats
 
     fn spawn_beats(self: &Arc<Self>, song_id: String, mix: Mix, generation: u64) {
@@ -1753,6 +1921,10 @@ impl Backend {
 
     /// `Err` only when a song is open but there is no audio output device.
     pub fn play(&self) -> Result<(), String> {
+        // The speakers must not feed the tuner's microphone.
+        if lock(&self.st).song.is_some() {
+            self.stop_tuner_because("playback");
+        }
         let st = lock(&self.st);
         if st.song.is_none() {
             return Ok(());
@@ -1817,6 +1989,156 @@ impl Backend {
         st.cents = cents.clamp(-100, 100);
         if let Some(e) = &self.engine {
             e.set_pitch(st.semitones as f64 + st.cents as f64 / 100.0);
+        }
+    }
+
+    pub fn set_rate_correction(&self, cents: i32) {
+        let mut st = lock(&self.st);
+        st.rate_cents = cents.clamp(-audio::MAX_RATE_CENTS, audio::MAX_RATE_CENTS);
+        if let Some(e) = &self.engine {
+            e.set_rate_correction(st.rate_cents);
+        }
+    }
+
+    /// Plays a reference tone at `hz` (absolute pitch; never exported).
+    pub fn play_tone(&self, hz: f32, sound: audio::ToneSound) {
+        if let Some(e) = &self.engine {
+            e.play_tone(hz, sound);
+        }
+    }
+
+    pub fn stop_tone(&self) {
+        if let Some(e) = &self.engine {
+            e.stop_tone();
+        }
+    }
+
+    // ------------------------------------------------------------ live tuner
+
+    pub fn list_input_devices(&self) -> Vec<InputDeviceInfo> {
+        audio::list_input_devices()
+            .into_iter()
+            .map(|d| InputDeviceInfo {
+                id: d.id,
+                name: d.name,
+                channels: d.channels,
+                default: d.default,
+            })
+            .collect()
+    }
+
+    /// Starts listening on `channel` (0-based) of `device_id` (`None` = the
+    /// system default) for notes down to `low_hz`, replacing a running
+    /// tuner. Pauses playback and stops the reference tone first. A device
+    /// that is gone falls back to the default (`fell_back`); otherwise the
+    /// device and channel are saved with the app settings.
+    pub fn start_tuner(
+        &self,
+        device_id: Option<String>,
+        channel: u16,
+        low_hz: f32,
+    ) -> Result<TunerStarted, String> {
+        if !(low_hz.is_finite() && low_hz > 0.0) {
+            return Err(format!("Invalid lowest note {low_hz} Hz"));
+        }
+        let low_hz = low_hz.clamp(20.0, 2000.0);
+        self.stop_tuner();
+        self.pause();
+        self.stop_tone();
+        let devices = audio::list_input_devices();
+        let (id, fell_back) = tuner::resolve_device(device_id.as_deref(), &devices)?;
+        let channels = devices
+            .iter()
+            .find(|d| d.id == id)
+            .map_or(1, |d| d.channels);
+        let channel = if channel < channels && !fell_back {
+            channel
+        } else {
+            0
+        };
+        let sink = self.sink.clone();
+        let capture = tuner::start(&id, channel, low_hz, move |r| {
+            if let Ok(v) = serde_json::to_value(r) {
+                sink("tuner-reading", v);
+            }
+        })?;
+        let info = capture.info().clone();
+        log!(
+            "tuner listening: {} (input {} of {}, {} Hz), lowest note {low_hz:.1} Hz{}",
+            info.device_name,
+            info.channel + 1,
+            info.channels,
+            info.sample_rate,
+            if fell_back {
+                " (saved device not found; default used)"
+            } else {
+                ""
+            }
+        );
+        // Two starts at once: the later one wins, the other is closed.
+        let old = lock(&self.tuner).replace(capture);
+        drop(old);
+        if !fell_back {
+            let saved = lock(&self.app_settings).clone();
+            if saved.tuner_device_id != device_id || saved.tuner_channel.unwrap_or(0) != channel {
+                if let Err(e) = self.update_settings(true, |s| {
+                    s.tuner_device_id = device_id;
+                    s.tuner_channel = Some(channel);
+                }) {
+                    log!("tuner input not saved: {e}");
+                }
+            }
+        }
+        Ok(TunerStarted {
+            device_id: id,
+            device_name: info.device_name,
+            channels: info.channels,
+            channel: info.channel,
+            sample_rate: info.sample_rate,
+            fell_back,
+        })
+    }
+
+    /// Stops the tuner's input stream; true if it was listening.
+    pub fn stop_tuner(&self) -> bool {
+        let capture = lock(&self.tuner).take();
+        // Dropping joins the capture thread; done outside the lock.
+        match capture {
+            Some(c) => {
+                c.stop();
+                log!("tuner stopped");
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Stops the tuner on the backend's own initiative and tells the UI.
+    fn stop_tuner_because(&self, reason: &'static str) {
+        if self.stop_tuner() {
+            self.emit("tuner-stopped", &TunerStopped { reason });
+        }
+    }
+
+    /// Stops the tuner if its input stream failed (device unplugged) and
+    /// emits `tuner-error`. Called by the position thread.
+    pub fn poll_tuner(&self) {
+        let failed = {
+            let mut g = lock(&self.tuner);
+            match g.as_ref().and_then(|c| c.error()) {
+                Some(e) => g.take().map(|c| (c, e)),
+                None => None,
+            }
+        };
+        if let Some((c, e)) = failed {
+            c.stop();
+            log!("tuner input failed: {e}");
+            self.emit(
+                "tuner-error",
+                &TunerError {
+                    message: format!("The input stopped: {e}"),
+                },
+            );
         }
     }
 
@@ -1942,6 +2264,9 @@ impl Backend {
             click,
             start: req.start_sec.filter(|s| s.is_finite()).unwrap_or(0.0),
             end: req.end_sec.filter(|e| e.is_finite()),
+            rate_cents: req
+                .rate_cents
+                .clamp(-audio::MAX_RATE_CENTS, audio::MAX_RATE_CENTS),
             // "What you hear": the refined parts as in playback, each
             // stereo exception following the exported row's switch.
             refine: if song.stems.is_some() {
@@ -2708,6 +3033,7 @@ mod tests {
             count_in: false,
             start_sec: None,
             end_sec: None,
+            rate_cents: 0,
         })
         .unwrap();
         let t0 = Instant::now();
@@ -2746,6 +3072,7 @@ mod tests {
             count_in,
             start_sec: start,
             end_sec: end,
+            rate_cents: 0,
         }
     }
 

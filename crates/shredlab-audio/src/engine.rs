@@ -4,7 +4,9 @@
 //! Real-time playback: a producer thread renders the [`Pipeline`] into a
 //! lock-free ring buffer; the cpal callback only copies frames out.
 
-use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{
+    AtomicBool, AtomicI32, AtomicU16, AtomicU32, AtomicU64, AtomicUsize, Ordering,
+};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -12,12 +14,12 @@ use std::time::{Duration, Instant};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, SizedSample};
-use rubato::{
-    Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
-};
+use rubato::{Resampler, SincFixedIn};
 
 use crate::mix::MixMode;
 use crate::pipeline::{Meta, Pipeline, F_END, F_WRAP};
+use crate::rate::{clamp_cents, rate, sinc_params, RATIO_HEADROOM};
+use crate::tone::{Tone, ToneSound};
 use crate::{AudioError, ClickConfig, Position, Track};
 use shredlab_dsp::refine::{RefineParams, FIELD_LEN};
 
@@ -31,15 +33,20 @@ const MIN_AHEAD_SECS: f64 = 0.025;
 const REPLY_TIMEOUT: Duration = Duration::from_millis(500);
 /// How often the producer publishes the stereo field (about 30 Hz).
 const FIELD_EVERY: Duration = Duration::from_millis(33);
-/// Paused this long, the output stream is closed and the producer waits for
-/// commands instead of polling every millisecond (idle CPU wakeups); `play`
-/// opens a fresh stream. Short pauses keep the stream running, so Bluetooth
+/// Paused this long with no reference tone sounding, the output stream is
+/// closed and the producer waits for commands instead of polling every
+/// millisecond (idle CPU wakeups); `play` or a tone opens a fresh stream.
+/// Short pauses keep the stream running, so Bluetooth
 /// outputs stay awake.
 const SUSPEND_AFTER: Duration = Duration::from_secs(5);
 /// Longest wait for a command while suspended.
 const SUSPENDED_WAIT: Duration = Duration::from_millis(250);
 /// Time constant of the master volume smoothing (no zipper noise).
 const MASTER_SMOOTH_SECS: f32 = 0.01;
+/// Fade length (song frames) when the rate correction adds or removes the
+/// resampler at the song rate; the rest of the block stays silent so the
+/// resampler's delay line holds nothing audible when it is dropped.
+const SWITCH_FADE: usize = BLOCK * 3 / 4;
 
 /// Latest stereo field of the analyzed track (single slot; the producer
 /// overwrites it, readers take it).
@@ -97,6 +104,8 @@ struct Shared {
     field: Mutex<FieldSlot>,
     /// Master volume, applied to playback only.
     master: MasterGain,
+    /// Playback-rate correction in cents (0 = off).
+    rate_cents: AtomicI32,
 }
 
 /// Diagnostics (interface addition).
@@ -134,6 +143,8 @@ enum Cmd {
     Refine(String, RefineParams),
     RefineAll(Vec<(String, RefineParams)>),
     Analysis(Option<String>),
+    Tone(f32, ToneSound),
+    StopTone,
     Quit,
 }
 
@@ -286,6 +297,33 @@ impl Engine {
         }
     }
 
+    /// Playback-rate correction in cents, clamped to
+    /// ±[`MAX_RATE_CENTS`](crate::MAX_RATE_CENTS); 0 = off. The song plays
+    /// `2^(cents/1200)` times faster, pitch and tempo together, on top of
+    /// the speed (the stretcher is not involved). Positions, loop and end
+    /// events stay in song time. Playback only; exports take
+    /// [`RenderRequest::rate_cents`](crate::RenderRequest::rate_cents).
+    pub fn set_rate_correction(&self, cents: i32) {
+        self.shared
+            .rate_cents
+            .store(clamp_cents(cents), Ordering::Relaxed);
+    }
+
+    /// Plays a reference tone at `hz` (clamped to
+    /// [`TONE_MIN_HZ`](crate::TONE_MIN_HZ)..=[`TONE_MAX_HZ`](crate::TONE_MAX_HZ);
+    /// non-finite is ignored), at -12 dBFS under the master volume, whether
+    /// or not the song plays. It ignores speed, pitch and the rate
+    /// correction and is never exported. A new frequency or sound replaces
+    /// the current tone after a 10 ms release.
+    pub fn play_tone(&self, hz: f32, sound: ToneSound) {
+        self.send(Cmd::Tone(hz, sound));
+    }
+
+    /// Stops the reference tone (30 ms release).
+    pub fn stop_tone(&self) {
+        self.send(Cmd::StopTone);
+    }
+
     /// Refine parameters of one track (live and smoothed; also used for
     /// track sets loaded later). See [`crate::mix`].
     pub fn set_refine(&self, name: &str, p: RefineParams) {
@@ -402,13 +440,65 @@ struct Output {
 }
 
 /// Producer side of the ring: renders the pipeline, resamples to the device
-/// rate if needed and pushes frames.
+/// rate (and by the rate correction) if needed, adds the reference tone and
+/// pushes frames.
 struct Feeder {
     producer: rtrb::Producer<Frame>,
     rate: u32,
     /// Master gain currently applied (follows `Shared::master`).
     master: f32,
-    resampler: Option<(u32, SincFixedIn<f32>, Vec<Vec<f32>>)>,
+    resampler: Option<Rs>,
+    /// The resampler was just added or removed behind a fade-out: fade the
+    /// next block in.
+    fade_in_next: bool,
+}
+
+/// The device-rate resampler, built with headroom for the rate correction.
+struct Rs {
+    /// Song rate it was built for.
+    from: u32,
+    to: u32,
+    rs: SincFixedIn<f32>,
+    out: Vec<Vec<f32>>,
+    /// Rate correction its ratio is set to.
+    cents: i32,
+}
+
+impl Rs {
+    fn new(from: u32, to: u32, cents: i32) -> Option<Rs> {
+        let base = to as f64 / from as f64;
+        let rs = SincFixedIn::<f32>::new(base, RATIO_HEADROOM, sinc_params(), BLOCK, 2).ok()?;
+        let out = rs.output_buffer_allocate(true);
+        let mut r = Rs {
+            from,
+            to,
+            rs,
+            out,
+            cents: 0,
+        };
+        r.set_cents(cents, false);
+        Some(r)
+    }
+
+    /// Output frames per song frame: device/song rate over the playback rate.
+    fn set_cents(&mut self, cents: i32, ramp: bool) {
+        if cents != self.cents {
+            let ratio = self.to as f64 / self.from as f64 / rate(cents);
+            if self.rs.set_resample_ratio(ratio, ramp).is_ok() {
+                self.cents = cents;
+            }
+        }
+    }
+}
+
+/// Gain shape applied to one song-rate block around a resampler switch.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Fade {
+    None,
+    /// To silence over [`SWITCH_FADE`] frames; the resampler is switched
+    /// after this block.
+    Out,
+    In,
 }
 
 fn open_output(shared: &Arc<Shared>) -> Result<Output, AudioError> {
@@ -468,6 +558,7 @@ fn open_output(shared: &Arc<Shared>) -> Result<Output, AudioError> {
             rate: config.sample_rate.0,
             master: shared.master.get(),
             resampler: None,
+            fade_in_next: false,
         },
         device_name,
     })
@@ -544,24 +635,7 @@ where
     Ok(stream)
 }
 
-fn make_resampler(from: u32, to: u32) -> Option<(u32, SincFixedIn<f32>, Vec<Vec<f32>>)> {
-    if from == to {
-        return None;
-    }
-    let params = SincInterpolationParameters {
-        sinc_len: 128,
-        f_cutoff: 0.95,
-        oversampling_factor: 128,
-        interpolation: SincInterpolationType::Cubic,
-        window: WindowFunction::BlackmanHarris2,
-    };
-    let rs = SincFixedIn::<f32>::new(to as f64 / from as f64, 1.0, params, BLOCK, 2).ok()?;
-    let out = rs.output_buffer_allocate(true);
-    Some((from, rs, out))
-}
-
 impl Feeder {
-    /// Renders until the ring holds the target amount of audio.
     /// Scales a rendered block by the master volume, gliding to a new value.
     fn apply_master(&mut self, shared: &Shared, sr: u32, bufs: &mut Bufs) {
         let target = shared.master.get();
@@ -579,17 +653,61 @@ impl Feeder {
         }
     }
 
-    fn fill(&mut self, pipe: &mut Pipeline, shared: &Shared, bufs: &mut Bufs) {
+    /// Whether the next block needs a resampler at all.
+    fn wants_resampler(&self, src: u32, cents: i32) -> bool {
+        src != self.rate || cents != 0
+    }
+
+    /// Brings the resampler in line with the song rate and the rate
+    /// correction before a block. A ratio change on a running resampler
+    /// glides over the block. Adding or removing it at the song rate (the
+    /// correction turned on or off) jumps by its delay, so that happens
+    /// behind a fade: this block fades out, the switch follows it
+    /// ([`Self::finish_switch`]) and the next block fades in.
+    fn prepare(&mut self, src: u32, cents: i32) -> Fade {
+        if std::mem::take(&mut self.fade_in_next) {
+            return Fade::In;
+        }
+        let want = self.wants_resampler(src, cents);
+        match &mut self.resampler {
+            Some(r) if r.from == src && want => {
+                r.set_cents(cents, true);
+                Fade::None
+            }
+            // At the song rate (`want` is false only there): off, or on.
+            Some(r) if r.from == src => Fade::Out,
+            None if want && src == self.rate => Fade::Out,
+            None if !want => Fade::None,
+            // First block, or a track set at another rate: no audio to keep.
+            _ => {
+                self.resampler = if want {
+                    Rs::new(src, self.rate, cents)
+                } else {
+                    None
+                };
+                Fade::None
+            }
+        }
+    }
+
+    /// After a [`Fade::Out`] block: adds or removes the resampler.
+    fn finish_switch(&mut self, src: u32, cents: i32) {
+        self.resampler = if self.wants_resampler(src, cents) {
+            Rs::new(src, self.rate, cents)
+        } else {
+            None
+        };
+        self.fade_in_next = true;
+    }
+
+    /// Renders until the ring holds the target amount of audio.
+    fn fill(&mut self, pipe: &mut Pipeline, shared: &Shared, bufs: &mut Bufs, tone: &mut Tone) {
         let max_cb = shared.max_cb_frames.load(Ordering::Relaxed);
         let target = ((MIN_AHEAD_SECS * self.rate as f64) as usize)
             .max(2 * max_cb + BLOCK)
             .min(RING - 4 * BLOCK);
         let src_rate = pipe.sample_rate();
-        if src_rate != self.rate && self.resampler.as_ref().is_none_or(|r| r.0 != src_rate) {
-            self.resampler = make_resampler(src_rate, self.rate);
-        } else if src_rate == self.rate {
-            self.resampler = None;
-        }
+        tone.set_sample_rate(self.rate as f32);
         loop {
             let buffered = RING - self.producer.slots();
             shared.buffered.store(buffered, Ordering::Relaxed);
@@ -597,70 +715,102 @@ impl Feeder {
                 break;
             }
             let t0 = Instant::now();
+            let cents = shared.rate_cents.load(Ordering::Relaxed);
+            let fade = self.prepare(src_rate, cents);
             pipe.render(&mut bufs.l, &mut bufs.r, &mut bufs.meta);
+            let m0 = self.master;
             self.apply_master(shared, src_rate, bufs);
-            let written = match &mut self.resampler {
-                None => {
-                    let Ok(mut chunk) = self.producer.write_chunk_uninit(BLOCK) else {
-                        break;
-                    };
-                    let (a, b) = chunk.as_mut_slices();
-                    for (i, slot) in a.iter_mut().chain(b.iter_mut()).enumerate() {
-                        slot.write(Frame {
-                            l: bufs.l[i],
-                            r: bufs.r[i],
-                            meta: bufs.meta[i],
-                        });
+            let m1 = self.master;
+            match fade {
+                Fade::None => {}
+                Fade::Out => {
+                    for (i, (l, r)) in bufs.l.iter_mut().zip(bufs.r.iter_mut()).enumerate() {
+                        let g = SWITCH_FADE.saturating_sub(i + 1) as f32 / SWITCH_FADE as f32;
+                        *l *= g;
+                        *r *= g;
                     }
-                    // SAFETY: all BLOCK slots were initialized above.
-                    unsafe { chunk.commit_all() };
-                    BLOCK
                 }
-                Some((_, rs, out)) => {
+                Fade::In => {
+                    for (i, (l, r)) in bufs.l.iter_mut().zip(bufs.r.iter_mut()).enumerate() {
+                        let g = (i as f32 / SWITCH_FADE as f32).min(1.0);
+                        *l *= g;
+                        *r *= g;
+                    }
+                }
+            }
+            let resampled = self.resampler.is_some();
+            let (n, out_l, out_r): (usize, &[f32], &[f32]) = match &mut self.resampler {
+                None => (BLOCK, &bufs.l, &bufs.r),
+                Some(rs) => {
                     let input = [&bufs.l[..], &bufs.r[..]];
-                    let Ok((_, n_out)) = rs.process_into_buffer(&input, out, None) else {
+                    let Ok((_, n_out)) = rs.rs.process_into_buffer(&input, &mut rs.out, None)
+                    else {
                         break;
                     };
-                    let Ok(mut chunk) = self.producer.write_chunk_uninit(n_out) else {
-                        break;
-                    };
-                    // Events (wrap/end) go on the output frame proportional to their input frame.
-                    let mut ev = [(usize::MAX, 0u32); 4];
-                    let mut ne = 0;
-                    for (i, m) in bufs.meta.iter().enumerate() {
-                        let e = m.flags & (F_END | F_WRAP);
-                        if e != 0 && ne < ev.len() {
-                            ev[ne] = ((i * n_out / BLOCK).min(n_out.saturating_sub(1)), e);
-                            ne += 1;
-                        }
-                    }
-                    let (a, b) = chunk.as_mut_slices();
-                    for (j, slot) in a.iter_mut().chain(b.iter_mut()).enumerate() {
-                        let src = (j * BLOCK / n_out.max(1)).min(BLOCK - 1);
-                        let mut meta = bufs.meta[src];
-                        meta.flags &= !(F_END | F_WRAP);
-                        for &(k, e) in &ev[..ne] {
-                            if k == j {
-                                meta.flags |= e;
-                            }
-                        }
-                        slot.write(Frame {
-                            l: out[0][j],
-                            r: out[1][j],
-                            meta,
-                        });
-                    }
-                    // SAFETY: all n_out slots were initialized above.
-                    unsafe { chunk.commit_all() };
-                    n_out
+                    (n_out, &rs.out[0], &rs.out[1])
                 }
             };
+            // The reference tone runs at the device rate, after the
+            // resampler, so the rate correction does not shift it.
+            let with_tone = tone.is_active();
+            if with_tone {
+                if bufs.tone.len() < n {
+                    bufs.tone.resize(n, 0.0);
+                }
+                tone.render(&mut bufs.tone[..n]);
+            }
+            let Ok(mut chunk) = self.producer.write_chunk_uninit(n) else {
+                break;
+            };
+            // Resampled: events (wrap/end) go on the output frame
+            // proportional to their input frame, for any ratio.
+            let mut ev = [(usize::MAX, 0u32); 4];
+            let mut ne = 0;
+            if resampled {
+                for (i, m) in bufs.meta.iter().enumerate() {
+                    let e = m.flags & (F_END | F_WRAP);
+                    if e != 0 && ne < ev.len() {
+                        ev[ne] = ((i * n / BLOCK).min(n.saturating_sub(1)), e);
+                        ne += 1;
+                    }
+                }
+            }
+            let (a, b) = chunk.as_mut_slices();
+            for (j, slot) in a.iter_mut().chain(b.iter_mut()).enumerate() {
+                let meta = if resampled {
+                    let src = (j * BLOCK / n.max(1)).min(BLOCK - 1);
+                    let mut meta = bufs.meta[src];
+                    meta.flags &= !(F_END | F_WRAP);
+                    for &(k, e) in &ev[..ne] {
+                        if k == j {
+                            meta.flags |= e;
+                        }
+                    }
+                    meta
+                } else {
+                    bufs.meta[j]
+                };
+                let (mut l, mut r) = (out_l[j], out_r[j]);
+                if with_tone {
+                    // Under the master volume, gliding with it.
+                    let g = m0 + (m1 - m0) * (j + 1) as f32 / n as f32;
+                    let t = bufs.tone[j] * g;
+                    l += t;
+                    r += t;
+                }
+                slot.write(Frame { l, r, meta });
+            }
+            // SAFETY: all n slots were initialized above.
+            unsafe { chunk.commit_all() };
+            if fade == Fade::Out {
+                self.finish_switch(src_rate, cents);
+            }
             shared
                 .render_nanos
                 .fetch_add(t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
             shared
                 .rendered_frames
-                .fetch_add(written as u64, Ordering::Relaxed);
+                .fetch_add(n as u64, Ordering::Relaxed);
         }
     }
 }
@@ -669,6 +819,40 @@ struct Bufs {
     l: Vec<f32>,
     r: Vec<f32>,
     meta: Vec<Meta>,
+    /// Reference tone at the device rate (grows to the largest block once).
+    tone: Vec<f32>,
+}
+
+impl Bufs {
+    fn new() -> Self {
+        Bufs {
+            l: vec![0.0; BLOCK],
+            r: vec![0.0; BLOCK],
+            meta: vec![Meta::default(); BLOCK],
+            tone: vec![0.0; 2 * BLOCK],
+        }
+    }
+}
+
+/// Counts how long the producer has been idle: paused with no tone sounding.
+#[derive(Default)]
+struct IdleTimer(Option<Instant>);
+
+impl IdleTimer {
+    /// True once idle for [`SUSPEND_AFTER`].
+    fn suspend(&mut self, busy: bool, now: Instant) -> bool {
+        if busy {
+            self.0 = None;
+            false
+        } else {
+            now.duration_since(*self.0.get_or_insert(now)) >= SUSPEND_AFTER
+        }
+    }
+}
+
+/// Playing (or counting in), or a reference tone is sounding.
+fn busy(pipe: &Pipeline, tone: &Tone) -> bool {
+    pipe.is_playing() || tone.is_active()
 }
 
 fn producer_thread(
@@ -689,11 +873,8 @@ fn producer_thread(
     let watcher = spawn_device_watcher(shared.clone(), out.as_ref().map(|o| o.device_name.clone()));
     let mut pipe = Pipeline::new(Vec::new(), &[], true);
     pipe.set_limiter(true);
-    let mut bufs = Bufs {
-        l: vec![0.0; BLOCK],
-        r: vec![0.0; BLOCK],
-        meta: vec![Meta::default(); BLOCK],
-    };
+    let mut bufs = Bufs::new();
+    let mut tone = Tone::new(shared.device_rate.load(Ordering::Relaxed) as f32);
     let (ev_tx, ev_rx) = mpsc::channel::<Callback>();
     let events = std::thread::Builder::new()
         .name("shredlab-audio-events".into())
@@ -711,7 +892,7 @@ fn producer_thread(
     let mut last_reopen = Instant::now();
     let mut field = [0.0f32; FIELD_LEN];
     let mut last_field = Instant::now();
-    let mut idle_since: Option<Instant> = None;
+    let mut idle = IdleTimer::default();
     // The stream was closed for idleness (not lost): reopen at once on wake.
     let mut closed_idle = false;
     let mut next: Option<Cmd> = None;
@@ -741,6 +922,8 @@ fn producer_thread(
                 Cmd::Refine(n, p) => pipe.set_refine(&n, p),
                 Cmd::RefineAll(l) => pipe.set_refine_all(l),
                 Cmd::Analysis(n) => pipe.set_analysis(n.as_deref()),
+                Cmd::Tone(hz, sound) => tone.start(hz, sound),
+                Cmd::StopTone => tone.stop(),
             }
         }
         // User callbacks run on their own thread, so they may call back into the Engine.
@@ -754,12 +937,9 @@ fn producer_thread(
             wraps = w;
             let _ = ev_tx.send(on_wrap.clone());
         }
-        if pipe.is_playing() {
-            idle_since = None;
-        } else {
-            idle_since.get_or_insert_with(Instant::now);
-        }
-        let suspend = idle_since.is_some_and(|t| t.elapsed() >= SUSPEND_AFTER);
+        // A sounding tone keeps the stream open; one started while
+        // suspended wakes the loop (the command ends the wait) and reopens it.
+        let suspend = idle.suspend(busy(&pipe, &tone), Instant::now());
         if suspend {
             // Idle: close the stream rather than pause it. Resuming a paused
             // stream hung PulseAudio (ALSA's pulse plugin under WSLg) for
@@ -779,7 +959,7 @@ fn producer_thread(
                 out = open_output(&shared).ok();
             }
             if let Some(o) = &mut out {
-                o.feeder.fill(&mut pipe, &shared, &mut bufs);
+                o.feeder.fill(&mut pipe, &shared, &mut bufs, &mut tone);
             }
         }
         if suspend {
@@ -843,22 +1023,29 @@ fn spawn_device_watcher(shared: Arc<Shared>, initial: Option<String>) -> Option<
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rate::test_util::{cents, periodic_hz, sine_hz};
     use crate::Channel;
+
+    fn feeder(producer: rtrb::Producer<Frame>, rate: u32) -> Feeder {
+        Feeder {
+            producer,
+            rate,
+            master: 1.0,
+            resampler: None,
+            fade_in_next: false,
+        }
+    }
 
     #[test]
     fn master_volume_glides_to_target() {
         let shared = Shared::default();
         let (producer, _consumer) = rtrb::RingBuffer::<Frame>::new(RING);
-        let mut f = Feeder {
-            producer,
-            rate: 44_100,
-            master: 1.0,
-            resampler: None,
-        };
+        let mut f = feeder(producer, 44_100);
         let bufs = |v: f32| Bufs {
             l: vec![v; BLOCK],
             r: vec![v; BLOCK],
             meta: vec![Meta::default(); BLOCK],
+            tone: Vec::new(),
         };
         // Unity: untouched.
         let mut b = bufs(0.5);
@@ -879,11 +1066,9 @@ mod tests {
         assert!(b.l.iter().chain(&b.r).all(|&x| x == 0.25));
     }
 
-    fn sine_track(secs: f64) -> Track {
+    fn track(secs: f64, f: impl Fn(usize) -> f32) -> Track {
         let n = (secs * 44_100.0) as usize;
-        let v: Vec<f32> = (0..n)
-            .map(|i| 0.5 * (2.0 * std::f32::consts::PI * 1000.0 * i as f32 / 44_100.0).sin())
-            .collect();
+        let v: Vec<f32> = (0..n).map(f).collect();
         Track {
             name: "mix".into(),
             channels: [Channel::from(v.clone()), Channel::from(v)],
@@ -891,32 +1076,69 @@ mod tests {
         }
     }
 
-    /// Drives the producer side without a device: fill, then drain like a callback.
-    fn drive(pipe: &mut Pipeline, rate: u32, frames: usize) -> Vec<Frame> {
-        let (producer, mut consumer) = rtrb::RingBuffer::<Frame>::new(RING);
-        let mut feeder = Feeder {
-            producer,
-            rate,
-            master: 1.0,
-            resampler: None,
-        };
-        let shared = Shared::default();
-        shared.max_cb_frames.store(512, Ordering::Relaxed);
-        let mut bufs = Bufs {
-            l: vec![0.0; BLOCK],
-            r: vec![0.0; BLOCK],
-            meta: vec![Meta::default(); BLOCK],
-        };
-        let mut out = Vec::new();
-        while out.len() < frames {
-            feeder.fill(pipe, &shared, &mut bufs);
-            let n = consumer.slots().min(512);
-            let chunk = consumer.read_chunk(n).unwrap();
-            let (a, b) = chunk.as_slices();
-            out.extend(a.iter().chain(b.iter()).copied());
-            chunk.commit_all();
+    fn sine_track(secs: f64) -> Track {
+        track(secs, |i| {
+            0.5 * (2.0 * std::f32::consts::PI * 1000.0 * i as f32 / 44_100.0).sin()
+        })
+    }
+
+    /// The producer side without a device: fill, then drain like a callback.
+    struct Rig {
+        feeder: Feeder,
+        consumer: rtrb::Consumer<Frame>,
+        shared: Shared,
+        bufs: Bufs,
+        tone: Tone,
+    }
+
+    impl Rig {
+        fn new(rate: u32) -> Rig {
+            let (producer, consumer) = rtrb::RingBuffer::<Frame>::new(RING);
+            let shared = Shared::default();
+            shared.max_cb_frames.store(512, Ordering::Relaxed);
+            Rig {
+                feeder: feeder(producer, rate),
+                consumer,
+                shared,
+                bufs: Bufs::new(),
+                tone: Tone::new(rate as f32),
+            }
         }
-        out
+
+        /// At least `frames` more output frames.
+        fn run(&mut self, pipe: &mut Pipeline, frames: usize) -> Vec<Frame> {
+            let mut out = Vec::new();
+            while out.len() < frames {
+                self.feeder
+                    .fill(pipe, &self.shared, &mut self.bufs, &mut self.tone);
+                let n = self.consumer.slots().min(512);
+                let chunk = self.consumer.read_chunk(n).unwrap();
+                let (a, b) = chunk.as_slices();
+                out.extend(a.iter().chain(b.iter()).copied());
+                chunk.commit_all();
+            }
+            out
+        }
+
+        fn set_cents(&self, cents: i32) {
+            self.shared
+                .rate_cents
+                .store(clamp_cents(cents), Ordering::Relaxed);
+        }
+    }
+
+    fn drive(pipe: &mut Pipeline, rate: u32, frames: usize) -> Vec<Frame> {
+        Rig::new(rate).run(pipe, frames)
+    }
+
+    fn left(frames: &[Frame]) -> Vec<f32> {
+        frames.iter().map(|f| f.l).collect()
+    }
+
+    fn max_step(x: &[f32]) -> f32 {
+        x.windows(2)
+            .map(|w| (w[1] - w[0]).abs())
+            .fold(0.0, f32::max)
     }
 
     #[test]
@@ -951,7 +1173,162 @@ mod tests {
         let src = t.channels[0].to_vec();
         let mut pipe = Pipeline::new(vec![t], &[("mix".into(), 1.0)], false);
         pipe.play();
-        let out = drive(&mut pipe, 44_100, 30_000);
-        assert!((0..30_000).all(|i| out[i].l == src[i]));
+        let mut rig = Rig::new(44_100);
+        rig.set_cents(0);
+        let out = rig.run(&mut pipe, 30_000);
+        assert!((0..30_000).all(|i| out[i].l == src[i] && out[i].r == src[i]));
+        assert!(rig.feeder.resampler.is_none());
+    }
+
+    #[test]
+    fn rate_correction_keeps_positions_wraps_and_clicks_in_song_time() {
+        for (rate, c) in [(44_100u32, 150), (48_000, -200), (44_100, -37)] {
+            let r = crate::rate::rate(c);
+            // Silent music; clicks on every half second.
+            let mut pipe = Pipeline::new(vec![track(4.0, |_| 0.0)], &[("mix".into(), 1.0)], true);
+            pipe.set_click(ClickConfig {
+                enabled: true,
+                beats: (1..8).map(|k| k as f64 * 0.5).collect(),
+                ..ClickConfig::default()
+            });
+            pipe.set_loop(Some((0.25, 2.25)));
+            pipe.play();
+            let mut rig = Rig::new(rate);
+            rig.set_cents(c);
+            let secs = 4.5;
+            let out = rig.run(&mut pipe, (secs * rate as f64) as usize);
+            // Song time advances `r` seconds per output second.
+            let (i0, i1) = (rate as usize / 10, rate as usize / 10 + rate as usize);
+            let dp = out[i1].meta.pos - out[i0].meta.pos;
+            assert!((dp - r).abs() < 0.003, "{rate} {c}: {dp} vs {r}");
+            // The loop (2 s of song) wraps every 2 / r output seconds.
+            let wraps: Vec<usize> = (0..out.len())
+                .filter(|&i| out[i].meta.flags & F_WRAP != 0)
+                .collect();
+            assert_eq!(wraps.len(), 2, "{rate} {c}: {wraps:?}");
+            for (k, &w) in wraps.iter().enumerate() {
+                let want = (k + 1) as f64 * 2.0 / r * rate as f64;
+                assert!((w as f64 - want).abs() < 0.003 * rate as f64, "{wraps:?}");
+            }
+            // Each click is heard where the reported position is its beat.
+            let mut onsets = Vec::new();
+            let quiet = rate as usize / 20;
+            let mut last_loud = None::<usize>;
+            for (i, f) in out.iter().enumerate() {
+                if f.l.abs() > 1e-3 {
+                    if last_loud.is_none_or(|j| i - j > quiet) {
+                        onsets.push(i);
+                    }
+                    last_loud = Some(i);
+                }
+            }
+            assert!(onsets.len() >= 8, "{rate} {c}: {onsets:?}");
+            for &i in &onsets {
+                let pos = out[i].meta.pos;
+                let beat = (pos * 2.0).round() / 2.0;
+                assert!((pos - beat).abs() < 0.004, "{rate} {c}: click at {pos}");
+            }
+            // And the clicks follow the rate: about 0.5 / r s apart.
+            let gap = (onsets[2] - onsets[1]) as f64 / rate as f64;
+            assert!((gap - 0.5 / r).abs() < 0.003, "{rate} {c}: {gap}");
+        }
+    }
+
+    #[test]
+    fn rate_correction_shifts_pitch_without_discontinuities() {
+        // 48 kHz: the ratio glides on the running resampler. 44.1 kHz: the
+        // resampler is added and removed behind a fade.
+        for rate in [48_000u32, 44_100] {
+            let mut pipe = Pipeline::new(vec![sine_track(6.0)], &[("mix".into(), 1.0)], true);
+            pipe.play();
+            let mut rig = Rig::new(rate);
+            let mut all = rig.run(&mut pipe, rate as usize / 2);
+            for c in [200, -200, 0, 100] {
+                rig.set_cents(c);
+                let seg = rig.run(&mut pipe, rate as usize / 2);
+                // Settled: the sine moved by `c` cents.
+                let x = left(&seg[seg.len() / 2..]);
+                let f = sine_hz(&x, rate as f64);
+                assert!(
+                    cents(f, 1000.0 * crate::rate::rate(c)).abs() < 0.5,
+                    "{rate} {c}: {f}"
+                );
+                assert_eq!(rig.feeder.resampler.is_some(), rate != 44_100 || c != 0);
+                all.extend(seg);
+            }
+            // No step larger than the fastest sine's own (0.5 amplitude at
+            // 1122 Hz), with a margin.
+            let limit = 0.5 * 2.0 * std::f32::consts::PI * 1122.5 / rate as f32 * 1.1;
+            let step = max_step(&left(&all));
+            assert!(step < limit, "{rate}: step {step} > {limit}");
+        }
+    }
+
+    #[test]
+    fn tone_ignores_speed_pitch_and_rate_correction() {
+        for (rate, c) in [(48_000u32, 150), (44_100, -120), (44_100, 0)] {
+            // The music is muted (gain 0), the transport plays stretched.
+            let mut pipe = Pipeline::new(vec![sine_track(3.0)], &[("mix".into(), 0.0)], true);
+            pipe.set_speed(0.8);
+            pipe.set_pitch(3.0);
+            pipe.play();
+            let mut rig = Rig::new(rate);
+            rig.set_cents(c);
+            for sound in [ToneSound::Drone, ToneSound::Pluck] {
+                rig.tone.start(110.0, sound);
+                let out = rig.run(&mut pipe, rate as usize);
+                let x = left(&out[rate as usize / 5..]);
+                let f = periodic_hz(&x, rate as f64, 110.0);
+                assert!(cents(f, 110.0).abs() < 0.5, "{rate} {c} {sound:?}: {f}");
+                assert!(out.iter().all(|f| f.l == f.r));
+            }
+        }
+    }
+
+    #[test]
+    fn tone_plays_with_nothing_loaded_under_the_master_volume() {
+        let mut pipe = Pipeline::new(Vec::new(), &[], true);
+        let mut rig = Rig::new(48_000);
+        rig.tone.start(220.0, ToneSound::Drone);
+        let full = left(&rig.run(&mut pipe, 24_000));
+        let peak = |x: &[f32]| x.iter().fold(0.0f32, |m, v| m.max(v.abs()));
+        let p1 = peak(&full[12_000..]);
+        assert!(p1 > 0.1 && p1 <= crate::tone::LEVEL * 1.12, "{p1}");
+        rig.shared.master.set(0.5);
+        let half = left(&rig.run(&mut pipe, 48_000));
+        let p2 = peak(&half[half.len() - 12_000..]);
+        assert!((p2 / p1 - 0.5).abs() < 0.03, "{p1} {p2}");
+        // Gliding, no step.
+        assert!(max_step(&half) < max_step(&full[12_000..]) * 1.01);
+        // Stopped: silent output again.
+        rig.tone.stop();
+        let tail = left(&rig.run(&mut pipe, 24_000));
+        assert!(tail[tail.len() - 12_000..].iter().all(|&x| x == 0.0));
+        assert!(!rig.tone.is_active());
+    }
+
+    #[test]
+    fn idle_suspension_waits_for_the_tone() {
+        let pipe = Pipeline::new(vec![sine_track(1.0)], &[("mix".into(), 1.0)], true);
+        let mut tone = Tone::new(48_000.0);
+        let mut idle = IdleTimer::default();
+        let t0 = Instant::now();
+        let at = |s: u64| t0 + Duration::from_secs(s);
+        tone.start(82.41, ToneSound::Pluck);
+        assert!(!pipe.is_playing());
+        for s in 0..20 {
+            assert!(!idle.suspend(busy(&pipe, &tone), at(s)));
+        }
+        // Released: idle from then on, suspended after SUSPEND_AFTER.
+        tone.stop();
+        let mut buf = vec![0.0; 4800];
+        tone.render(&mut buf);
+        assert!(!tone.is_active());
+        assert!(!idle.suspend(busy(&pipe, &tone), at(20)));
+        assert!(!idle.suspend(busy(&pipe, &tone), at(24)));
+        assert!(idle.suspend(busy(&pipe, &tone), at(25)));
+        // A tone started while suspended wakes it at once.
+        tone.start(82.41, ToneSound::Drone);
+        assert!(!idle.suspend(busy(&pipe, &tone), at(26)));
     }
 }

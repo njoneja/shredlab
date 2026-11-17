@@ -3512,6 +3512,7 @@ dependencies = [
  "shredlab-io",
  "shredlab-library",
  "shredlab-separation",
+ "shredlab-tuning",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
@@ -3604,6 +3605,14 @@ dependencies = [
  "sha2",
  "shredlab-dsp",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "shredlab-tuning"
+version = "0.1.3"
+dependencies = [
+ "realfft",
+ "shredlab-library",
 ]
 
 [[package]]

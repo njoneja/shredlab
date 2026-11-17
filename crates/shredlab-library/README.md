@@ -50,6 +50,12 @@ else the file name), duration and decoded format, then:
   entry for the same model and shifts.
 - `original`: sample rate, length, scale and file name of the cached original.
 - `beats`: the beat grid (beats, downbeats, tempo, beats per bar).
+- `tuning`: the measured offset from A440 (cents and the implied A4),
+  confidence, peak count, the drift flag, per-segment offsets and an
+  optional `guess` of the song's tuning (lowest steady bass note, semitones
+  below standard bass, likely or only possible), with the
+  version of the algorithm that produced it. Optional; written by the app's
+  tuning job, which recomputes it when the version is older.
 - `refine`: `RefineParams` per stem name, only for refined stems.
 - `strength`: separation strength level (0 = the model's stems) and the
   smooth flag.
@@ -91,6 +97,11 @@ FLAC at the song rate. Older `original.*` files are removed.
 
 ## Invariants and gotchas
 
+- Manifest writes (`save`, `update`) hold one process-wide lock. Writers
+  share the `song.json.tmp` name, and `update` reads, modifies and saves,
+  so the app's settings save and a background job's `update` would
+  otherwise interleave or lose each other's changes. Write `song.json`
+  only through these two.
 - Old manifests must keep loading. Every new field needs `#[serde(default)]`
   (or `Option`) so a `song.json` without it still parses. Existing
   defaults encode history: missing `shifts` = 1, `dir` = `stems`,

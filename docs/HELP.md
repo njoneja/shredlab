@@ -91,6 +91,55 @@ instant. Recent songs are listed under **Open** and on the start screen.
   fixes). Opening it again means splitting it again. The song that is
   open can't be deleted.
 
+## Tuning
+
+Many recordings are not at A440, and many songs are in a lowered tuning
+such as Eb standard. The tuning-fork button next to Pitch shows how the
+song is tuned once the stems are ready: gray when it is in tune (or still
+being measured, with a spinner), amber with a dot when it is off A440, and
+blue when the song has been shifted to match your tuning. Click it, or
+press `T`, to open the Tuning panel.
+
+- **Reference pitch** compares the song's A, as measured (for example
+  A435.4, 18 cents flat), with yours. A line under it shows when the
+  tuning drifts during the song.
+- **Tuning** holds **My tuning**: your instrument, preset and shift in
+  semitones, saved with each song. Under it, **Song is in** says how the
+  song itself is tuned. Only the cents are measured: a song in Eb
+  standard sounds in tune to the measurement, so set it here before
+  shifting.
+- **Guess** suggests the song's tuning from the lowest notes the bass
+  plays, as **Likely** or **Possibly** (for example "Likely Eb standard").
+  **Use** sets **Song is in**; nothing changes until you choose. A drop
+  tuning and the lowered standard reach the same low note (drop D and D
+  standard both go down to D), so both are offered. A dot on the button
+  means a likely guess differs from what **Song is in** says.
+- **Shift song to my tuning** moves the song to your tuning, so you don't
+  have to retune. The arrow next to it picks how: **Pitch shift** (the
+  default) keeps the tempo; **Playback rate** changes pitch and tempo
+  together, like a tape running faster or slower, and sounds cleanest for
+  small corrections. The last choice is kept for new songs. **Undo shift**
+  puts it back.
+- **Tune to the song** sets your reference and shift to the song's
+  instead, for tuning your instrument to the recording as it is.
+- **Reference tones** play each string of your tuning. Number keys play a
+  string while that tab is shown (1 is the highest string), and `Space`
+  stops the tone.
+- **Live tuner** listens to your instrument through an audio interface or
+  a microphone. Pick the input device, and for an interface with several
+  inputs, the one your instrument is plugged into; both are remembered.
+  Play a string: after the pluck settles (a fraction of a second), the
+  tuner shows the note, how many cents it is off and which way to turn
+  the peg ("7¢ flat: tune up"), and the string turns
+  "in tune" once it stays within 3 cents for a second. **Chromatic**
+  ignores your tuning and shows the nearest note. The song is paused while
+  the tuner listens, and pressing Play stops the tuner so the speakers
+  don't feed the microphone; **Listen again** starts it again. The tuner
+  stops when you switch tabs or close the panel.
+- If the level meter stays empty on Windows, the microphone may be blocked:
+  check Settings > Privacy & security > Microphone > Let desktop apps
+  access your microphone.
+
 ## Keyboard shortcuts
 
 | Keys | What |
@@ -103,6 +152,7 @@ instant. Recent songs are listed under **Open** and on the start screen.
 | `↑` `↓` | Speed ±5 % |
 | `Shift` + `↑` `↓` | Pitch ±1 semitone |
 | `C` | Click on / off |
+| `T` | Tuning panel |
 | `1`–`6` | Toggle stem on / off |
 | `Shift` + `1`–`6` | Solo stem on / off |
 | `Alt` + `1`–`6` | All but this stem (play along) |

@@ -4,6 +4,7 @@
 <script lang="ts">
   import Icon from "./Icon.svelte";
   import MeterPanel from "./MeterPanel.svelte";
+  import TuningButton from "./TuningButton.svelte";
   import { app, CENTS_MAX, SEMI_MAX, SPEED_MAX, SPEED_MIN } from "./store.svelte";
   import { formatCountIn } from "./meter";
 
@@ -15,7 +16,7 @@
   const volIcon = $derived(app.masterVolume === 0 ? "volume-mute" : app.masterVolume < 0.5 ? "volume-low" : "volume");
 
   // Media-player layout: play controls and volume centered, click/count-in on
-  // the left, speed/pitch on the right. When the sides no longer fit beside the
+  // the left, speed, tuning and pitch on the right. When the sides no longer fit beside the
   // center at equal width (so the center stays centered), they drop to a
   // second row: left aligned and right aligned, so nothing changes sides.
   let bar: HTMLDivElement;
@@ -175,6 +176,7 @@
         />
         <span class="mono val" class:changed={app.speed !== 100}>{app.speed}%</span>
       </label>
+      <TuningButton />
       <div class="pill" title="Pitch in semitones (Shift+↑ ↓)">
         <span class="lbl">Pitch</span>
         <button class="btn small icon-only ghost" onclick={() => app.setPitch(app.semitones - 1, app.cents)} disabled={noSong || app.semitones <= -SEMI_MAX} aria-label="Pitch down a semitone">

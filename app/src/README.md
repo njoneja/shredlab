@@ -38,13 +38,14 @@ backend calls are in `lib/store.svelte.ts`; read it next.
 - `lib/mix.ts`: dB and linear gain, the volume slider law, the backing-track-from-original rule.
 - `lib/meter.ts`: effective downbeats from the grid and overrides, bar numbers, time formatting.
 - `lib/refine.ts`: Refine defaults, quick stereo presets, the stereo window and EQ response (same formulas as `shredlab-dsp`), strength names.
+- `lib/tuning.ts`: instruments and tuning presets, string notes and frequencies, the song-to-player match and its split into Pitch, the song's tuning state, names and formatting, and the live tuner's math (the string or note a frequency belongs to, cents, the in-tune hold). Pure functions; the store holds the state.
 - `lib/theme.ts`, `lib/recent.ts`: theme application and the localStorage mirror; recent-list and size formatting.
 
 Components, all in `lib/`:
 
 - Frame: `Header.svelte` (with `OpenMenu.svelte` and `SettingsPopover.svelte`: model, quality, stem format, theme), `EmptyState.svelte` (start screen and recent songs), `SeparationBanner.svelte`.
-- Song view: `Waveform.svelte` (canvas: peaks, bars, loop handles, playhead), `Mixer.svelte` (stem rows; opens `RefinePanel.svelte`), `Transport.svelte` (play, master volume, click and count-in, speed and pitch; opens `MeterPanel.svelte`).
-- Dialogs: `ExportDialog.svelte`, `ShortcutsHelp.svelte`, `AboutDialog.svelte`, `StorageDialog.svelte`, `RemoveRecentDialog.svelte`. Each has an open flag in `AppState`.
+- Song view: `Waveform.svelte` (canvas: peaks, bars, loop handles, playhead), `Mixer.svelte` (stem rows; opens `RefinePanel.svelte`), `Transport.svelte` (play, master volume, click and count-in, speed, tuning and pitch; opens `MeterPanel.svelte`; `TuningButton.svelte` is its icon-only Tuning button, whose look shows the song's tuning state).
+- Dialogs: `ExportDialog.svelte`, `TuningPanel.svelte` (reference pitch, tuning with the guess, the Shift split button, and tabs for reference tones and `LiveTuner.svelte`), `ShortcutsHelp.svelte`, `AboutDialog.svelte`, `StorageDialog.svelte`, `RemoveRecentDialog.svelte`. Each has an open flag in `AppState`.
 - Small parts: `Icon.svelte` (inline SVG paths), `Wordmark.svelte`.
 
 ## How it works
@@ -74,12 +75,40 @@ it knows (`strengthWait`) and remembers the newest finished one
 that started the job returns.
 
 **Persistence.** Per-song settings (`version: 1`: mix on and volume, loop,
-count-in, subdivision, meter overrides) go to `save_song_settings` on
-every change (`saveSettings`); the backend debounces the write and flushes
-it on song switch, close and quit, so nothing is pending in the UI. Solo,
-speed and pitch are not saved. An unknown `version` loads defaults. Refine
+count-in, subdivision, meter overrides, and the optional `tuning`) go to
+`save_song_settings` on every change (`saveSettings`); the backend debounces
+the write and flushes it on song switch, close and quit, so nothing is
+pending in the UI. Solo, speed and pitch are not saved. An unknown `version` loads defaults. Refine
 and strength are saved by the backend, not in this blob. App settings live
 in the backend; the store keeps the last `AppSettingsInfo` it returned.
+
+**Tuning.** The backend measures the song's offset from A440 on the stems
+and reports it in `SongInfo.tuning` or a later `tuning-ready` event; until
+then the Tuning button shows a spinner. `SongSettings.tuning` holds the
+player's tuning for the song (`my_tuning`, snake_case like the rest of the
+blob), the song's own semitones ("Song is in"), the match (`method`
+`"pitch"` or `"rate"`, and its cents) and `guess_answered` (the user
+pressed Guess, which shows `TuningData.guess`; until then a likely guess
+that differs from "Song is in" puts a dot on the button, and the guess is
+never applied by itself), written only once the user
+changes one of them for that song. A song without it starts from the last
+tuning set on any song, which the UI keeps in localStorage (`shredlab.lastTuning`;
+it is a starting point only, so losing it costs nothing); a song without a
+match starts with the last Shift method used (`shredlab.lastMatchMethod`). The pitch method
+sets Pitch, and changing Pitch by hand ends the match; the rate method
+sends `set_rate_correction` and leaves Pitch alone. A saved match is
+reapplied on open, recomputed from the current measurement, and a pitch
+match goes back to the previous Pitch before the next song opens. Exports
+send the active rate correction as `rate_cents`. Reference tones are
+played by the backend; the store keeps which string plays, steps to the
+next string after 6 s, and pauses the song when a tone starts if asked.
+The live tuner listens only while `LiveTuner.svelte` is mounted (its tab
+is shown): mounting calls `start_tuner`, unmounting `stop_tuner`. The
+store keeps the status, the input and the latest `tuner-reading`; the
+component turns readings into the note, the smoothed needle and the
+strings strip. Play stops the tuner in the backend, which emits
+`tuner-stopped`; the tab then offers to listen again. The backend saves
+the input device and channel with the app settings.
 
 **Live controls.** Sliders send on every input and save on release
 (`set_master_volume(v, save)`, click volume via `set_click` while dragging
@@ -99,7 +128,14 @@ missing. It fakes demo songs (Open cycles through them; drops get fake
 paths), separation progress, cached stem sets per model and quality, a beat
 grid with a music start, playback position, the count-in, export, strength
 jobs and a synthetic stereo field, and plays a WebAudio click; otherwise it
-is silent. It persists to localStorage keys starting with `shredlab.mock.`
+is silent. It also fakes a tuning measurement a moment after
+separation or open: each demo song shows one state (see the comment on
+`fakeTuning`), and `__mockTuning({...})` in the console replaces the open
+song's measurement. Reference tones play through WebAudio, and the rate
+correction changes how fast the position moves. The live tuner gets three
+fake inputs (a 2-channel interface, a microphone, and a line input that
+gives digital silence, for the "No input" hint) and a synthetic stream
+that plucks the strings in turn, each settling near its target. It persists to localStorage keys starting with `shredlab.mock.`
 (clear them to reset). A "Mock backend" badge shows in the corner.
 
 **Build.** `vite build` writes `app/dist`; the target is `chrome105` on
@@ -146,6 +182,10 @@ an iframe.
 - Edges of clickable or editable controls (buttons, segmented controls,
   inputs, selects, switches) use `--control-border`; panels, dialogs and
   dividers use the fainter `--border`. Every theme defines both.
+- `--warn` (amber, one value per theme) marks something to look at, such as
+  an off-pitch song. It must stay distinct from the theme's `--accent` (so
+  Valve, whose accent is amber, uses orange) and reach 4.5:1 as text on the
+  surfaces. Never use a stem color for it.
 - Drag and drop comes from Tauri's webview event (`onFileDrop`), not the
   DOM; keep `dragDropEnabled` at its default in `tauri.conf.json`.
 - Adding an npm dependency that ships in the UI changes the third-party
@@ -153,10 +193,13 @@ an iframe.
 
 ## Testing
 
-There are no JavaScript unit tests; correctness of the contract is covered by
-the backend tests and the autotest (see [app/src-tauri](../src-tauri/README.md)).
+Pure modules have Node unit tests in [app/tests](../tests/README.md)
+(`pnpm --dir app test`); components and the store have none. Correctness of
+the contract is covered by the backend tests and the autotest (see
+[app/src-tauri](../src-tauri/README.md)).
 
 ```sh
+pnpm --dir app test     # unit tests of the pure modules (lib/tuning.ts)
 pnpm --dir app check    # svelte-check: TypeScript and Svelte diagnostics
 pnpm --dir app build    # production build into app/dist
 pnpm --dir app dev      # UI alone with the mock: http://localhost:1420

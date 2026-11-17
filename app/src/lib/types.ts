@@ -3,6 +3,7 @@
 
 // Shared types for the UI <-> backend contract. See ./API.md for the
 // authoritative description; field names are the exact JSON names.
+import type { SavedTuning } from "./tuning";
 
 export const STEMS = ["vocals", "guitar", "bass", "drums", "piano", "other"] as const;
 export type StemName = (typeof STEMS)[number];
@@ -44,7 +45,39 @@ export interface SongInfo {
   strength: StrengthSetting;
   /** Strength job the backend started while opening (0 = none); its done/error event has this id. */
   strength_job: number;
+  /** Measured tuning; null until the tuning job has run on the stems. */
+  tuning: TuningData | null;
 }
+
+// ---- Tuning ----
+
+/** The song's measured tuning (`song.json`). */
+export interface TuningData {
+  /** Algorithm version; an older one is measured again on open. */
+  version: number;
+  /** Cents from the nearest A440 semitone, −50..50. */
+  offset_cents: number;
+  /** The A4 the offset implies, in Hz. */
+  reference_hz: number;
+  /** 0..1; the UI treats low values as "couldn't measure". */
+  confidence: number;
+  /** Spectral peaks the estimate used. */
+  peaks: number;
+  /** The tuning moves over the song. */
+  drifts: boolean;
+  /** Per-segment offsets (for the drift curve). */
+  segments: { start_s: number; offset_cents: number; weight: number }[];
+  /** Guess of the song's tuning from the lowest bass notes; only with a reliable offset. */
+  guess?: { lowest_midi: number; below_standard: number; likely: boolean } | null;
+}
+
+export interface TuningReady {
+  song_id: string;
+  tuning: TuningData;
+}
+
+/** Reference tone sound: a plucked string or a steady drone. */
+export type ToneSound = "pluck" | "drone";
 
 // ---- Refine panel ----
 
@@ -143,6 +176,8 @@ export interface AppSettingsInfo {
   count_in_to_music_start: boolean; // "Count in to where the music starts" (on by default)
   click_volume: number; // click and count-in volume, linear 0..1 (0.8 by default)
   master_volume: number; // master playback volume, linear 0..1 (1 by default; not in exports)
+  tuner_device_id: string | null; // live tuner input device (null = the system default)
+  tuner_channel: number; // live tuner input channel, 0-based
   stem_format: StemFormat; // format of newly written stems ("mp3" by default)
 }
 
@@ -283,6 +318,8 @@ export interface ExportRequest {
   start_sec?: number | null;
   /** Range end (song seconds). Optional; missing = the song end. */
   end_sec?: number | null;
+  /** Playback-rate correction in cents (−200..200), as in playback. Optional; missing = 0. */
+  rate_cents?: number;
 }
 
 export interface ExportProgress {
@@ -306,6 +343,51 @@ export interface SongSettings {
   subdivision: Subdivision;
   overrides: MeterOverride[];
   mix: { stem: StemName; on: boolean; volume: number }[];
+  /** The song's tuning settings; missing = defaults (My tuning from the last one set). */
+  tuning?: SongTuningSettings;
+}
+
+/** Per-song tuning settings, inside `SongSettings`. */
+export interface SongTuningSettings {
+  /** The player's tuning for this song (see lib/tuning.ts `SavedTuning`). */
+  my_tuning: SavedTuning;
+  /** Semitones the song sits below or above its written pitch ("Song is in"). */
+  song_semitones: number;
+  /** The active match, reapplied on open (recomputed from the current measurement). */
+  match: { method: MatchMethod; cents: number } | null;
+  /** The Guess button was pressed; it stops hinting. Missing = false. */
+  guess_answered?: boolean;
+}
+
+/** How a match shifts the song: through Pitch, or by changing the playback rate. */
+export type MatchMethod = "pitch" | "rate";
+
+/** An audio input device for the live tuner. */
+export interface InputDevice {
+  id: string;
+  name: string;
+  channels: number;
+  default: boolean;
+}
+
+/** What `startTuner` opened. */
+export interface TunerStarted {
+  device_id: string;
+  device_name: string;
+  channels: number;
+  /** 0-based. */
+  channel: number;
+  sample_rate: number;
+  /** The requested device is gone; the default device is used (the saved choice is kept). */
+  fell_back: boolean;
+}
+
+/** `tuner-reading`: about 30 per second while the tuner listens. */
+export interface TunerReading {
+  hz: number | null;
+  clarity: number;
+  /** Highest RMS level since the previous reading, dBFS (−120 = digital silence). */
+  level_db: number;
 }
 
 export interface EventMap {
@@ -321,6 +403,10 @@ export interface EventMap {
   "strength-progress": StrengthProgress;
   "strength-done": StrengthDone;
   "strength-error": StrengthError;
+  "tuning-ready": TuningReady;
+  "tuner-reading": TunerReading;
+  "tuner-error": { message: string };
+  "tuner-stopped": { reason: "playback" | "song_closed" };
 }
 export type EventName = keyof EventMap;
 export type Unlisten = () => void;
@@ -368,6 +454,15 @@ export interface Backend {
   setRefineAnalysis(stem: StemName | null): Promise<void>;
   /** Saves the song's strength and re-derives the stems in the background; job 0 = nothing to do. */
   setStrength(strength: StrengthSetting): Promise<{ job: number }>;
+  /** Playback-rate correction in cents (−200..200, 0 = off); reset to 0 by open_song. */
+  setRateCorrection(cents: number): Promise<void>;
+  /** Plays a reference tone (replaces any playing one); runs whether or not the song plays. */
+  playTone(hz: number, sound: ToneSound): Promise<void>;
+  stopTone(): Promise<void>;
+  listInputDevices(): Promise<InputDevice[]>;
+  /** Listens on `channel` (0-based) of `deviceId` (null = the default); pauses the song and stops the tone. */
+  startTuner(deviceId: string | null, channel: number, lowHz: number): Promise<TunerStarted>;
+  stopTuner(): Promise<void>;
   /** Paths dropped onto the window (Tauri drag-drop; HTML5 drop in the mock). */
   onFileDrop(cb: (paths: string[]) => void): Promise<Unlisten>;
   listen<E extends EventName>(event: E, cb: (payload: EventMap[E]) => void): Promise<Unlisten>;

@@ -53,6 +53,7 @@ pub fn event_tap() -> Option<Tap> {
             && name != "export-progress"
             && name != "strength-progress"
             && name != "refine-field"
+            && name != "tuner-reading"
         {
             if let Ok(tx) = tx.lock() {
                 let _ = tx.send((name.to_string(), v.clone()));
@@ -302,6 +303,7 @@ fn check_click_export(
         count_in: click,
         start_sec: None,
         end_sec: None,
+        rate_cents: 0,
     };
     let res = (|| {
         for speed in [100.0, 80.0] {
@@ -441,6 +443,7 @@ fn check_range_export(
         count_in: true,
         start_sec: start,
         end_sec: end,
+        rate_cents: 0,
     };
     let res = (|| {
         b.set_count_in_to_music_start(true)?;
@@ -573,6 +576,7 @@ fn plain_req(path: &Path, stems: Vec<ExportStem>, solo: bool, speed: f64) -> Exp
         count_in: false,
         start_sec: None,
         end_sec: None,
+        rate_cents: 0,
     }
 }
 
@@ -969,6 +973,7 @@ fn run(b: &Arc<Backend>, song: &Path, out: &Path, rx: &Receiver<Event>) -> Resul
             count_in: false,
             start_sec: None,
             end_sec: None,
+            rate_cents: 0,
         },
     )?;
     let got = read_wav(&file)?;
@@ -1034,6 +1039,7 @@ fn run(b: &Arc<Backend>, song: &Path, out: &Path, rx: &Receiver<Event>) -> Resul
             count_in: false,
             start_sec: None,
             end_sec: None,
+            rate_cents: 0,
         },
     )?;
     let got = read_wav(&file)?;
@@ -1067,6 +1073,7 @@ fn run(b: &Arc<Backend>, song: &Path, out: &Path, rx: &Receiver<Event>) -> Resul
             count_in: false,
             start_sec: None,
             end_sec: None,
+            rate_cents: 0,
         },
     )?;
     let got = read_wav(&file)?;
@@ -1110,6 +1117,7 @@ fn run(b: &Arc<Backend>, song: &Path, out: &Path, rx: &Receiver<Event>) -> Resul
                 count_in: false,
                 start_sec: None,
                 end_sec: None,
+                rate_cents: 0,
             },
         )?;
         let size = std::fs::metadata(&file).map(|m| m.len()).unwrap_or(0);

@@ -368,6 +368,7 @@ fn request(stems: &[Track], orig: &Track, speed: f64, semis: f64) -> RenderReque
         start: 0.0,
         end: None,
         refine: refined_list(),
+        rate_cents: 0,
     }
 }
 

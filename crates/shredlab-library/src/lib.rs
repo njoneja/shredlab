@@ -40,6 +40,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -203,6 +204,49 @@ pub struct BeatData {
     pub beats_per_bar: Option<u32>,
 }
 
+/// Measured tuning of a song: how far it sits from A440, from the stems.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct TuningData {
+    /// Algorithm version that produced this; an older one is recomputed.
+    pub version: u32,
+    /// Cents from the nearest A440 semitone, −50..=50.
+    pub offset_cents: f32,
+    /// The A4 the offset implies, in Hz.
+    pub reference_hz: f32,
+    /// 0..1; below the measuring crate's threshold the UI says it couldn't measure.
+    pub confidence: f32,
+    /// Spectral peaks the estimate used.
+    pub peaks: u32,
+    /// The tuning moves over the song (tape transfers, varispeed).
+    pub drifts: bool,
+    /// Per-segment offsets, for the drift curve.
+    #[serde(default)]
+    pub segments: Vec<TuningSegment>,
+    /// Guess of the song's tuning from the lowest bass notes; only when the
+    /// offset is reliable.
+    #[serde(default)]
+    pub guess: Option<TuningGuessData>,
+}
+
+/// [`TuningData::guess`]: the lowest steadily played bass note (offset
+/// removed, E1 = 28) and how far below standard bass that is.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+pub struct TuningGuessData {
+    pub lowest_midi: i32,
+    /// `lowest_midi - 28`, 0..=-5.
+    pub below_standard: i32,
+    /// Enough evidence to say "likely" rather than "possibly".
+    pub likely: bool,
+}
+
+/// One segment of [`TuningData::segments`].
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+pub struct TuningSegment {
+    pub start_s: f32,
+    pub offset_cents: f32,
+    pub weight: f32,
+}
+
 /// Separation strength of a song (the Natural → Tight slider): `level` 0 = Natural (the
 /// cached stems), 1..=4 = mask exponents 1.5, 2, 3, 4 ("Tight").
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -238,6 +282,9 @@ pub struct SongMeta {
     pub original: Option<OriginalInfo>,
     #[serde(default)]
     pub beats: Option<BeatData>,
+    /// Measured tuning (from the stems).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tuning: Option<TuningData>,
     /// Opaque UI settings, stored and returned verbatim.
     #[serde(default)]
     pub settings: Option<serde_json::Value>,
@@ -274,6 +321,7 @@ impl SongMeta {
             stem_sets: Vec::new(),
             original: None,
             beats: None,
+            tuning: None,
             settings: None,
             refine: BTreeMap::new(),
             strength: StrengthSetting::default(),
@@ -448,6 +496,16 @@ pub fn dir_size(path: &Path) -> u64 {
         .unwrap_or(0)
 }
 
+/// Serializes manifest writes in this process. Without it two writers (the
+/// song's settings save and a background job's `update`) share
+/// `song.json.tmp` and can interleave their bytes, and `update`'s
+/// read-modify-write can lose the other writer's change.
+static MANIFEST_LOCK: Mutex<()> = Mutex::new(());
+
+fn manifest_lock() -> std::sync::MutexGuard<'static, ()> {
+    MANIFEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// A song library rooted at a directory.
 #[derive(Debug, Clone)]
 pub struct Library {
@@ -511,6 +569,11 @@ impl Library {
     /// Writes `song.json` atomically (temp file + rename) and bumps
     /// `updated_ms`.
     pub fn save(&self, meta: &mut SongMeta) -> Result<()> {
+        let _guard = manifest_lock();
+        self.save_locked(meta)
+    }
+
+    fn save_locked(&self, meta: &mut SongMeta) -> Result<()> {
         if meta.song_id.is_empty() || meta.song_id.contains(['/', '\\', '.']) {
             return Err(Error::Input(format!("bad song id {:?}", meta.song_id)));
         }
@@ -529,12 +592,14 @@ impl Library {
 
     /// Loads, modifies and saves a manifest. `Ok(false)` if the song is not
     /// in the library.
+    /// Holds the manifest lock throughout, so concurrent saves can't be lost.
     pub fn update(&self, song_id: &str, f: impl FnOnce(&mut SongMeta)) -> Result<bool> {
+        let _guard = manifest_lock();
         let Some(mut meta) = self.load(song_id)? else {
             return Ok(false);
         };
         f(&mut meta);
-        self.save(&mut meta)?;
+        self.save_locked(&mut meta)?;
         Ok(true)
     }
 
@@ -994,6 +1059,36 @@ mod tests {
         d
     }
 
+    /// A settings save and a background `update` running at the same time
+    /// must leave a readable manifest with both changes.
+    #[test]
+    fn concurrent_save_and_update_keep_the_manifest_whole() {
+        let lib = Library::open(&tmpdir("concurrent")).unwrap();
+        let mut m = meta("cafe", 1);
+        lib.save(&mut m).unwrap();
+        std::thread::scope(|s| {
+            s.spawn(|| {
+                for i in 0..200 {
+                    lib.update("cafe", |m| {
+                        m.tuning = Some(TuningData {
+                            offset_cents: i as f32,
+                            ..Default::default()
+                        })
+                    })
+                    .unwrap();
+                }
+            });
+            s.spawn(|| {
+                for i in 0..200 {
+                    lib.update("cafe", |m| m.last_opened_ms = i).unwrap();
+                }
+            });
+        });
+        let m = lib.load("cafe").unwrap().unwrap();
+        assert_eq!(m.last_opened_ms, 199);
+        assert_eq!(m.tuning.unwrap().offset_cents, 199.0);
+    }
+
     fn meta(lib_id: &str, opened: u64) -> SongMeta {
         let mut m = SongMeta::new(
             lib_id,
@@ -1061,6 +1156,24 @@ mod tests {
             downbeats: vec![0.5],
             bpm: Some(120.0),
             beats_per_bar: Some(4),
+        });
+        m.tuning = Some(TuningData {
+            version: 1,
+            offset_cents: -18.0,
+            reference_hz: 435.5,
+            confidence: 0.8,
+            peaks: 5000,
+            drifts: false,
+            segments: vec![TuningSegment {
+                start_s: 0.0,
+                offset_cents: -18.0,
+                weight: 1.0,
+            }],
+            guess: Some(TuningGuessData {
+                lowest_midi: 27,
+                below_standard: -1,
+                likely: true,
+            }),
         });
         lib.save(&mut m).unwrap();
         let back = lib.load("abc").unwrap().unwrap();

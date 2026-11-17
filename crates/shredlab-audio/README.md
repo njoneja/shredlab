@@ -3,14 +3,16 @@
 Plays a song's stems (and the original mix) through a mixer on the default
 output device, and renders the same mix offline for export to WAV, FLAC or
 MP3. Playback and export run the same pipeline, so an exported file matches
-what was heard, including speed, pitch, Refine and the click track.
+what was heard, including speed, pitch, Refine and the click track. It also
+captures one channel of an audio input device for the live tuner.
 
 ## Boundaries
 
 Owns the real-time engine, the mixer (including the backing track built
 from the original and the per-stem Refine chains), the Signalsmith Stretch
-wrapper, click and count-in scheduling, both limiters, the offline renderer
-and the encoders.
+wrapper, click and count-in scheduling, both limiters, the playback-rate
+correction, the reference tone voice, the offline renderer, the
+encoders and the input capture.
 
 It does not decode files (the caller passes `Track`s: planar stereo, each
 channel f32 or 16-bit integers times a step, all at the song rate, 44.1 kHz
@@ -19,7 +21,8 @@ in practice), implement the Refine DSP
 [shredlab-dsp](../shredlab-dsp/src/refine/mod.rs)), detect beats or the
 music start (they arrive in `ClickConfig`), map the mixer's on/solo/volume
 switches to gains, or re-derive stems for separation strength; the app does
-the last two and calls `set_mix` / `load_with_original`. No Tauri
+the last two and calls `set_mix` / `load_with_original`. It does not
+detect pitch in captured input (`shredlab-tuning` does). No Tauri
 dependency; the only path it touches is the one passed to `encode`.
 
 Dependencies: `shredlab-dsp`, cpal, rtrb, rubato, hound, flacenc,
@@ -34,15 +37,19 @@ Start with `src/lib.rs` (`Track`, `Channel`, `ClickConfig`, `Position`,
 `AudioError`, re-exports), then `Engine` in `src/engine.rs` for playback or `render` in
 `src/render.rs` for export. Both drive a `Pipeline`.
 
-- `src/engine.rs`: device stream, producer thread, ring buffer, device-rate resampling, master volume, device watcher, end and loop-wrap callbacks.
+- `src/engine.rs`: device stream, producer thread, ring buffer, device-rate and rate-correction resampling, master volume, reference tone mixing, idle suspension, device watcher, end and loop-wrap callbacks.
 - `src/pipeline.rs`: transport (play, pause, seek, loop, end), count-in state machine, stretcher voice, crossfades, click mixing, per-frame `Meta`.
 - `src/mix.rs`: `Mixer`, `MixMode`, `choose_mode`: gained sum, original-based backing track, Refine chains, gain ramps, track-set crossfades.
 - `src/stretch.rs`: safe `Stretcher` over the C ABI in `cpp/stretch_wrapper.cpp`; `build.rs` compiles it against the headers in `third_party/`.
 - `src/click.rs`: click sounds and pure scheduling functions (`clicks_in_range`, `plan_count_in`, `count_in_interval`, `effective_start`).
 - `src/limiter.rs`: playback safety limiter.
+- `src/rate.rs`: rate-correction math, the shared sinc parameters and the offline resampler used by export.
+- `src/tone.rs`: `ToneSound` and the reference tone generator (Karplus-Strong pluck, filtered sawtooth drone).
+- `src/input.rs`: input device listing and `InputCapture` (one channel of an input device, delivered on a worker thread).
 - `src/render.rs`, `src/encode.rs`: export (`render`, `RenderRequest`, `encode`, `ExportFormat`, the whole-file `limiter_gain`).
 - `tests/refine.rs`: Refine through the mixer, playback pipeline and export.
 - `examples/play.rs`: plays a folder of stem WAVs, or renders it to a file.
+- `examples/capture.rs`: lists input devices and prints the level of 2 s of input.
 
 ## How it works
 
@@ -53,11 +60,12 @@ ring, zero-fills and counts an underrun when it runs short, and publishes
 the last frame's position and flags through atomics. A producer thread
 handles control commands from a channel and renders the pipeline in
 256-frame blocks until the ring holds about 25 ms (or twice the largest
-callback plus a block), applying the master volume (smoothed) and a rubato
-sinc resampler when the device rate differs from the song rate. After 5 s
-paused it closes the stream and blocks on the channel, and the next `play`
-opens a new one; shorter pauses keep the stream running so Bluetooth
-outputs stay awake. An events thread runs
+callback plus a block), applying the master volume (smoothed), a rubato
+sinc resampler when the device rate differs from the song rate or a rate
+correction is set, and then the reference tone. After 5 s paused with no
+tone sounding it closes the stream and blocks on the channel, and the next
+`play` or `play_tone` opens a new one; shorter pauses keep the stream
+running so Bluetooth outputs stay awake. An events thread runs
 the end and loop-wrap callbacks (they may call back into the `Engine`), and
 a watcher polls the default device every 2 s so the producer can reopen it.
 
@@ -122,6 +130,58 @@ Which part is heard (stem without the window, or the window alone) is set
 by the caller through `PanParams::invert`. `set_analysis` picks the one
 track whose stereo field is published for `Engine::take_field`.
 
+### Rate correction and reference tones
+
+`set_rate_correction(cents)` (±200, 0 = off) plays the song
+`2^(cents/1200)` times faster, pitch and tempo together, on top of the
+speed; the stretcher is not involved. It lives in the device-rate
+resampler, which is built with ratio headroom (1.13) so a new correction
+only changes its ratio, gliding over one block. The pipeline, the clicks
+and every `Meta` stay in song time; the feeder maps `Meta`, end and wrap
+events onto the resampled frames proportionally, for any ratio, so
+positions and callbacks need nothing else. When the song rate equals the
+device rate there is no resampler at 0 cents, and turning the correction
+on or off adds or removes it: one block fades out over about 4 ms (and
+stays silent for the resampler's half kernel), the switch happens, and the
+next block fades in. Export applies the same correction by resampling the
+finished render (`RenderRequest::rate_cents`).
+
+`play_tone(hz, sound)` and `stop_tone` drive one mono tone voice owned by
+the producer thread: Pluck (Karplus-Strong string with an allpass
+fractional delay, so the pitch is exact, a 4 s decay and a new pluck every
+2.5 s) or Drone (band-limited sawtooth through a one-pole lowpass at 4×f0,
+50 ms attack). It peaks at −12 dBFS and runs at the device rate, mixed
+after the resampler and scaled by the master volume, so speed, pitch and
+the rate correction never touch it and the pipeline (and so export) never
+sees it. It sounds whether or not the transport plays; a new frequency
+releases the old tone over 10 ms first, `stop_tone` releases over 30 ms.
+
+### Input capture
+
+`InputCapture` is independent of the `Engine`; both can be open at once.
+`start` opens the chosen device (or the default input) at its default
+input config, on a worker thread that owns the stream for its whole life,
+since a cpal stream is not `Send` everywhere. The cpal callback takes one
+channel of the interleaved data (never a downmix), converts it to f32 and
+pushes it into an `rtrb` ring of about 1 s; when the ring is full the
+excess is dropped and counted. The worker drains the ring into the
+consumer in blocks of at most 4096 samples, in order, and sleeps 2 ms when
+it is empty, so the consumer (a pitch detector) can take milliseconds per
+call. `start` returns once the stream plays or with the error that stopped
+it; a stream error afterwards (an unplugged device) is kept for `error()`
+to report, and nothing more is delivered. Dropping the capture or calling
+`stop` stops the stream and joins the worker.
+
+Device ids come from `list_input_devices`. cpal 0.16 has no persistent
+device id, so the id is the device name, with `#2`, `#3`, ... appended to
+repeated names in enumeration order. A saved id survives restarts and
+reconnection as long as the system keeps the name; when it does not, the
+caller falls back to the default device.
+
+On Windows a denied microphone permission can give a running stream of
+digital silence instead of an error. The crate delivers the zeros as they
+are; detecting that case (level at zero for a while) is the caller's job.
+
 ### Click track and count-in
 
 Clicks are short synthesized sines (accent, beat, softer subdivision)
@@ -154,7 +214,8 @@ range end. The result is `round(range ÷ speed)` frames plus the count-in,
 with 8 ms fades only at cut points inside the song. With a click track or
 count-in, `render_split` keeps the clicks in a separate buffer; the music
 goes through `limiter_gain` and the clicks are added after it, as in
-playback. `encode` limits the final sum again and writes WAV 16-bit (TPDF
+playback. A rate correction then resamples the finished result (music and
+clicks), dividing its length by the rate. `encode` limits the final sum again and writes WAV 16-bit (TPDF
 dither from a fixed seed), WAV 24-bit, FLAC 24-bit or MP3 CBR (bitrate
 snapped to a standard rate), removing the partial file on error.
 
@@ -181,8 +242,15 @@ snapped to a standard rate), removing the partial file on error.
 - Bit-exact properties are tested and relied on: an unstretched unity
   render equals the input, all stems at unity in Original mode equal the
   original, identity Refine equals the plain mix, and the device path at
-  the song rate skips the resampler. The fast paths in the mixer loop
-  exist for this.
+  the song rate with no rate correction and no tone skips the resampler.
+  The fast paths in the mixer loop exist for this.
+- rubato's `SincFixedIn` output is aligned with its input (the half kernel
+  of look-ahead is the only latency, flushed at the end), and the offline
+  resampler relies on that; `offline_resample_shifts_pitch_and_length_and_keeps_alignment`
+  checks it after a rubato update.
+- The reference tone is mixed after the resampler at the device rate and
+  is not part of `Pipeline`; anything added to the tone must stay out of
+  `render`/`render_split`.
 - Playback and export share `Pipeline`, `Mixer`, `choose_mode` and the
   click code; don't special-case one side. Export needs `realtime = false`
   and no pipeline limiter (`render_split` asserts it in debug builds).
@@ -201,6 +269,9 @@ snapped to a standard rate), removing the partial file on error.
   paused ALSA stream through the PulseAudio plugin under WSLg hung the
   PulseAudio server for every client.
 - The master volume is playback only; exports ignore it.
+- The input callback, like the output one, takes no locks and does not
+  allocate; the error callback is separate and may lock. The consumer
+  runs on the input worker, never in the callback.
 - flacenc writes the last block's size as the minimum block size, which
   symphonia rejects; `fix_streaminfo_min_block` patches it (the same fix
   is in `shredlab-library`).
@@ -215,12 +286,21 @@ cargo test -p shredlab-audio --test refine   # Refine integration tests only
 ```
 
 No audio device, models or fixtures are needed, and nothing is ignored:
-engine tests drive the producer side without a device, encoder tests
-round-trip through a temp directory with `shredlab-io`. To listen:
+engine tests drive the producer side without a device, input tests cover
+channel extraction, sample conversion and ring draining without a device,
+and encoder tests round-trip through a temp directory with `shredlab-io`.
+To listen:
 
 ```sh
 cargo run --release -p shredlab-audio --example play -- <stems-dir> --speed 0.8 --pitch -2 --loop 10,20 --click --count-in 4
 cargo run --release -p shredlab-audio --example play -- <stems-dir> --render out.flac
+```
+
+To check input capture on a real device (arguments optional; the channel
+is 1-based):
+
+```sh
+cargo run -p shredlab-audio --example capture -- "<device id>" 2
 ```
 
 `SHREDLAB_AUDIO_DEVICE_RATE=48000` requests that device rate (if
@@ -237,4 +317,10 @@ supported) to exercise the resampler.
   `Mixer` if it affects the mix). If export should honor it, add a field to
   `RenderRequest` and apply it in `render`.
 - Changing the click sounds: `ClickBank::new` and `synth` in `src/click.rs`.
+- Changing a reference tone sound: `Tone::begin` and its per-sample
+  function in `src/tone.rs`; `pluck_and_drone_are_in_tune` checks the
+  pitch.
+- Changing what the input capture delivers: the callback side is
+  `push_channel` and the worker side `drain` in `src/input.rs`; both have
+  device-free tests.
 - Dropping MP3 export: see the LGPL note in [THIRD_PARTY.md](THIRD_PARTY.md).

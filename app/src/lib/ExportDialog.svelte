@@ -13,7 +13,7 @@
     { v: "flac", label: "FLAC", note: "Lossless, smaller" },
     { v: "mp3", label: "MP3", note: "Small, plays anywhere" },
   ];
-  const changedTempo = $derived(app.speed !== 100 || app.semitones !== 0 || app.cents !== 0);
+  const changedTempo = $derived(app.speed !== 100 || app.semitones !== 0 || app.cents !== 0 || app.rateCents !== 0);
 
   const ranges = $derived(
     [
@@ -53,7 +53,9 @@
     {#if app.exportFromOriginal}<p class="muted caption">Backing track built from the original</p>{/if}
     {#if changedTempo}
       <p class="muted">
-        Includes speed {app.speed}% and pitch {app.semitones > 0 ? "+" : ""}{app.semitones} st {app.cents ? `${app.cents > 0 ? "+" : ""}${app.cents}¢` : ""}.
+        Includes speed {app.speed}% and pitch {app.semitones > 0 ? "+" : ""}{app.semitones} st {app.cents ? `${app.cents > 0 ? "+" : ""}${app.cents}¢` : ""}{app.rateCents
+          ? `, and the playback rate shift of ${app.rateCents > 0 ? "+" : "−"}${Math.abs(app.rateCents)}¢ that matches your tuning`
+          : ""}.
       </p>
     {/if}
     <div class="range">

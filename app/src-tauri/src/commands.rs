@@ -174,6 +174,56 @@ pub async fn set_pitch(b: B<'_>, semitones: i32, cents: i32) -> R<()> {
 }
 
 #[tauri::command]
+pub async fn set_rate_correction(b: B<'_>, cents: i32) -> R<()> {
+    b.set_rate_correction(cents);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn play_tone(b: B<'_>, hz: f32, sound: String) -> R<()> {
+    let sound = match sound.as_str() {
+        "pluck" => crate::audio::ToneSound::Pluck,
+        "drone" => crate::audio::ToneSound::Drone,
+        other => return Err(format!("unknown tone sound: {other}")),
+    };
+    b.play_tone(hz, sound);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn stop_tone(b: B<'_>) -> R<()> {
+    b.stop_tone();
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn list_input_devices(b: B<'_>) -> R<Vec<InputDeviceInfo>> {
+    let b = b.inner().clone();
+    blocking(move || Ok(b.list_input_devices())).await
+}
+
+#[tauri::command]
+pub async fn start_tuner(
+    b: B<'_>,
+    device_id: Option<String>,
+    channel: u16,
+    low_hz: f32,
+) -> R<TunerStarted> {
+    let b = b.inner().clone();
+    blocking(move || b.start_tuner(device_id, channel, low_hz)).await
+}
+
+#[tauri::command]
+pub async fn stop_tuner(b: B<'_>) -> R<()> {
+    let b = b.inner().clone();
+    blocking(move || {
+        b.stop_tuner();
+        Ok(())
+    })
+    .await
+}
+
+#[tauri::command]
 pub async fn set_loop(b: B<'_>, loop_state: LoopState) -> R<()> {
     b.set_loop(loop_state);
     Ok(())

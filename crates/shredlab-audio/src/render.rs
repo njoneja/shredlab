@@ -41,6 +41,31 @@ pub struct RenderRequest {
     /// Refine parameters per track name (missing = unrefined), as in
     /// playback ([`crate::mix`]).
     pub refine: Vec<(String, RefineParams)>,
+    /// Playback-rate correction in cents (0 = off), clamped to
+    /// ±[`MAX_RATE_CENTS`](crate::MAX_RATE_CENTS): the finished render
+    /// (music and clicks) is resampled to play `2^(cents/1200)` times
+    /// faster, as [`crate::Engine::set_rate_correction`] does in playback.
+    pub rate_cents: i32,
+}
+
+impl Default for RenderRequest {
+    /// Nothing to render yet: no tracks, Stems mode, speed 1, pitch 0, no
+    /// click, the whole song, no Refine, no rate correction.
+    fn default() -> Self {
+        Self {
+            tracks: Vec::new(),
+            original: None,
+            mode: MixMode::Stems,
+            gains: Vec::new(),
+            speed: 1.0,
+            semitones: 0.0,
+            click: ClickConfig::default(),
+            start: 0.0,
+            end: None,
+            refine: Vec::new(),
+            rate_cents: 0,
+        }
+    }
 }
 
 const BLOCK: usize = 16_384;
@@ -72,6 +97,7 @@ pub fn render_range(req: &RenderRequest, duration: f64) -> Option<(f64, f64)> {
 /// tracks' sample rate. Output length is `round(range / speed)` (exactly the
 /// range's frames without stretching), plus the count-in if `req.click` has
 /// one; the count-in leads into the first beat at or after the range start.
+/// With a rate correction, that length `n` becomes `round(n / rate)`.
 /// Range edges inside the song get an [`EDGE_FADE_SECS`] fade. `progress`
 /// gets 0..=1 (at most ~100 calls); `cancel` is polled between blocks.
 ///
@@ -130,6 +156,9 @@ pub fn render(
     let mut meta = vec![Meta::default(); BLOCK];
     p.play();
     progress(0.0);
+    // With a rate correction the last part of the progress is the resampling.
+    let rate_cents = crate::rate::clamp_cents(req.rate_cents);
+    let render_share = if rate_cents != 0 { 0.9 } else { 1.0 };
     let mut last_report = 0.0f32;
     loop {
         if cancel.load(Ordering::Relaxed) {
@@ -154,7 +183,7 @@ pub fn render(
         }
         let f = ((meta[n - 1].pos - start) / (end - start)) as f32;
         if f - last_report >= 0.01 {
-            progress(f.clamp(0.0, 1.0));
+            progress(f.clamp(0.0, 1.0) * render_share);
             last_report = f;
         }
     }
@@ -175,6 +204,12 @@ pub fn render(
     if with_click {
         add_clicks_after_limiter(&mut out, &clicks, sr);
     }
+    if cancel.load(Ordering::Relaxed) {
+        return Err(AudioError::Canceled);
+    }
+    let out = crate::rate::resample_offline(out, rate_cents, &mut |f| {
+        progress(render_share + (1.0 - render_share) * f)
+    });
     progress(1.0);
     Ok(out)
 }
@@ -251,6 +286,7 @@ mod tests {
             start: 0.0,
             end: None,
             refine: vec![],
+            rate_cents: 0,
         };
         let mut calls = 0;
         let out = render(&req, &mut |_| calls += 1, &AtomicBool::new(false)).unwrap();
@@ -274,6 +310,7 @@ mod tests {
                 start: 0.0,
                 end: None,
                 refine: vec![],
+                rate_cents: 0,
             };
             let out = render(&req, &mut |_| {}, &AtomicBool::new(false)).unwrap();
             let want = (88_200.0 / speed).round() as usize;
@@ -321,6 +358,7 @@ mod tests {
             start: 0.0,
             end: None,
             refine: vec![],
+            rate_cents: 0,
         };
         let out = render(&req, &mut |_| {}, &AtomicBool::new(false)).unwrap();
         for i in 0..n {
@@ -341,6 +379,7 @@ mod tests {
             start: 0.0,
             end: None,
             refine: vec![],
+            rate_cents: 0,
         };
         let r = render(&req, &mut |_| {}, &AtomicBool::new(true));
         assert!(matches!(r, Err(AudioError::Canceled)));
@@ -398,6 +437,7 @@ mod tests {
             start: 0.0,
             end: None,
             refine: vec![],
+            rate_cents: 0,
         };
         let mut off = click_cfg(vec![0.0, 0.5], vec![0.0]);
         off.enabled = false;
@@ -426,6 +466,7 @@ mod tests {
             start: 0.0,
             end: None,
             refine: vec![],
+            rate_cents: 0,
         };
         let out = render(&req, &mut |_| {}, &AtomicBool::new(false)).unwrap();
         assert!(out[0].len().abs_diff((4.0 * 44_100.0 / 0.8) as usize) <= 2);
@@ -459,6 +500,7 @@ mod tests {
             start: 0.0,
             end: None,
             refine: vec![],
+            rate_cents: 0,
         };
         let mut c = click_cfg(beats, vec![0.0, 2.0]);
         c.enabled = false;
@@ -523,6 +565,7 @@ mod tests {
             start,
             end,
             refine: vec![],
+            rate_cents: 0,
         }
     }
 
@@ -662,6 +705,7 @@ mod tests {
             start: 0.0,
             end: None,
             refine: vec![],
+            rate_cents: 0,
         };
         let req = RenderRequest {
             click: c,
@@ -696,5 +740,97 @@ mod tests {
             .unwrap();
         let _ = std::fs::remove_dir_all(&dir);
         assert!(max as f32 / 8_388_607.0 <= CEILING + 1e-6, "peak {max}");
+    }
+
+    #[test]
+    fn rate_correction_resamples_the_export() {
+        use crate::rate::test_util::{cents, sine_hz};
+        let a = sine_track("mix", 1000.0, 2.0);
+        for (speed, rate_cents) in [(1.0, 100), (1.0, -200), (0.8, 37)] {
+            let req = RenderRequest {
+                tracks: vec![a.clone()],
+                gains: vec![("mix".into(), 1.0)],
+                speed,
+                rate_cents,
+                ..RenderRequest::default()
+            };
+            let mut reports = Vec::new();
+            let out = render(&req, &mut |f| reports.push(f), &AtomicBool::new(false)).unwrap();
+            let r = crate::rate::rate(rate_cents);
+            let plain = RenderRequest {
+                rate_cents: 0,
+                ..req.clone()
+            };
+            let plain = render(&plain, &mut |_| {}, &AtomicBool::new(false)).unwrap();
+            let n = plain[0].len() as f64;
+            assert_eq!(
+                out[0].len(),
+                (n / r).round() as usize,
+                "{speed} {rate_cents}"
+            );
+            let f = sine_hz(&out[0][4000..out[0].len() - 4000], 44_100.0);
+            assert!(
+                cents(f, 1000.0 * r).abs() < 1.0,
+                "{speed} {rate_cents}: {f}"
+            );
+            assert!(reports.windows(2).all(|w| w[1] >= w[0]), "{reports:?}");
+            assert_eq!(reports.last(), Some(&1.0));
+            assert!(reports.len() <= 120);
+        }
+        // Clamped to ±200 cents; 0 leaves the render untouched.
+        let base = RenderRequest {
+            tracks: vec![a.clone()],
+            gains: vec![("mix".into(), 1.0)],
+            ..RenderRequest::default()
+        };
+        let far = RenderRequest {
+            rate_cents: 900,
+            ..base.clone()
+        };
+        let out = render(&far, &mut |_| {}, &AtomicBool::new(false)).unwrap();
+        let want = (88_200.0 / crate::rate::rate(200)).round() as usize;
+        assert_eq!(out[0].len(), want);
+        let out = render(&base, &mut |_| {}, &AtomicBool::new(false)).unwrap();
+        assert_eq!(out[0], *a.channels[0].as_f32().unwrap());
+    }
+
+    #[test]
+    fn rate_correction_keeps_clicks_on_the_beats() {
+        // Silent music, clicks every half second: in the resampled file
+        // they are 0.5 / rate s apart, starting where the music starts.
+        let silent = Track::new(
+            "mix",
+            [vec![0.0; 3 * 44_100], vec![0.0; 3 * 44_100]],
+            44_100,
+        );
+        let c = 150;
+        let req = RenderRequest {
+            tracks: vec![silent],
+            gains: vec![("mix".into(), 1.0)],
+            click: ClickConfig {
+                enabled: true,
+                beats: (0..6).map(|k| k as f64 * 0.5).collect(),
+                ..ClickConfig::default()
+            },
+            rate_cents: c,
+            ..RenderRequest::default()
+        };
+        let out = render(&req, &mut |_| {}, &AtomicBool::new(false)).unwrap();
+        let r = crate::rate::rate(c);
+        let mut onsets = Vec::new();
+        let mut last = None::<usize>;
+        for (i, &x) in out[0].iter().enumerate() {
+            if x.abs() > 1e-3 {
+                if last.is_none_or(|j| i - j > 2205) {
+                    onsets.push(i);
+                }
+                last = Some(i);
+            }
+        }
+        assert_eq!(onsets.len(), 6, "{onsets:?}");
+        for (k, &i) in onsets.iter().enumerate() {
+            let want = k as f64 * 0.5 / r * 44_100.0;
+            assert!((i as f64 - want).abs() < 0.002 * 44_100.0, "{onsets:?}");
+        }
     }
 }

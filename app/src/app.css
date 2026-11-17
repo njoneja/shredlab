@@ -24,7 +24,8 @@
  * Theme tokens. Four themes: Stage (default), Rosewood and Valve are dark,
  * Manuscript is light; text stays at 4.5:1 contrast or better against its
  * background. --border outlines panels and dialogs; --control-border is
- * stronger, for the edges of things you click or type into. <html data-theme="..."> picks the theme;
+ * stronger, for the edges of things you click or type into. --warn (amber) marks
+ * something to look at, such as a song that is off pitch. <html data-theme="..."> picks the theme;
  * public/theme-init.js sets it before first paint. Stage is the default, so
  * it also applies without the attribute.
  */
@@ -46,6 +47,7 @@
   --loop-soft: rgba(61, 214, 255, 0.15);
   --solo: var(--accent);
   --danger: #FF5C4D;
+  --warn: #FFB020;
   --lit: var(--ok);
   --ok: #3DFFA0;
   --wave: #4A5163;
@@ -88,6 +90,7 @@
   --loop-soft: rgba(127, 196, 192, 0.15);
   --solo: var(--accent);
   --danger: #FF6B5B;
+  --warn: #F2B84B;
   --lit: var(--ok);
   --ok: #7BCB8A;
   --wave: #5E4448;
@@ -130,6 +133,7 @@
   --loop-soft: rgba(95, 184, 214, 0.15);
   --solo: var(--accent);
   --danger: #FF6B5B;
+  --warn: #FF8C42; /* orange rather than amber: the accent is amber */
   --lit: var(--ok);
   --ok: #67CF8E;
   --wave: #5A4F42;
@@ -172,6 +176,7 @@
   --loop-soft: rgba(47, 109, 179, 0.12);
   --solo: var(--accent);
   --danger: #B42318;
+  --warn: #8F5400; /* dark amber so warning text reaches 4.5:1 on the surfaces */
   --lit: var(--ok);
   --ok: #25784B; /* darker than the brand green #2E8B57 so "ok" text reaches 4.5:1 */
   --wave: #C9BFAD;

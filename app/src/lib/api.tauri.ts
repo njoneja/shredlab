@@ -47,6 +47,12 @@ export const tauriBackend: Backend = {
   setRefine: (stem, params) => invoke("set_refine", { update: { stem, params } }),
   setRefineAnalysis: (stem) => invoke("set_refine_analysis", { stem }),
   setStrength: (strength) => invoke("set_strength", { strength }),
+  setRateCorrection: (cents) => invoke("set_rate_correction", { cents }),
+  playTone: (hz, sound) => invoke("play_tone", { hz, sound }),
+  stopTone: () => invoke("stop_tone"),
+  listInputDevices: () => invoke("list_input_devices"),
+  startTuner: (deviceId, channel, lowHz) => invoke("start_tuner", { deviceId, channel, lowHz }),
+  stopTuner: () => invoke("stop_tuner"),
   async onFileDrop(cb) {
     return getCurrentWebview().onDragDropEvent((e) => {
       if (e.payload.type === "drop" && e.payload.paths.length) cb(e.payload.paths);

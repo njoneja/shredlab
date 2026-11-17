@@ -5,6 +5,7 @@
   // Inline SVG icons (24x24, stroke-based). Hand-drawn simple shapes.
   const PATHS: Record<string, string> = {
     play: '<path d="M7 4.5v15l12.5-7.5z" fill="currentColor" stroke="none"/>',
+    stop: '<rect x="6" y="6" width="12" height="12" rx="1.5" fill="currentColor" stroke="none"/>',
     pause: '<rect x="6" y="4.5" width="4" height="15" rx="1" fill="currentColor" stroke="none"/><rect x="14" y="4.5" width="4" height="15" rx="1" fill="currentColor" stroke="none"/>',
     back: '<path d="M6 5v14"/><path d="M19 5.5v13L9 12z" fill="currentColor"/>',
     loop: '<path d="M4 12a5 5 0 0 1 5-5h9"/><path d="M15 4l3 3-3 3"/><path d="M20 12a5 5 0 0 1-5 5H6"/><path d="M9 20l-3-3 3-3"/>',
@@ -17,11 +18,13 @@
     export: '<path d="M12 3v12"/><path d="M7 8l5-5 5 5"/><path d="M5 15v4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4"/>',
     chevron: '<path d="M6 9l6 6 6-6"/>',
     close: '<path d="M6 6l12 12M18 6L6 18"/>',
+    check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
     minus: '<path d="M5 12h14"/>',
     plus: '<path d="M12 5v14M5 12h14"/>',
     music: '<path d="M9 18V5l11-2v13"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="17.5" cy="16" r="2.5"/>',
     info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5.5"/><circle cx="12" cy="7.8" r="1" fill="currentColor" stroke="none"/>',
     help: '<circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.7.3-1 .9-1 1.7"/><circle cx="12" cy="17" r=".8" fill="currentColor"/>',
+    fork: '<path d="M8 2.5v7.5a4 4 0 0 0 8 0V2.5"/><path d="M12 14v7.5"/>',
     settings: '<circle cx="12" cy="12" r="3"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1"/><circle cx="12" cy="12" r="6.5"/>',
     // stems
     vocals: '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0"/><path d="M12 17.5V21M9 21h6"/>',
