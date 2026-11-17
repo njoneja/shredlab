@@ -6,11 +6,16 @@
 //! Measures how far a song is from A440 (within ±50 cents) from its
 //! separated stems: [`estimate_song_tuning`]. Pure DSP: mono `f32` samples
 //! in, a [`TuningEstimate`] out; no paths, no devices.
+//!
+//! Also holds the live tuner's pitch detector, [`LiveDetector`]: samples
+//! from an input stream in, a [`LiveReading`] per hop out.
 
 mod cents;
+mod live;
 mod song;
 mod spectrum;
 
+pub use live::{LiveDetector, LiveReading, LEVEL_FLOOR_DB, MIN_CLARITY, QUIET_DB};
 pub use song::estimate_song_tuning;
 
 /// Algorithm version of [`estimate_song_tuning`]. Stored results with an
@@ -116,5 +121,7 @@ impl TuningEstimate {
     }
 }
 
+#[cfg(test)]
+mod live_tests;
 #[cfg(test)]
 mod tests;

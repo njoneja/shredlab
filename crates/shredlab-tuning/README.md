@@ -1,17 +1,19 @@
 # shredlab-tuning
 
 Tuning analysis: how far a song is from A440, measured from its separated
-stems. Pure DSP: mono `f32` samples in, a `TuningEstimate` out.
+stems, and the live tuner's pitch detector. Pure DSP: mono `f32` samples
+in, a `TuningEstimate` or a stream of `LiveReading`s out.
 
 ## Boundaries
 
-Owns the offline song estimator (`estimate_song_tuning`). It does not
-decode or downmix stems, pick which stems exist, run as a job, store the
-result in `song.json`, or turn the offset into a Pitch setting; those
-belong to the app and `shredlab-library`. It takes no paths and opens no
-audio device. A live pitch detector for a microphone input is planned as
-a second module next to the song estimator and will reuse the spectrum
-and cents helpers.
+Owns the offline song estimator (`estimate_song_tuning`) and the live
+pitch detector (`LiveDetector`). It does not decode or downmix stems, pick
+which stems exist, run as a job, store the result in `song.json`, or turn
+the offset into a Pitch setting; those belong to the app and
+`shredlab-library`. For the live tuner it does not open the input device,
+pick a channel, run a thread, map a frequency to a note or string, or
+smooth the needle; the audio engine feeds it samples and the UI does the
+rest. It takes no paths and opens no audio device.
 
 Dependencies: realfft. Results are plain structs without serde; callers
 map them to their own storage types.
@@ -25,7 +27,10 @@ map them to their own storage types.
 - `src/spectrum.rs`: Hann-windowed spectra, peak picking with interpolation,
   and the non-octave harmonic filter.
 - `src/cents.rs`: cents conversion, folding and the weighted circular mean.
+- `src/live.rs`: the live detector: high-pass, McLeod Pitch Method,
+  octave guard and the reading median.
 - `src/tests.rs`: estimator tests on synthesized stems.
+- `src/live_tests.rs`: live detector tests on synthesized plucks.
 
 ## How it works
 
@@ -79,6 +84,54 @@ real songs the confidence is typically 0.95 or more, and white noise
 scores about 0.4 to 0.5. The estimator returns `None` only when there were
 no peaks at all.
 
+## Live detector
+
+`LiveDetector::new(sample_rate, low_hz)` takes the input rate and the
+lowest target note. `push` takes any number of mono samples and appends a
+`LiveReading { hz, clarity, level_db }` for each hop: the first once a
+window is full, then one per hop (about 94 per second). Readings are
+plain values; the caller throttles them for the UI.
+
+1. Each sample goes through a 2nd-order Butterworth high-pass at 25 Hz
+   (f64 state, kept across pushes) into a ring buffer.
+2. The window is 4096 samples at 48 kHz, or 8192 when `low_hz` is below
+   45 Hz (the low B of a 5-string bass, 30.87 Hz, needs about five
+   periods). The hop is 512. Other rates scale both.
+3. `level_db` is the RMS of the high-passed window in dBFS (a full-scale
+   sine is −3), floored at −120.
+4. The normalized square difference function (NSDF) up to a lag of half
+   the window: the autocorrelation comes from the power spectrum of the
+   window zero-padded to at least twice its length (one forward and one
+   inverse real FFT), and the normalizing energy term is updated per lag.
+5. Key maxima: the highest NSDF point between each positive-going zero
+   crossing and the next negative-going one, after the first
+   negative-going crossing, refined by parabolic interpolation. The chosen
+   peak is the first key maximum at or above 0.9 of the highest. Its
+   interpolated lag is the period; its value is the clarity.
+6. Octave guard: a fundamental about 13 dB or more under a strong 2nd
+   harmonic (with weak odd partials) puts a key maximum at half the period
+   above the 0.9 threshold. If the key maximum near twice the chosen lag
+   is higher and its distance from 1 is at most half that of the chosen
+   one, it is taken instead. For a correct reading the longer lag is
+   always a little less periodic (decay, inharmonicity), so the guard
+   doesn't halve good readings, including with noise about 20 dB under
+   the note.
+7. A reading is accepted when its clarity is at least 0.85
+   (`MIN_CLARITY`) and its level at least −60 dBFS (`QUIET_DB`, about 20
+   dB above a quiet interface input with the gain up). Accepted
+   frequencies go into a 5-reading median; `hz` is the median once three
+   are in, and `None` for rejected readings. Eight rejected readings in a
+   row (about 85 ms) clear the median, so a new note doesn't inherit the
+   last one.
+
+Notes below `low_hz` may read an octave high: their doubled period can
+exceed the searched lag range, so the octave guard can't see it. The
+first few readings of an attack, while the window still holds the
+silence before it, can be off by several cents or an octave; the median
+hides most of them. Upper partials stretched by string stiffness pull the
+reading slightly sharp (a fraction of a cent for normal strings), as they
+do for the ear.
+
 ## Invariants and gotchas
 
 - `VERSION` is stored with each result and older results are recomputed.
@@ -93,12 +146,20 @@ no peaks at all.
   the estimate.
 - The UI repeats `MIN_CONFIDENCE` and the drift smoothing width; keep them
   in step.
+- `LiveDetector::push` must not allocate: all buffers are sized in
+  `new`, and readings go into the caller's `Vec`. It runs on the audio
+  worker thread.
+- The live detector is not versioned: its readings are not stored.
+- The NSDF search stops at half the window, and the window choice assumes
+  the doubled period of the lowest target note still fits there (so the
+  octave guard can check it). Keep that when changing the window lengths.
 
 ## Testing
 
 ```sh
 cargo test -p shredlab-tuning
 cargo test -p shredlab-tuning --release -- --nocapture five_minute
+cargo test -p shredlab-tuning --release -- --nocapture live_tests
 cargo run --release -p shredlab-tuning --example measure_library -- <library root>
 ```
 
@@ -117,6 +178,16 @@ bass only, the vocals fallback, a 48 kHz input, and that noise alone and
 clips shorter than 20 seconds are not reported as measured. The five-minute test
 prints the runtime; its bound is loose so it doesn't depend on the
 machine.
+
+The live detector tests synthesize plucks (decaying partials, mild
+inharmonicity, white noise 40 dB under the note) from B0 to E6 at several
+cent offsets, at 44.1 and 48 kHz, and require every reading after the
+attack to be within 1 cent. They also cover weak and missing
+fundamentals under a strong 2nd harmonic (the right octave), much noisier
+plucks (never another octave), silence, white noise and a tone under the
+quiet gate (no pitch), window sizes per rate, chunking, and the median
+restarting after a gap. `per_hop_cost` prints the time per hop and, in
+release builds only, fails above a tenth of the hop's duration.
 
 ## Common changes
 
