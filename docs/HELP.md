@@ -91,6 +91,29 @@ instant. Recent songs are listed under **Open** and on the start screen.
   fixes). Opening it again means splitting it again. The song that is
   open can't be deleted.
 
+## Tuning
+
+Many recordings are not at A440, and many songs are in a lowered tuning
+such as Eb standard. The tuning-fork button next to Pitch shows how the
+song is tuned once the stems are ready: gray when it is in tune (or still
+being measured, with a spinner), amber with a dot when it is off A440, and
+blue when the song has been shifted to match your tuning. Click it, or
+press `T`, to open the Tuning panel.
+
+- **Song** shows the measured reference (for example A435.4, 18 cents
+  flat). If the song is in a lowered tuning, set it under **Song is in**.
+- **My tuning** is your instrument and how it is tuned: preset, shift in
+  semitones and the reference A. It is saved with each song.
+- **Shift song to my tuning** moves the song to your tuning, so you don't
+  have to retune. **Pitch shift** keeps the tempo; **Playback rate**
+  changes pitch and tempo together, like a tape running faster or slower,
+  and sounds cleanest for small corrections. **Undo shift** puts it back.
+- **Tune to the song** sets your reference to the song's instead, for
+  tuning your instrument to the recording as it is.
+- **Reference tones** play each string of your tuning. Number keys play a
+  string while the panel is open (1 is the highest string), and `Space`
+  stops the tone.
+
 ## Keyboard shortcuts
 
 | Keys | What |
@@ -103,6 +126,7 @@ instant. Recent songs are listed under **Open** and on the start screen.
 | `↑` `↓` | Speed ±5 % |
 | `Shift` + `↑` `↓` | Pitch ±1 semitone |
 | `C` | Click on / off |
+| `T` | Tuning panel |
 | `1`–`6` | Toggle stem on / off |
 | `Shift` + `1`–`6` | Solo stem on / off |
 | `Alt` + `1`–`6` | All but this stem (play along) |

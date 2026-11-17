@@ -11,6 +11,7 @@ import type {
   ExportFormat,
   LibraryEntry,
   LoopState,
+  MatchMethod,
   MeterOverride,
   Quality,
   RefineParams,
@@ -24,12 +25,29 @@ import type {
   StrengthSetting,
   Subdivision,
   Theme,
+  ToneSound,
+  TuningData,
 } from "./types";
 import { STEMS } from "./types";
 import { backingFromOriginal, clampGain } from "./mix";
 import { applyTheme, currentTheme, isTheme } from "./theme";
 import { defaultRefine, exceptionSide, hasException, isIdentity, mockPresets, normalize, STRENGTH_NAMES } from "./refine";
 import { barAt, commonBeatsPerBar, effectiveDownbeats, formatTime, nearestBeatIndex, normalizeOverrides } from "./meter";
+import {
+  DEFAULT_TUNING,
+  fromSaved,
+  matchCents,
+  RATE_MAX_CENTS,
+  sanitize,
+  SHIFT_MAX,
+  songRefHz,
+  songState,
+  splitPitch,
+  strings,
+  toneHz,
+  toSaved,
+  type MyTuning,
+} from "./tuning";
 
 export interface StemUi {
   on: boolean;
@@ -67,6 +85,29 @@ function defaultMix(): Record<StemName, StemUi> {
 }
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
+
+/** The last My tuning set on any song: the start for songs without one. Kept in the WebView's localStorage. */
+const LAST_TUNING_KEY = "shredlab.lastTuning";
+
+function readLastTuning(): MyTuning {
+  try {
+    const v = localStorage.getItem(LAST_TUNING_KEY);
+    return v ? fromSaved(JSON.parse(v)) : { ...DEFAULT_TUNING };
+  } catch {
+    return { ...DEFAULT_TUNING };
+  }
+}
+
+function writeLastTuning(t: MyTuning) {
+  try {
+    localStorage.setItem(LAST_TUNING_KEY, JSON.stringify(toSaved(t)));
+  } catch {
+    /* storage unavailable: new songs start from the default tuning */
+  }
+}
+
+/** A reference tone moves to the next higher string after this long (Step to next string). */
+const TONE_STEP_MS = 6000;
 
 class AppState {
   song = $state<SongInfo | null>(null);
@@ -150,6 +191,33 @@ class AppState {
   refinePresets = $state.raw<RefinePreset[]>(mockPresets());
   /** Latest stereo field of the open panel's stem (3 × 41 linear powers). */
   field = $state.raw<number[] | null>(null);
+
+  // tuning (TuningPanel.svelte, TuningButton.svelte)
+  tuningOpen = $state(false);
+  /** The open song's measurement; null while measuring. */
+  tuning = $state.raw<TuningData | null>(null);
+  /** The player's tuning for this song (saved per song; new songs start from the last one set). */
+  myTuning = $state.raw<MyTuning>({ ...DEFAULT_TUNING });
+  /** "Song is in": semitones the song sits below or above its written pitch. */
+  songSemitones = $state(0);
+  /** The Shift by choice. */
+  matchMethod = $state<MatchMethod>("pitch");
+  /** The song's match (saved with the song); it is in effect while `matchActive`. */
+  match = $state.raw<{ method: MatchMethod; cents: number } | null>(null);
+  matchActive = $state(false);
+  /** Playback-rate correction in cents (only a rate-method match sets it). */
+  rateCents = $state(0);
+  /** Pitch before a pitch-method match, for Undo shift. */
+  private preMatchPitch: { semitones: number; cents: number } | null = null;
+  /** The song has its own tuning settings (loaded, or changed here); only then are they saved. */
+  private tuningSaved = false;
+  // reference tones: the string playing (1 = highest) and the options
+  toneString = $state<number | null>(null);
+  toneSound = $state<ToneSound>("pluck");
+  toneOctaveUp = $state(false);
+  toneStep = $state(true);
+  tonePause = $state(true);
+  private toneTimer: ReturnType<typeof setTimeout> | null = null;
 
   // strength
   strength = $state<StrengthSetting>({ level: 0, smooth: false });
@@ -257,6 +325,16 @@ class AppState {
     return sw.model_id !== st.model_id || sw.quality !== st.quality;
   });
   showReseparate = $derived(this.askReseparate && this.settingsMismatch && !this.separating && this.stemsReady);
+  /** The tuning job runs after separation (or on open of a separated song without a measurement). */
+  tuningMeasuring = $derived(!!this.song && !this.tuning && (this.separating || this.stemsReady || this.opening));
+  tuningState = $derived(songState(this.tuning, this.tuningMeasuring));
+  /** A measurement good enough to match against. */
+  tuningUsable = $derived(this.tuningState === "in-tune" || this.tuningState === "off");
+  /** The shift that makes the song match My tuning, in cents; null without a usable measurement. */
+  matchNow = $derived(
+    this.tuningUsable && this.tuning ? matchCents(this.myTuning, this.songSemitones, this.tuning.offset_cents) : null,
+  );
+  matched = $derived(this.match != null && this.matchActive);
 
   private started = false;
 
@@ -305,6 +383,13 @@ class AppState {
     });
     await api.listen("beats-ready", (p) => {
       if (p.song_id === this.song?.song_id) this.loadBeats();
+    });
+    await api.listen("tuning-ready", (p) => {
+      if (p.song_id !== this.song?.song_id) return;
+      this.tuning = p.tuning;
+      this.song = { ...this.song, tuning: p.tuning };
+      // A saved match waits for the measurement; an active one follows a new one.
+      if (this.match) this.rematch();
     });
     await api.listen("export-progress", (p) => (this.exportFraction = p.fraction));
     await api.listen("export-done", (p) => {
@@ -463,6 +548,15 @@ class AppState {
     this.error = null;
     try {
       const info = await api.openSong(path);
+      // A pitch-method match belongs to its song: Pitch goes back before the next one.
+      if (this.matchActive && this.match?.method === "pitch" && this.preMatchPitch) {
+        this.semitones = this.preMatchPitch.semitones;
+        this.cents = this.preMatchPitch.cents;
+      }
+      this.clearToneState();
+      api.stopTone().catch(() => {});
+      this.rateCents = 0; // the backend resets the rate correction on open
+      this.tuning = info.tuning ?? null;
       this.song = info;
       this.stemsReady = info.stems_cached;
       this.separating = false;
@@ -491,9 +585,12 @@ class AppState {
         api.setMix(this.mixPayload()),
         api.setSpeed(this.speed),
         api.setPitch(this.semitones, this.cents),
+        api.setRateCorrection(this.rateCents),
         api.setLoop($state.snapshot(this.loop)),
         this.pushClick(false),
       ]);
+      // A saved match is reapplied now, or when the measurement arrives.
+      if (this.match && this.tuningUsable) await this.rematch();
       api
         .getWaveform(1200)
         .then((w) => {
@@ -511,6 +608,7 @@ class AppState {
   }
 
   private applySettings(s: SongSettings | null) {
+    this.applyTuningSettings(s?.version === 1 ? s.tuning : undefined);
     this.mix = defaultMix();
     this.overrides = [];
     this.loop = { a_sec: null, b_sec: null, enabled: false };
@@ -550,9 +648,23 @@ class AppState {
     }
   }
 
+  private applyTuningSettings(ts: SongSettings["tuning"]) {
+    this.tuningSaved = !!ts;
+    this.myTuning = ts ? fromSaved(ts.my_tuning) : readLastTuning();
+    this.songSemitones = clamp(Math.round(Number(ts?.song_semitones) || 0), -SHIFT_MAX, SHIFT_MAX);
+    const m = ts?.match;
+    this.match = m && (m.method === "pitch" || m.method === "rate") ? { method: m.method, cents: Math.round(Number(m.cents) || 0) } : null;
+    this.matchMethod = this.match?.method ?? "pitch";
+    this.matchActive = false;
+    this.preMatchPitch = null;
+  }
+
   // ---- settings persistence ----
   private settingsSnapshot(): SongSettings {
     return {
+      ...(this.tuningSaved
+        ? { tuning: { my_tuning: toSaved(this.myTuning), song_semitones: this.songSemitones, match: this.match ? { ...this.match } : null } }
+        : {}),
       version: 1,
       loop: $state.snapshot(this.loop),
       count_in_enabled: this.click.count_in_enabled,
@@ -772,10 +884,201 @@ class AppState {
     await api.setSpeed(this.speed);
   }
 
+  /** Pitch set by the user (transport, keys): it ends a pitch-method match. */
   async setPitch(semi: number, cents: number) {
+    if (this.matchActive && this.match?.method === "pitch") {
+      this.match = null;
+      this.matchActive = false;
+      this.preMatchPitch = null;
+      this.tuningSaved = true;
+      this.saveSettings();
+    }
+    await this.applyPitch(semi, cents);
+  }
+
+  private async applyPitch(semi: number, cents: number) {
     this.semitones = clamp(Math.round(semi), -SEMI_MAX, SEMI_MAX);
     this.cents = clamp(Math.round(cents), -CENTS_MAX, CENTS_MAX);
     await api.setPitch(this.semitones, this.cents);
+  }
+
+  // ---- tuning ----
+  openTuning() {
+    if (this.song) this.tuningOpen = true;
+  }
+
+  closeTuning() {
+    this.tuningOpen = false;
+    this.stopTone();
+  }
+
+  /** Whether a method can apply `cents` (Pitch's range, or the rate method's ±200 cents). */
+  canMatch(method: MatchMethod, cents: number | null): boolean {
+    if (cents == null) return false;
+    return method === "pitch" ? splitPitch(cents) != null : Math.abs(cents) <= RATE_MAX_CENTS;
+  }
+
+  /**
+   * "Shift song to my tuning": applies the current match with `method`
+   * (Pitch, or the playback rate leaving Pitch alone), undoing the other
+   * method's shift first. False if there is nothing to match or it is out of range.
+   */
+  async shiftToMyTuning(method: MatchMethod = this.matchMethod): Promise<boolean> {
+    const m = this.matchNow;
+    if (!this.song || m == null || !this.canMatch(method, m)) return false;
+    const wasPitch = this.matchActive && this.match?.method === "pitch";
+    if (method === "pitch") {
+      const p = splitPitch(m)!;
+      if (this.rateCents !== 0) await this.setRate(0);
+      if (!wasPitch) this.preMatchPitch = { semitones: this.semitones, cents: this.cents };
+      await this.applyPitch(p.semitones, p.cents);
+    } else {
+      if (wasPitch) await this.restorePitch();
+      await this.setRate(m);
+    }
+    this.matchMethod = method;
+    this.match = { method, cents: m };
+    this.matchActive = true;
+    this.tuningSaved = true;
+    this.saveSettings();
+    return true;
+  }
+
+  /** "Undo shift": Pitch back to what it was before the match, or the rate correction off. */
+  async undoShift() {
+    if (this.matchActive) {
+      if (this.match?.method === "pitch") await this.restorePitch();
+      else await this.setRate(0);
+    }
+    this.match = null;
+    this.matchActive = false;
+    this.tuningSaved = true;
+    this.saveSettings();
+  }
+
+  /** The Shift by switch; while matched it moves the shift to the other method. */
+  async setMatchMethod(method: MatchMethod) {
+    if (method === this.matchMethod && (!this.matched || this.match?.method === method)) return;
+    if (this.matched) {
+      if (!(await this.shiftToMyTuning(method))) this.showToast("That shift is out of range for this method");
+    } else {
+      this.matchMethod = method;
+    }
+  }
+
+  /** Recomputes and reapplies the song's match (after a change of My tuning, "Song is in" or the measurement). */
+  private async rematch() {
+    if (!this.match || !this.tuningUsable) return;
+    if (!(await this.shiftToMyTuning(this.match.method))) {
+      if (this.matchActive) {
+        await this.undoShift();
+        this.showToast("Shift undone: the new match is out of range");
+      }
+    }
+  }
+
+  private async restorePitch() {
+    const p = this.preMatchPitch ?? { semitones: 0, cents: 0 };
+    this.preMatchPitch = null;
+    await this.applyPitch(p.semitones, p.cents);
+  }
+
+  private async setRate(cents: number) {
+    this.rateCents = clamp(Math.round(cents), -RATE_MAX_CENTS, RATE_MAX_CENTS);
+    try {
+      await api.setRateCorrection(this.rateCents);
+    } catch (e) {
+      this.report(e);
+    }
+  }
+
+  /** Changes My tuning (saved with the song and as the start for new songs); a match follows it. */
+  async setMyTuning(t: MyTuning) {
+    this.myTuning = sanitize(t);
+    this.tuningSaved = true;
+    this.saveSettings();
+    writeLastTuning(this.myTuning);
+    if (this.toneString != null) {
+      if (strings(this.myTuning).some((s) => s.number === this.toneString)) await this.playTone(this.toneString);
+      else await this.stopTone();
+    }
+    if (this.matchActive) await this.rematch();
+  }
+
+  /** "Song is in": the song's own semitones (Eb standard = −1). */
+  async setSongSemitones(n: number) {
+    this.songSemitones = clamp(Math.round(n), -SHIFT_MAX, SHIFT_MAX);
+    this.tuningSaved = true;
+    this.saveSettings();
+    if (this.matchActive) await this.rematch();
+  }
+
+  /** "Tune to the song": My tuning takes the song's reference and semitones; the audio is untouched. */
+  async tuneToSong() {
+    if (!this.tuning || !this.tuningUsable) return;
+    await this.setMyTuning({ ...this.myTuning, refHz: songRefHz(this.tuning.offset_cents), shift: this.songSemitones });
+  }
+
+  // ---- reference tones ----
+  /** Plays string `n` (1 = highest) of My tuning; pauses the song first if asked (no auto-resume). */
+  async playTone(n: number) {
+    const hz = toneHz(this.myTuning, n, this.toneOctaveUp);
+    if (hz == null) return;
+    if (this.tonePause && this.playing) await api.pause().catch((e) => this.report(e));
+    this.toneString = n;
+    this.armToneStep();
+    try {
+      await api.playTone(hz, this.toneSound);
+    } catch (e) {
+      this.clearToneState();
+      this.report(e);
+    }
+  }
+
+  async stopTone() {
+    if (this.toneString == null) return;
+    this.clearToneState();
+    await api.stopTone().catch((e) => console.warn("stop_tone failed", e));
+  }
+
+  async toggleTone(n: number) {
+    if (this.toneString === n) await this.stopTone();
+    else await this.playTone(n);
+  }
+
+  async setToneSound(s: ToneSound) {
+    this.toneSound = s;
+    if (this.toneString != null) await this.playTone(this.toneString);
+  }
+
+  async setToneOctaveUp(on: boolean) {
+    this.toneOctaveUp = on;
+    if (this.toneString != null) await this.playTone(this.toneString);
+  }
+
+  setToneStep(on: boolean) {
+    this.toneStep = on;
+    this.armToneStep();
+  }
+
+  private clearToneState() {
+    if (this.toneTimer != null) clearTimeout(this.toneTimer);
+    this.toneTimer = null;
+    this.toneString = null;
+  }
+
+  /** Step to next string: after a while, the next higher string; stop after the highest. */
+  private armToneStep() {
+    if (this.toneTimer != null) clearTimeout(this.toneTimer);
+    this.toneTimer = null;
+    if (!this.toneStep || this.toneString == null) return;
+    this.toneTimer = setTimeout(() => {
+      this.toneTimer = null;
+      const n = this.toneString;
+      if (n == null) return;
+      if (n > 1) this.playTone(n - 1);
+      else this.stopTone();
+    }, TONE_STEP_MS);
   }
 
   // ---- click / count-in / meter ----
@@ -971,6 +1274,7 @@ class AppState {
         count_in: this.click.count_in_enabled,
         start_sec: this.exportRange === "song" ? null : this.exportSpan.start,
         end_sec: this.exportRange === "loop" ? this.exportSpan.end : null,
+        rate_cents: this.rateCents,
       });
     } catch (e) {
       this.exporting = false;

@@ -194,21 +194,94 @@ export function formatCents(c: number): string {
   return `${r > 0 ? "+" : "−"}${Math.abs(r)}¢`;
 }
 
-/** Display name: "Standard", "Eb standard, A430", "Drop C", "DADGAD −1". */
-export function tuningName(t: MyTuning): string {
+/** Name without the reference: "Standard", "Eb standard", "Drop C", "DADGAD −1". */
+export function tuningBaseName(t: MyTuning): string {
   const flats = t.shift < 0;
   const base = baseStrings(t);
-  let name: string;
   if (t.preset === "standard") {
     // Named after the guitar's E (Eb standard, D standard), for every instrument.
-    name = t.shift === 0 ? "Standard" : `${noteName(64 + t.shift, flats)} standard`;
-  } else if (t.preset === "dropD" || t.preset === "dropA") {
-    name = `Drop ${noteName(base[0] + t.shift, flats)}`;
-  } else {
-    const label = t.preset === "dadgad" ? "DADGAD" : "Custom";
-    name = t.shift === 0 ? label : `${label} ${t.shift > 0 ? "+" : "−"}${Math.abs(t.shift)}`;
+    return t.shift === 0 ? "Standard" : `${noteName(64 + t.shift, flats)} standard`;
   }
+  if (t.preset === "dropD" || t.preset === "dropA") return `Drop ${noteName(base[0] + t.shift, flats)}`;
+  const label = t.preset === "dadgad" ? "DADGAD" : "Custom";
+  return t.shift === 0 ? label : `${label} ${t.shift > 0 ? "+" : "−"}${Math.abs(t.shift)}`;
+}
+
+/** Display name: "Standard", "Eb standard, A430", "Drop C", "DADGAD −1". */
+export function tuningName(t: MyTuning): string {
+  const name = tuningBaseName(t);
   return t.refHz === 440 ? name : `${name}, A${formatHz(t.refHz)}`;
+}
+
+/** Name with the reference always stated: "Standard at A440", "Eb standard at A430". */
+export function tuningLongName(t: MyTuning): string {
+  return `${tuningBaseName(t)} at A${formatHz(t.refHz)}`;
+}
+
+/** "140 cents below Standard at A440", "at Standard, A440" for no offset. */
+export function offsetText(t: MyTuning): string {
+  const c = Math.round(totalCents(t));
+  if (c === 0) return "Standard at A440";
+  return `${Math.abs(c)} ${Math.abs(c) === 1 ? "cent" : "cents"} ${c < 0 ? "below" : "above"} Standard at A440`;
+}
+
+/** A tuning as saved in the song's settings (snake_case, like the rest of the blob). */
+export interface SavedTuning {
+  instrument: InstrumentId;
+  preset: PresetId;
+  custom: number[] | null;
+  shift: number;
+  ref_hz: number;
+}
+
+export function toSaved(t: MyTuning): SavedTuning {
+  return { instrument: t.instrument, preset: t.preset, custom: t.custom ? [...t.custom] : null, shift: t.shift, ref_hz: t.refHz };
+}
+
+/** Reads a saved tuning; anything missing or out of range gets its default. */
+export function fromSaved(s: Partial<SavedTuning> | null | undefined): MyTuning {
+  if (!s || typeof s !== "object") return { ...DEFAULT_TUNING };
+  return sanitize({ instrument: s.instrument, preset: s.preset, custom: s.custom, shift: s.shift, refHz: s.ref_hz });
+}
+
+/** Frequency a reference tone plays for a string (1 = highest), an octave up if asked. */
+export function toneHz(t: MyTuning, stringNumber: number, octaveUp: boolean): number | null {
+  const s = strings(t).find((x) => x.number === stringNumber);
+  return s ? s.hz * (octaveUp ? 2 : 1) : null;
+}
+
+/** MIDI notes the custom-string editor offers: B0 (23) to E5 (76). */
+export const CUSTOM_NOTE_MIN = 23;
+export const CUSTOM_NOTE_MAX = 76;
+
+/** Running median over 3 values (ends keep their 2-value median), as the drift test uses. */
+export function median3(v: number[]): number[] {
+  return v.map((_, i) => {
+    const w = v.slice(Math.max(0, i - 1), i + 2).sort((a, b) => a - b);
+    return w.length === 3 ? w[1] : (w[0] + w[w.length - 1]) / 2;
+  });
+}
+
+export interface TuningSegment {
+  start_s: number;
+  offset_cents: number;
+  weight: number;
+}
+
+/**
+ * How a drifting song moves: smoothed first and last offsets when the drift
+ * mostly goes one way ("from −22¢ to −9¢"), else the smoothed range
+ * ("between −22¢ and −9¢"). Null without segments.
+ */
+export function driftSummary(segments: TuningSegment[]): { kind: "from" | "between"; a: number; b: number } | null {
+  if (!segments.length) return null;
+  const m = median3(segments.map((s) => s.offset_cents));
+  const lo = Math.min(...m);
+  const hi = Math.max(...m);
+  const first = m[0];
+  const last = m[m.length - 1];
+  if (hi - lo < 0.5 || Math.abs(last - first) >= 0.6 * (hi - lo)) return { kind: "from", a: Math.round(first), b: Math.round(last) };
+  return { kind: "between", a: Math.round(lo), b: Math.round(hi) };
 }
 
 /** Name for the song's own semitone setting ("Song is in"). */

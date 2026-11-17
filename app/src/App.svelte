@@ -13,6 +13,7 @@
   import Mixer from "./lib/Mixer.svelte";
   import Transport from "./lib/Transport.svelte";
   import ExportDialog from "./lib/ExportDialog.svelte";
+  import TuningPanel from "./lib/TuningPanel.svelte";
   import ShortcutsHelp from "./lib/ShortcutsHelp.svelte";
   import AboutDialog from "./lib/AboutDialog.svelte";
   import StorageDialog from "./lib/StorageDialog.svelte";
@@ -31,7 +32,7 @@
   // Keyboard shortcuts (listed in lib/ShortcutsHelp.svelte). Uses e.code for digits so Shift+1
   // works regardless of keyboard layout ("!" etc.).
   function onKeydown(e: KeyboardEvent) {
-    if (!app.song || app.exportOpen || app.helpOpen || app.aboutOpen || app.storageOpen || app.removeAsk || isTyping(e.target)) return;
+    if (!app.song || app.exportOpen || app.tuningOpen || app.helpOpen || app.aboutOpen || app.storageOpen || app.removeAsk || isTyping(e.target)) return;
     if (e.ctrlKey || e.metaKey) return;
     const digit = /^Digit([1-6])$/.exec(e.code) ?? /^Numpad([1-6])$/.exec(e.code);
     let handled = true;
@@ -62,6 +63,8 @@
       else app.setSpeed(app.speed - 5);
     } else if (e.code === "KeyC") {
       if (app.grid) app.toggleClick();
+    } else if (e.code === "KeyT") {
+      app.openTuning();
     } else {
       handled = false;
     }
@@ -70,7 +73,7 @@
 
   // A focused button would also "click" on Space keyup; swallow it.
   function onKeyup(e: KeyboardEvent) {
-    if (e.code === "Space" && app.song && !isTyping(e.target) && !app.exportOpen && !app.helpOpen && !app.aboutOpen && !app.storageOpen && !app.removeAsk) e.preventDefault();
+    if (e.code === "Space" && app.song && !isTyping(e.target) && !app.exportOpen && !app.tuningOpen && !app.helpOpen && !app.aboutOpen && !app.storageOpen && !app.removeAsk) e.preventDefault();
   }
 </script>
 
@@ -103,6 +106,7 @@
 </div>
 
 {#if app.exportOpen}<ExportDialog />{/if}
+{#if app.tuningOpen}<TuningPanel />{/if}
 {#if app.helpOpen}<ShortcutsHelp />{/if}
 {#if app.aboutOpen}<AboutDialog />{/if}
 {#if app.storageOpen}<StorageDialog />{/if}

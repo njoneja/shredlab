@@ -2,9 +2,9 @@
 // SPDX-FileCopyrightText: 2026 Navneet Joneja
 
 // Browser mock of the backend so `pnpm dev` works without Tauri. Fakes a
-// song, separation progress, a beat grid, playback position and export.
-// Audio: a soft WebAudio click when the click track / count-in is on;
-// otherwise silence.
+// song, separation progress, a beat grid, the tuning measurement, playback
+// position and export. Audio: a soft WebAudio click when the click track /
+// count-in is on, and the reference tones; otherwise silence.
 import type {
   AppSettingsInfo,
   AppSettingsUpdate,
@@ -28,6 +28,8 @@ import type {
   StemName,
   StrengthSetting,
   Theme,
+  ToneSound,
+  TuningData,
 } from "./types";
 import { THEMES } from "./types";
 import { isIdentity, mockPresets } from "./refine";
@@ -46,6 +48,7 @@ const LS_APP = "shredlab.mock.app_settings";
 const LS_THEME = "shredlab.mock.theme";
 const LS_REFINE = "shredlab.mock.refine.";
 const LS_STRENGTH = "shredlab.mock.strength.";
+const LS_TUNING = "shredlab.mock.tuning.";
 // Song ids removed from the recent list, and demo songs whose data was deleted.
 const LS_HIDDEN = "shredlab.mock.hidden";
 const LS_GONE = "shredlab.mock.deleted";
@@ -174,6 +177,8 @@ let analysisStem: StemName | null = null;
 let fieldTimer: number | null = null;
 let strengthTimer: number | null = null;
 let strengthJob = 0;
+let tuningTimer: number | null = null;
+let rateCents = 0;
 
 /** Where each stem's energy sits in the synthetic stereo field: (pan, weight, spread). */
 const FIELD_SHAPE: Record<StemName, [number, number, number][]> = {
@@ -252,6 +257,145 @@ function blip(accent: boolean, soft = false) {
   }
 }
 
+/**
+ * A fake tuning measurement. The demo songs each show one state of the
+ * Tuning button: Houses Of The Holy drifts, Mr. Crowley is 18 cents flat,
+ * Green-Tinted Sixties Mind is in tune, Decadence Dance is in Eb standard
+ * and 4 cents flat (set "Song is in" to see it match), The Ocean can't be
+ * measured. Other files are 18 cents flat. From the console,
+ * `__mockTuning({ offset_cents: 7 })` replaces the open song's measurement.
+ */
+function fakeTuning(path: string, duration: number): TuningData {
+  const title = describe(path).title;
+  const n = Math.max(2, Math.floor(duration / 10));
+  const seg = (f: (x: number) => number): TuningData["segments"] =>
+    Array.from({ length: n }, (_, i) => ({
+      start_s: i * 10,
+      offset_cents: Math.round(f(i / (n - 1)) * 10) / 10,
+      weight: 1,
+    }));
+  const make = (offset: number, extra: Partial<TuningData> = {}): TuningData => ({
+    version: 1,
+    offset_cents: offset,
+    reference_hz: 440 * Math.pow(2, offset / 1200),
+    confidence: 0.82,
+    peaks: 4200,
+    drifts: false,
+    segments: seg((x) => offset + 0.6 * Math.sin(x * 23)),
+    ...extra,
+  });
+  switch (title) {
+    case "Houses Of The Holy": {
+      const segments = seg((x) => -22 + 13 * x + Math.sin(x * 17) * 0.8);
+      const offset = segments.reduce((n, s) => n + s.offset_cents, 0) / segments.length;
+      return make(Math.round(offset * 10) / 10, { drifts: true, segments, confidence: 0.64 });
+    }
+    case "Green-Tinted Sixties Mind":
+      return make(1.2);
+    case "Decadence Dance":
+      return make(-4.3);
+    case "The Ocean":
+      return make(9, { confidence: 0.18, peaks: 140 });
+    default:
+      return make(-18);
+  }
+}
+
+/** Measures the open song after a moment (as the app does after separation or on open). */
+function measureTuning(ms: number) {
+  if (tuningTimer != null) clearTimeout(tuningTimer);
+  const id = song?.song_id;
+  tuningTimer = window.setTimeout(() => {
+    tuningTimer = null;
+    if (!song || song.song_id !== id) return;
+    const t = fakeTuning(song.path, song.duration_sec);
+    song.tuning = t;
+    lsSet(LS_TUNING + song.song_id, t);
+    emit("tuning-ready", { song_id: song.song_id, tuning: t });
+  }, ms);
+}
+
+(globalThis as { __mockTuning?: unknown }).__mockTuning = (change: Partial<TuningData>) => {
+  if (!song) return;
+  const base = song.tuning ?? fakeTuning(song.path, song.duration_sec);
+  const t = { ...base, ...change };
+  if (change.offset_cents != null && change.reference_hz == null) t.reference_hz = 440 * Math.pow(2, change.offset_cents / 1200);
+  song.tuning = t;
+  lsSet(LS_TUNING + song.song_id, t);
+  emit("tuning-ready", { song_id: song.song_id, tuning: t });
+};
+
+// Reference tones: a decaying string retriggered every 2.5 s, or a filtered sawtooth drone.
+let tone: { stop: () => void } | null = null;
+function startTone(hz: number, sound: ToneSound) {
+  tone?.stop();
+  tone = null;
+  try {
+    audio ??= new AudioContext();
+    const ctx = audio;
+    const out = ctx.createGain();
+    out.gain.value = 0.25 * masterVolume; // about -12 dBFS
+    out.connect(ctx.destination);
+    const nodes: OscillatorNode[] = [];
+    let timer: number | null = null;
+    if (sound === "drone") {
+      const o = ctx.createOscillator();
+      o.type = "sawtooth";
+      o.frequency.value = hz;
+      const lp = ctx.createBiquadFilter();
+      lp.type = "lowpass";
+      lp.frequency.value = Math.min(18000, 4 * hz);
+      lp.Q.value = 0.5;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0, ctx.currentTime);
+      g.gain.linearRampToValueAtTime(0.6, ctx.currentTime + 0.05);
+      o.connect(lp).connect(g).connect(out);
+      o.start();
+      nodes.push(o);
+    } else {
+      const pluck = () => {
+        const t = ctx.currentTime;
+        for (const [mult, level] of [
+          [1, 0.7],
+          [2, 0.3],
+          [3, 0.12],
+        ]) {
+          const o = ctx.createOscillator();
+          o.type = "triangle";
+          o.frequency.value = hz * mult;
+          const g = ctx.createGain();
+          g.gain.setValueAtTime(level, t);
+          g.gain.exponentialRampToValueAtTime(0.0001, t + 4 / mult);
+          o.connect(g).connect(out);
+          o.start(t);
+          o.stop(t + 4 / mult);
+          nodes.push(o);
+        }
+      };
+      pluck();
+      timer = window.setInterval(pluck, 2500);
+    }
+    tone = {
+      stop() {
+        if (timer != null) clearInterval(timer);
+        out.gain.setTargetAtTime(0, ctx.currentTime, 0.02);
+        setTimeout(() => {
+          for (const n of nodes) {
+            try {
+              n.stop();
+            } catch {
+              /* already stopped */
+            }
+          }
+          out.disconnect();
+        }, 150);
+      },
+    };
+  } catch {
+    /* no audio, fine */
+  }
+}
+
 function makeGrid(duration: number, bpm: number, music_start: number | null = null): BeatGrid {
   const beats: number[] = [];
   const downbeats: number[] = [];
@@ -305,7 +449,7 @@ function tick() {
       }
     } else {
       const prev = position;
-      position += dt * (speed / 100);
+      position += dt * (speed / 100) * Math.pow(2, rateCents / 1200);
       if (loop.enabled && loop.a_sec != null && loop.b_sec != null && position >= loop.b_sec) {
         position = loop.a_sec + (position - loop.b_sec);
         lastBeatIdx = -1;
@@ -411,6 +555,7 @@ export const mockBackend: Backend = {
     position = 0;
     playing = false;
     countInLeft = 0;
+    rateCents = 0; // like the app: the rate correction resets on open
     loop = { a_sec: null, b_sec: null, enabled: false };
     grid = makeGrid(d.duration_sec, d.bpm, "music_start" in d ? (d.music_start ?? null) : null);
     downbeatSet = new Set(grid.downbeats);
@@ -431,8 +576,11 @@ export const mockBackend: Backend = {
       refine: lsGet<Partial<Record<StemName, RefineParams>>>(LS_REFINE + song_id, {}),
       strength: lsGet<StrengthSetting>(LS_STRENGTH + song_id, { level: 0, smooth: false }),
       strength_job: 0,
+      tuning: cached ? lsGet<TuningData | null>(LS_TUNING + song_id, null) : null,
       bpmVal: d.bpm,
     };
+    if (tuningTimer != null) clearTimeout(tuningTimer);
+    if (cached && !song.tuning) measureTuning(2500);
     analysisStem = null;
     updateFieldTimer();
     // A saved strength is re-applied on open, like the app does.
@@ -458,6 +606,7 @@ export const mockBackend: Backend = {
   },
   async closeSong() {
     stopSeparation();
+    if (tuningTimer != null) clearTimeout(tuningTimer);
     analysisStem = null;
     updateFieldTimer();
     song = null;
@@ -511,7 +660,7 @@ export const mockBackend: Backend = {
     lsSet(LS_CACHED, lsGet<string[]>(LS_CACHED, []).filter((k) => !k.startsWith(songId + "|")));
     lsSet(LS_HIDDEN, lsGet<string[]>(LS_HIDDEN, []).filter((id) => id !== songId));
     lsSet(LS_GONE, [...lsGet<string[]>(LS_GONE, []), songId]);
-    for (const k of [LS_SETTINGS, LS_REFINE, LS_STRENGTH]) {
+    for (const k of [LS_SETTINGS, LS_REFINE, LS_STRENGTH, LS_TUNING]) {
       try {
         localStorage.removeItem(k + songId);
       } catch {
@@ -550,6 +699,8 @@ export const mockBackend: Backend = {
           song.separated_with = sw;
           song.original_available = true;
           addToLibrary(song);
+          // New stems: the tuning is measured again on them.
+          measureTuning(1500);
         }
         emit("separation-done", { song_id: id, separated_with: sw, original_available: true });
       }
@@ -710,6 +861,19 @@ export const mockBackend: Backend = {
     const same = prev.level === s.level && (s.level === 0 || prev.smooth === s.smooth);
     if (!song.stems_cached || same) return { job: 0 };
     return { job: runStrength(song.song_id, s) };
+  },
+  async setRateCorrection(cents) {
+    if (!song) return;
+    rateCents = Math.max(-200, Math.min(200, Math.round(cents)));
+  },
+  async playTone(hz, sound) {
+    if (!(hz > 0) || !Number.isFinite(hz)) throw new Error("Invalid tone frequency");
+    if (sound !== "pluck" && sound !== "drone") throw new Error(`unknown tone sound: ${sound}`);
+    startTone(hz, sound);
+  },
+  async stopTone() {
+    tone?.stop();
+    tone = null;
   },
   async setTheme(theme) {
     if (!THEMES.includes(theme)) throw new Error(`Unknown theme: ${theme}`);

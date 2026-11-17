@@ -68,9 +68,22 @@ SongInfo {
                               // without the original whose source file is gone.
   refine: { [stem in StemName]?: RefineParams },  // saved Refine settings, refined stems only
   strength: StrengthSetting,  // saved separation strength of the song
-  strength_job: number        // id of a strength job open_song started (re-applying a saved
+  strength_job: number,       // id of a strength job open_song started (re-applying a saved
                               // strength), 0 = none; its strength-done/-error has this id
+  tuning: TuningData | null   // measured tuning; null until the tuning job has run on the stems
 }
+
+TuningData {
+  version: number,          // algorithm version; an older one is measured again on open
+  offset_cents: number,     // cents from the nearest A440 semitone, −50..50
+  reference_hz: number,     // the A4 the offset implies
+  confidence: number,       // 0..1 (resultant length of the weighted pitch vectors)
+  peaks: number,            // spectral peaks the estimate used
+  drifts: boolean,          // the tuning moves over the song (tape transfers, varispeed)
+  segments: { start_s: number, offset_cents: number, weight: number }[]  // per 10 s, for the drift curve
+}
+  // The UI treats confidence < 0.3 or fewer than 200 peaks as "couldn't
+  // measure", |offset| <= 3 without drift as in tune (lib/tuning.ts).
 
 ModelInfo {
   id: string,               // registry id, e.g. "htdemucs_6s"
@@ -163,10 +176,13 @@ ExportRequest {
   count_in: boolean,         // start with the count-in (the UI sends
                              // ClickState.count_in_enabled). Optional; missing = false.
   start_sec: number | null,  // range start (song seconds). Optional; missing/null = song start.
-  end_sec: number | null     // range end (song seconds). Optional; missing/null = song end.
+  end_sec: number | null,    // range end (song seconds). Optional; missing/null = song end.
+  rate_cents: number         // playback-rate correction, −200..200, as in playback (the file
+                             // is resampled by 2^(rate_cents/1200) like playback). Optional; missing = 0.
 }
 
 SongSettings   // OPAQUE to the backend: store the JSON value and return it verbatim.
+               // (The UI's shape, including its `tuning` field, is in types.ts.)
 
 // ---- Refine panel ----
 RefineParams { pan: PanParams, eq: EqParams }   // identity = pan off and a flat EQ
@@ -237,6 +253,9 @@ StrengthSetting { level: number, smooth: boolean }
 | `set_refine` | `update: { stem: StemName, params: RefineParams }` | `()` | Live: heard at once (smoothed, no clicks), also during playback; turning an exception on or off on an off row also makes it audible or silent; saved in the song's `song.json` about 600 ms after the last change (and on song switch, close and app exit). Identity params = unrefined. `Err` for an unknown stem or no song. |
 | `set_refine_analysis` | `stem: Option<String>` | `()` | Turns the stereo-field analysis on for this stem only (the open Refine panel) or off (`null`). Data comes as `refine-field` events while playing. |
 | `set_strength` | `strength: StrengthSetting` | `{ job: number }` | Saves the song's strength at once and re-derives the stems on a background thread (re-reads the cached set, about 1–2 s for a 5-min song; a newer call cancels the older job), then swaps the stems in with the usual crossfade. `job` 0 = nothing to compute (same as loaded, or not separated yet: applied after separation). |
+| `set_rate_correction` | `cents: i32` | `()` | Playback-rate correction for matching the song to the player's tuning: the song plays `2^(cents/1200)` faster or slower (pitch and tempo together, on top of Speed; no time-stretching). −200..200, 0 = off. Reset to 0 by `open_song`, so the UI sends it after every open. Exports take it as `ExportRequest.rate_cents`. |
+| `play_tone` | `hz: f32, sound: String` | `()` | Plays a reference tone at `hz` (the UI computes it, octave up included), replacing any playing tone. `sound`: `"pluck"` (a plucked string retriggered every 2.5 s) or `"drone"` (steady). About −12 dBFS under the master volume; ignores Speed, Pitch and the rate correction; never exported. Plays whether or not the song plays; the backend never pauses the song for it (the UI does, if asked). `Err` for an unknown sound. |
+| `stop_tone` | – | `()` | Stops the reference tone (no-op if none). |
 | `set_app_settings` | `settings: AppSettingsUpdate` | `AppSettingsInfo` | Saves the choice (null = default) and returns the new effective settings. Does **not** re-separate: if a song is open and its `separated_with` (model_id, quality) differs from the new effective `model_id`/`quality`, the UI asks "Re-separate this song?" and calls `start_separation` on yes. `Err` for an unknown model id. |
 
 ## Events
@@ -255,6 +274,7 @@ StrengthSetting { level: number, smooth: boolean }
 | `strength-progress` | `{ song_id, job: number, fraction: number }` | ≤ 10 Hz while re-deriving. |
 | `strength-done` | `{ song_id, job: number, strength: StrengthSetting }` | The derived stems are playing. |
 | `strength-error` | `{ song_id, job: number, message: string, canceled: boolean }` | Failure, or `canceled: true` when a newer job or a song switch replaced it. |
+| `tuning-ready` | `{ song_id, tuning: TuningData }` | The tuning measurement finished: after a separation (on the new stems), or after `open_song` of a separated song with no measurement or one from an older algorithm version. A song that can't be measured still gets one (low confidence). |
 
 Events for a `song_id` that is no longer current are ignored by the UI.
 
@@ -417,8 +437,9 @@ Events for a `song_id` that is no longer current are ignored by the UI.
 
 1. `listen` to all events, `get_library`, `get_app_settings`.
 2. User picks/drops a file → `open_song(path)`.
-3. UI sends `set_mix`, `set_speed`, `set_pitch`, `set_loop`, `set_click` with
-   its current state, then `get_waveform(1200)`; if `beats_ready`,
+3. UI sends `set_mix`, `set_speed`, `set_pitch`, `set_rate_correction`,
+   `set_loop`, `set_click` with its current state (a saved tuning match is
+   then reapplied), then `get_waveform(1200)`; if `beats_ready`,
    `get_beats` + `set_meter_overrides`; if `!stems_cached`, `start_separation`.
 4. On `beats-ready`: `get_beats`, `set_meter_overrides`, `set_click`.
 
@@ -444,5 +465,6 @@ No command is involved, so the mock backend needs nothing for it.
 
 ## Not covered by this contract (yet)
 
-- Speed/pitch are global, not saved per song.
+- Speed/pitch are global, not saved per song, except a saved tuning match,
+  which the UI reapplies on open.
 - No `get_player_state`: the UI re-sends its full state after `open_song`.

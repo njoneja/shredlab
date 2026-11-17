@@ -5,7 +5,14 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   DEFAULT_TUNING,
+  driftSummary,
   formatPitch,
+  fromSaved,
+  median3,
+  offsetText,
+  toneHz,
+  toSaved,
+  tuningLongName,
   matchCents,
   rateTempoPercent,
   sanitize,
@@ -107,4 +114,36 @@ test("song state", () => {
   assert.equal(songState({ ...m, confidence: 0.1 }, false), "unmeasured");
   // 440 · 2^(−18/1200) = 435.44 (the mocks round it to 435.5).
   assert.equal(songRefHz(-18), 435.4);
+});
+
+test("long names and the offset line", () => {
+  assert.equal(tuningLongName(DEFAULT_TUNING), "Standard at A440");
+  assert.equal(tuningLongName(ebAt430), "Eb standard at A430");
+  assert.equal(offsetText(ebAt430), "140 cents below Standard at A440");
+  assert.equal(offsetText(DEFAULT_TUNING), "Standard at A440");
+  assert.equal(offsetText({ ...DEFAULT_TUNING, refHz: 440.3 }), "1 cent above Standard at A440");
+});
+
+test("saved tuning round trip and defaults", () => {
+  const t: MyTuning = { instrument: "bass5", preset: "custom", custom: [23, 28, 33, 38, 43], shift: -2, refHz: 432.1 };
+  const s = toSaved(t);
+  assert.equal(s.ref_hz, 432.1);
+  assert.deepEqual(fromSaved(JSON.parse(JSON.stringify(s))), t);
+  assert.deepEqual(fromSaved(null), DEFAULT_TUNING);
+  assert.deepEqual(fromSaved({ shift: 3 }), { ...DEFAULT_TUNING, shift: 3 });
+});
+
+test("reference tone frequencies", () => {
+  near(toneHz(DEFAULT_TUNING, 6, false)!, 82.41, 0.01);
+  near(toneHz(DEFAULT_TUNING, 6, true)!, 164.81, 0.01);
+  near(toneHz(DEFAULT_TUNING, 1, false)!, 329.63, 0.01);
+  assert.equal(toneHz(DEFAULT_TUNING, 7, false), null);
+});
+
+test("drift summary", () => {
+  assert.deepEqual(median3([1, 9, 2, 3]), [5, 2, 3, 2.5]);
+  const seg = (vals: number[]) => vals.map((v, i) => ({ start_s: i * 10, offset_cents: v, weight: 1 }));
+  assert.deepEqual(driftSummary(seg([-22, -20, -17, -14, -11, -9])), { kind: "from", a: -21, b: -10 });
+  assert.deepEqual(driftSummary(seg([-20, -10, -5, -10, -20])), { kind: "between", a: -15, b: -10 });
+  assert.equal(driftSummary([]), null);
 });
