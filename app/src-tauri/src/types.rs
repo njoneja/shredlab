@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 pub use crate::settings::{Quality, StemFormat};
 pub use shredlab_dsp::refine::{EqParams, RefineParams};
-pub use shredlab_library::StrengthSetting;
+pub use shredlab_library::{StrengthSetting, TuningData};
 
 pub const STEMS: [&str; 6] = ["vocals", "guitar", "bass", "drums", "piano", "other"];
 
@@ -50,6 +50,8 @@ pub struct SongInfo {
     /// saved strength), 0 when none; its `strength-done`/`-error` event
     /// carries the same id.
     pub strength_job: u64,
+    /// Measured tuning; `None` until the tuning job has run on the stems.
+    pub tuning: Option<TuningData>,
 }
 
 /// One separation model from the registry.
@@ -293,6 +295,10 @@ pub struct ExportRequest {
     /// Range end in song seconds. Missing = the song end.
     #[serde(default)]
     pub end_sec: Option<f64>,
+    /// Playback-rate correction in cents (-200..200), as in playback.
+    /// Missing = 0.
+    #[serde(default)]
+    pub rate_cents: i32,
 }
 
 // ------------------------------------------------------------------ events
@@ -331,6 +337,13 @@ pub struct SeparationError {
 #[derive(Debug, Clone, Serialize)]
 pub struct SongIdPayload {
     pub song_id: String,
+}
+
+/// `tuning-ready` payload.
+#[derive(Debug, Clone, Serialize)]
+pub struct TuningReady {
+    pub song_id: String,
+    pub tuning: TuningData,
 }
 
 /// `set_refine` payload.

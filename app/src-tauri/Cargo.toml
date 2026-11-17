@@ -28,5 +28,6 @@ shredlab-io.workspace = true
 shredlab-separation.workspace = true
 shredlab-beats.workspace = true
 shredlab-library.workspace = true
+shredlab-tuning.workspace = true
 shredlab-audio.workspace = true
 shredlab-dsp.workspace = true

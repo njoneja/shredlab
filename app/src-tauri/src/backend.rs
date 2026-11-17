@@ -151,6 +151,7 @@ impl Song {
             refine: m.refine.clone(),
             strength: m.strength,
             strength_job: 0,
+            tuning: m.tuning.clone(),
         }
     }
 }
@@ -230,6 +231,8 @@ struct State {
     speed_percent: u32,
     semitones: i32,
     cents: i32,
+    /// Tuning's playback-rate correction in cents; reset on every open.
+    rate_cents: i32,
     loop_state: LoopState,
     click: ClickState,
     /// Effective downbeats from the UI (`set_meter_overrides`).
@@ -360,6 +363,67 @@ pub fn mix_mode(mix: &[StemMixState], names: &[String], has_original: bool) -> M
         .filter(|n| mix.iter().find(|m| &m.stem == *n).is_none_or(|m| m.on))
         .count();
     audio::choose_mode(names.len(), n_on, any_solo)
+}
+
+/// Runs the tuning estimate on the pitched stems (mono, at the stem rate).
+fn measure_tuning(stems: &[Track]) -> shredlab_library::TuningData {
+    use shredlab_tuning::{StemAudio, StemKind};
+    let kind = |name: &str| match name {
+        "bass" => Some(StemKind::Bass),
+        "guitar" => Some(StemKind::Guitar),
+        "piano" | "keys" => Some(StemKind::Keys),
+        "other" => Some(StemKind::Other),
+        "vocals" => Some(StemKind::Vocals),
+        _ => None,
+    };
+    let rate = stems.first().map_or(RATE, |t| t.sample_rate);
+    let mono: Vec<(StemKind, Vec<f32>)> = stems
+        .iter()
+        .filter_map(|t| {
+            let k = kind(&t.name)?;
+            let [l, r] = &t.channels;
+            let n = l.len().min(r.len());
+            let mut a = vec![0.0f32; n];
+            let mut b = vec![0.0f32; n];
+            l.read(0, &mut a);
+            r.read(0, &mut b);
+            for (x, y) in a.iter_mut().zip(&b) {
+                *x = 0.5 * (*x + *y);
+            }
+            Some((k, a))
+        })
+        .collect();
+    let input: Vec<StemAudio> = mono
+        .iter()
+        .map(|(kind, s)| StemAudio {
+            kind: *kind,
+            samples: s,
+        })
+        .collect();
+    match shredlab_tuning::estimate_song_tuning(&input, rate) {
+        Some(e) => shredlab_library::TuningData {
+            version: shredlab_tuning::VERSION,
+            offset_cents: e.offset_cents,
+            reference_hz: e.reference_hz,
+            confidence: e.confidence,
+            peaks: e.peak_count,
+            drifts: e.drifts,
+            segments: e
+                .segments
+                .iter()
+                .map(|s| shredlab_library::TuningSegment {
+                    start_s: s.start_s,
+                    offset_cents: s.offset_cents,
+                    weight: s.weight,
+                })
+                .collect(),
+        },
+        None => shredlab_library::TuningData {
+            version: shredlab_tuning::VERSION,
+            reference_hz: 440.0,
+            ..Default::default()
+        },
+    }
 }
 
 /// Snaps UI downbeats to grid beats within 1 ms so they compare equal.
@@ -522,6 +586,7 @@ impl Backend {
                 speed_percent: 100,
                 semitones: 0,
                 cents: 0,
+                rate_cents: 0,
                 loop_state: LoopState::default(),
                 click,
                 downbeats: None,
@@ -926,6 +991,7 @@ impl Backend {
         self.apply_gains(st);
         e.set_speed(st.speed_percent as f64 / 100.0);
         e.set_pitch(st.semitones as f64 + st.cents as f64 / 100.0);
+        e.set_rate_correction(st.rate_cents);
         e.set_loop(st.loop_state.range());
         self.apply_click(st);
     }
@@ -1117,6 +1183,16 @@ impl Backend {
             loaded_strength: StrengthSetting::default(),
         };
         song.check_alignment();
+        let need_tuning = song
+            .meta
+            .tuning
+            .as_ref()
+            .is_none_or(|t| t.version < shredlab_tuning::VERSION);
+        let tuning_stems = if need_tuning {
+            song.stems.clone()
+        } else {
+            None
+        };
         let mut info = song.info();
         let generation = {
             let mut st = lock(&self.st);
@@ -1139,6 +1215,7 @@ impl Backend {
             st.loop_state = LoopState::default();
             st.downbeats = None;
             st.last_separation_error = None;
+            st.rate_cents = 0;
             self.apply_all(&st);
             info.strength_job = self.start_strength_locked(&mut st);
             st.generation
@@ -1163,6 +1240,9 @@ impl Backend {
                 "pending"
             },
         );
+        if let Some(stems) = tuning_stems {
+            self.spawn_tuning(song_id.clone(), stems, generation);
+        }
         if need_beats {
             self.spawn_beats(song_id, mix, generation);
         }
@@ -1426,7 +1506,7 @@ impl Backend {
                         song.meta.stem_sets = m.stem_sets;
                         song.meta.original = m.original;
                     }
-                    song.stems = Some(tracks);
+                    song.stems = Some(tracks.clone());
                     song.stems_info = Some(info);
                     song.loaded_strength = StrengthSetting::default();
                     if song.original.is_none() && song.mix_is_original {
@@ -1443,6 +1523,8 @@ impl Backend {
                 // strength to it (no-op at Natural).
                 self.start_strength_locked(&mut st);
                 drop(st);
+                // New stems: measure the tuning again on them.
+                self.spawn_tuning(song_id.clone(), tracks, generation);
                 self.emit(
                     "separation-done",
                     &SeparationDone {
@@ -1654,6 +1736,51 @@ impl Backend {
         lock(&self.st).last_separation_error.clone()
     }
 
+    // ------------------------------------------------------------ tuning
+
+    /// Measures the song's offset from A440 on its stems, saves it and
+    /// emits `tuning-ready`. A song that can't be measured still gets a
+    /// result (zero confidence), so the job doesn't rerun on every open.
+    fn spawn_tuning(self: &Arc<Self>, song_id: String, stems: Vec<Track>, generation: u64) {
+        let b = self.clone();
+        spawn("shredlab-tuning", move || {
+            let t0 = Instant::now();
+            let data = measure_tuning(&stems);
+            log!(
+                "tuning for {song_id}: {:+.1} cents (A{:.1}), confidence {:.2}, {} peaks{} in {:.2}s",
+                data.offset_cents,
+                data.reference_hz,
+                data.confidence,
+                data.peaks,
+                if data.drifts { ", drifts" } else { "" },
+                t0.elapsed().as_secs_f64()
+            );
+            if let Err(e) = b
+                .library
+                .update(&song_id, |m| m.tuning = Some(data.clone()))
+            {
+                log!("cannot save tuning: {e}");
+            }
+            let mut st = lock(&b.st);
+            let current = st.generation == generation
+                && st.song.as_ref().is_some_and(|s| s.meta.song_id == song_id);
+            if !current {
+                return;
+            }
+            if let Some(s) = st.song.as_mut() {
+                s.meta.tuning = Some(data.clone());
+            }
+            drop(st);
+            b.emit(
+                "tuning-ready",
+                &TuningReady {
+                    song_id,
+                    tuning: data,
+                },
+            );
+        });
+    }
+
     // ------------------------------------------------------------ beats
 
     fn spawn_beats(self: &Arc<Self>, song_id: String, mix: Mix, generation: u64) {
@@ -1820,6 +1947,27 @@ impl Backend {
         }
     }
 
+    pub fn set_rate_correction(&self, cents: i32) {
+        let mut st = lock(&self.st);
+        st.rate_cents = cents.clamp(-audio::MAX_RATE_CENTS, audio::MAX_RATE_CENTS);
+        if let Some(e) = &self.engine {
+            e.set_rate_correction(st.rate_cents);
+        }
+    }
+
+    /// Plays a reference tone at `hz` (absolute pitch; never exported).
+    pub fn play_tone(&self, hz: f32, sound: audio::ToneSound) {
+        if let Some(e) = &self.engine {
+            e.play_tone(hz, sound);
+        }
+    }
+
+    pub fn stop_tone(&self) {
+        if let Some(e) = &self.engine {
+            e.stop_tone();
+        }
+    }
+
     pub fn set_loop(&self, loop_state: LoopState) {
         let mut st = lock(&self.st);
         st.loop_state = loop_state;
@@ -1942,7 +2090,9 @@ impl Backend {
             click,
             start: req.start_sec.filter(|s| s.is_finite()).unwrap_or(0.0),
             end: req.end_sec.filter(|e| e.is_finite()),
-            rate_cents: 0,
+            rate_cents: req
+                .rate_cents
+                .clamp(-audio::MAX_RATE_CENTS, audio::MAX_RATE_CENTS),
             // "What you hear": the refined parts as in playback, each
             // stereo exception following the exported row's switch.
             refine: if song.stems.is_some() {
@@ -2709,6 +2859,7 @@ mod tests {
             count_in: false,
             start_sec: None,
             end_sec: None,
+            rate_cents: 0,
         })
         .unwrap();
         let t0 = Instant::now();
@@ -2747,6 +2898,7 @@ mod tests {
             count_in,
             start_sec: start,
             end_sec: end,
+            rate_cents: 0,
         }
     }
 
