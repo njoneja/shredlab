@@ -14,6 +14,10 @@ import {
   tunerTarget,
   formatPitch,
   fromSaved,
+  guessCandidates,
+  guessEvidence,
+  guessHeadline,
+  guessPhrase,
   medianSmooth,
   offsetText,
   toneHz,
@@ -99,6 +103,8 @@ test("tuning names", () => {
   assert.equal(tuningName({ ...DEFAULT_TUNING, refHz: 435.5 }), "Standard, A435.5");
   assert.equal(songTuningName(0), "Standard");
   assert.equal(songTuningName(-1), "Eb standard (−1)");
+  assert.equal(songTuningName(-3), "C# standard (−3)");
+  assert.equal(songTuningName(-4), "C standard (−4)");
 });
 
 test("sanitize clamps and falls back", () => {
@@ -219,4 +225,29 @@ test("live tuner: a string counts as in tune after holding for a second", () => 
   // No reading or no string: no hold.
   assert.deepEqual(holdStep(h.hold, null, 0, 1300), { hold: null, settled: null });
   assert.deepEqual(holdStep(h.hold, 2, null, 1300), { hold: null, settled: null });
+});
+
+test("tuning guess: candidates, headline and evidence", () => {
+  const labels = (b: number) => guessCandidates(b).map((c) => `${c.label} (${c.semitones})`);
+  assert.deepEqual(labels(0), ["Standard (0)"]);
+  assert.deepEqual(labels(-1), ["Eb standard (-1)"]);
+  assert.deepEqual(labels(-2), ["Drop D (0)", "D standard (-2)"]);
+  assert.deepEqual(labels(-3), ["Drop C# (-1)", "C# standard (-3)"]);
+  assert.deepEqual(labels(-4), ["Drop C (-2)", "C standard (-4)"]);
+  assert.deepEqual(labels(-5), ["Five-string standard (0)", "Drop B (-3)", "B standard (-5)"]);
+
+  assert.equal(guessPhrase("Drop D"), "drop D");
+  assert.equal(guessPhrase("Eb standard"), "Eb standard");
+  assert.equal(guessPhrase("Five-string standard"), "five-string standard");
+
+  const g = (lowest_midi: number, likely: boolean) => ({ lowest_midi, below_standard: lowest_midi - 28, likely });
+  assert.equal(guessHeadline(g(27, true)), "Likely Eb standard");
+  assert.equal(guessHeadline(g(26, false)), "Possibly drop D or D standard");
+  assert.equal(guessHeadline(g(28, true)), "Likely standard");
+  assert.equal(guessHeadline(g(23, false)), "Possibly drop B, B standard or a five-string bass in standard");
+
+  assert.equal(guessEvidence(g(27, true)), "the bass keeps landing on Eb1");
+  assert.equal(guessEvidence(g(26, false)), "the bass goes down to D1");
+  const note = (m: number) => guessEvidence(g(m, false)).split(" ").pop();
+  assert.deepEqual([28, 25, 24, 23].map(note), ["E1", "C#1", "C1", "B0"]);
 });

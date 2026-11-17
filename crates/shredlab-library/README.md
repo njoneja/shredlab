@@ -51,7 +51,9 @@ else the file name), duration and decoded format, then:
 - `original`: sample rate, length, scale and file name of the cached original.
 - `beats`: the beat grid (beats, downbeats, tempo, beats per bar).
 - `tuning`: the measured offset from A440 (cents and the implied A4),
-  confidence, peak count, the drift flag and per-segment offsets, with the
+  confidence, peak count, the drift flag, per-segment offsets and an
+  optional `guess` of the song's tuning (lowest steady bass note, semitones
+  below standard bass, likely or only possible), with the
   version of the algorithm that produced it. Optional; written by the app's
   tuning job, which recomputes it when the version is older.
 - `refine`: `RefineParams` per stem name, only for refined stems.

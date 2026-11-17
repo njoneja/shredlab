@@ -204,6 +204,8 @@ class AppState {
   myTuning = $state.raw<MyTuning>({ ...DEFAULT_TUNING });
   /** "Song is in": semitones the song sits below or above its written pitch. */
   songSemitones = $state(0);
+  /** The tuning guess was used or dismissed for this song (saved with it). */
+  guessAnswered = $state(false);
   /** The Shift by choice. */
   matchMethod = $state<MatchMethod>("pitch");
   /** The song's match (saved with the song); it is in effect while `matchActive`. */
@@ -683,6 +685,7 @@ class AppState {
     this.tuningSaved = !!ts;
     this.myTuning = ts ? fromSaved(ts.my_tuning) : readLastTuning();
     this.songSemitones = clamp(Math.round(Number(ts?.song_semitones) || 0), -SHIFT_MAX, SHIFT_MAX);
+    this.guessAnswered = ts?.guess_answered === true;
     const m = ts?.match;
     this.match = m && (m.method === "pitch" || m.method === "rate") ? { method: m.method, cents: Math.round(Number(m.cents) || 0) } : null;
     this.matchMethod = this.match?.method ?? "pitch";
@@ -694,7 +697,14 @@ class AppState {
   private settingsSnapshot(): SongSettings {
     return {
       ...(this.tuningSaved
-        ? { tuning: { my_tuning: toSaved(this.myTuning), song_semitones: this.songSemitones, match: this.match ? { ...this.match } : null } }
+        ? {
+            tuning: {
+              my_tuning: toSaved(this.myTuning),
+              song_semitones: this.songSemitones,
+              match: this.match ? { ...this.match } : null,
+              guess_answered: this.guessAnswered,
+            },
+          }
         : {}),
       version: 1,
       loop: $state.snapshot(this.loop),
@@ -1117,6 +1127,14 @@ class AppState {
     this.tuningSaved = true;
     this.saveSettings();
     if (this.matchActive) await this.rematch();
+  }
+
+  /** Answers the tuning guess: "Use" sets "Song is in" to `semitones`, "Not this" passes null. */
+  async answerGuess(semitones: number | null) {
+    this.guessAnswered = true;
+    this.tuningSaved = true;
+    if (semitones == null) this.saveSettings();
+    else await this.setSongSemitones(semitones);
   }
 
   /** "Tune to the song": My tuning takes the song's reference and semitones; the audio is untouched. */

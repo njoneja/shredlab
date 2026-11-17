@@ -104,6 +104,12 @@ press `T`, to open the Tuning panel.
   flat). Only the cents are measured: a song in Eb standard sounds in
   tune to the measurement, so if the song is in a lowered tuning, set it
   under **Song is in** before shifting.
+- The panel may suggest the song's tuning from the lowest notes the bass
+  plays, as **Likely** or **Possibly** (for example "Likely Eb standard").
+  It is a guess: **Use** sets **Song is in**, **Not this** dismisses it,
+  and nothing changes until you choose. A drop tuning and the lowered
+  standard reach the same low note (drop D and D standard both go down to
+  D), so both are offered.
 - **My tuning** is your instrument and how it is tuned: preset, shift in
   semitones and the reference A. It is saved with each song.
 - **Shift song to my tuning** moves the song to your tuning, so you don't

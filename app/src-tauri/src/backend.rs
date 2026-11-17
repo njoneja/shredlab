@@ -414,6 +414,17 @@ fn measure_tuning(stems: &[Track]) -> shredlab_library::TuningData {
         .collect();
     match shredlab_tuning::estimate_song_tuning(&input, rate) {
         Some(e) => shredlab_library::TuningData {
+            guess: if e.is_reliable() {
+                shredlab_tuning::guess_song_tuning(&input, rate, e.offset_cents).map(|g| {
+                    shredlab_library::TuningGuessData {
+                        lowest_midi: g.lowest_midi,
+                        below_standard: g.below_standard,
+                        likely: g.likely,
+                    }
+                })
+            } else {
+                None
+            },
             version: shredlab_tuning::VERSION,
             offset_cents: e.offset_cents,
             reference_hz: e.reference_hz,
@@ -1765,12 +1776,18 @@ impl Backend {
             let t0 = Instant::now();
             let data = measure_tuning(&stems);
             log!(
-                "tuning for {song_id}: {:+.1} cents (A{:.1}), confidence {:.2}, {} peaks{} in {:.2}s",
+                "tuning for {song_id}: {:+.1} cents (A{:.1}), confidence {:.2}, {} peaks{}{} in {:.2}s",
                 data.offset_cents,
                 data.reference_hz,
                 data.confidence,
                 data.peaks,
                 if data.drifts { ", drifts" } else { "" },
+                data.guess.map_or(String::new(), |g| format!(
+                    ", guess {:+} (lowest {}{})",
+                    g.below_standard,
+                    g.lowest_midi,
+                    if g.likely { ", likely" } else { "" }
+                )),
                 t0.elapsed().as_secs_f64()
             );
             // In memory first, so a settings save of the open song between

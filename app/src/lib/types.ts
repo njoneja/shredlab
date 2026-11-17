@@ -67,6 +67,8 @@ export interface TuningData {
   drifts: boolean;
   /** Per-segment offsets (for the drift curve). */
   segments: { start_s: number; offset_cents: number; weight: number }[];
+  /** Guess of the song's tuning from the lowest bass notes; only with a reliable offset. */
+  guess?: { lowest_midi: number; below_standard: number; likely: boolean } | null;
 }
 
 export interface TuningReady {
@@ -353,6 +355,8 @@ export interface SongTuningSettings {
   song_semitones: number;
   /** The active match, reapplied on open (recomputed from the current measurement). */
   match: { method: MatchMethod; cents: number } | null;
+  /** The tuning guess was used or dismissed; the panel stops suggesting it. Missing = false. */
+  guess_answered?: boolean;
 }
 
 /** How a match shifts the song: through Pitch, or by changing the playback rate. */

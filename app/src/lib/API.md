@@ -80,7 +80,13 @@ TuningData {
   confidence: number,       // 0..1 (resultant length of the weighted pitch vectors)
   peaks: number,            // spectral peaks the estimate used
   drifts: boolean,          // the tuning moves over the song (tape transfers, varispeed)
-  segments: { start_s: number, offset_cents: number, weight: number }[]  // per 10 s, for the drift curve
+  segments: { start_s: number, offset_cents: number, weight: number }[],  // per 10 s, for the drift curve
+  guess?: {                 // the song's tuning guessed from the lowest bass notes; null or missing
+                            // when the offset is not reliable or the bass gives no answer
+    lowest_midi: number,    // lowest steadily played bass note, offset removed (E1 = 28)
+    below_standard: number, // lowest_midi − 28, 0..−5 (−1 = Eb standard, −2 = drop D or D standard)
+    likely: boolean,        // the bass keeps landing there ("Likely"), else only reaches it ("Possibly")
+  } | null
 }
   // The UI treats confidence < 0.3 or fewer than 200 peaks as "couldn't
   // measure", |offset| <= 3 without drift as in tune (lib/tuning.ts).

@@ -1,13 +1,16 @@
 # shredlab-tuning
 
 Tuning analysis: how far a song is from A440, measured from its separated
-stems, and the live tuner's pitch detector. Pure DSP: mono `f32` samples
-in, a `TuningEstimate` or a stream of `LiveReading`s out.
+stems; a guess at how the song is tuned (Eb standard, drop D) from its
+lowest bass notes; and the live tuner's pitch detector. Pure DSP: mono
+`f32` samples in, a `TuningEstimate`, a `TuningGuess` or a stream of
+`LiveReading`s out.
 
 ## Boundaries
 
-Owns the offline song estimator (`estimate_song_tuning`) and the live
-pitch detector (`LiveDetector`). It does not decode or downmix stems, pick
+Owns the offline song estimator (`estimate_song_tuning`), the tuning
+guess (`guess_song_tuning`) and the live pitch detector (`LiveDetector`).
+It does not turn a guess into candidate tunings or words; the UI does. It does not decode or downmix stems, pick
 which stems exist, run as a job, store the result in `song.json`, or turn
 the offset into a Pitch setting; those belong to the app and
 `shredlab-library`. For the live tuner it does not open the input device,
@@ -27,10 +30,12 @@ map them to their own storage types.
 - `src/spectrum.rs`: Hann-windowed spectra, peak picking with interpolation,
   and the non-octave harmonic filter.
 - `src/cents.rs`: cents conversion, folding and the weighted circular mean.
+- `src/guess.rs`: the tuning guess: bass note shares and the rules.
 - `src/live.rs`: the live detector: high-pass, McLeod Pitch Method,
   octave guard, the reading median and the attack hold.
 - `src/tests.rs`: estimator tests on synthesized stems.
 - `src/live_tests.rs`: live detector tests on synthesized plucks.
+- `src/guess_tests.rs`: tuning guess tests on synthesized bass lines.
 
 ## How it works
 
@@ -83,6 +88,41 @@ fewer than 200 peaks were used; the app shows "can't measure" then. On
 real songs the confidence is typically 0.95 or more, and white noise
 scores about 0.4 to 0.5. The estimator returns `None` only when there were
 no peaks at all.
+
+## Tuning guess
+
+The offset only gives cents within ±50: a song in Eb standard at A440 and
+a song in standard 100 cents flat are the same audio. `guess_song_tuning`
+suggests the semitones from the lowest notes the bass plays, given the
+measured offset. It is a suggestion; the user confirms it.
+
+1. The bass stem goes through a `LiveDetector` (low note 30 Hz). Each
+   reported pitch becomes a MIDI note after removing the offset; readings
+   more than 35 cents from a semitone (slides, bends) are dropped, and a
+   note counts once it holds for three readings in a row. The result is
+   each note's share of the steady pitch time. A bass with less than 10
+   seconds of steady pitch gives no guess.
+2. The lowest note from B0 to Eb1 (five semitones under E1) that holds at
+   least 5 % of the time, at least half as much as E1 and at least 0.3 of
+   its upper octave is the lowest played note. The E1 condition keeps a
+   few low passing notes (a five-string, a drop for one riff) from
+   outvoting a song that sits on E1; the octave condition drops notes the
+   detector read an octave low.
+3. Without such a note, a song whose bass plays E1 at least 5 % of the
+   time is standard; otherwise there is no guess (the bass never reaches
+   its low string, so the audio can't tell).
+4. `likely` (strong evidence) only for standard (E1 at least 10 %) and a
+   half step down (Eb1 at least 10 % and E1 at most a quarter of it, or
+   Eb1 at least 5 % and the guitar stem agreeing: its Eb2 at least 5 %
+   and its E2 at most a quarter of that). Lower notes stay weak: D1 can
+   be drop D or D standard, B0 a five-string in standard, and the audio
+   doesn't tell them apart.
+
+The guitar stem never guesses alone: it often holds bass bleed, which
+reads as guitar notes under E2. Synth bass lines that go under E1 give
+weak guesses that are wrong; the UI's wording ("Possibly") and the
+user's confirmation cover that. On real songs a guess takes 1 to 2 s in a
+release build.
 
 ## Live detector
 
@@ -143,8 +183,9 @@ do for the ear.
 ## Invariants and gotchas
 
 - `VERSION` is stored with each result and older results are recomputed.
-  Bump it with any change that can move the numbers (window, thresholds,
-  weights, filters).
+  Bump it with any change that can move the numbers or the guess (window,
+  thresholds, weights, filters, guess rules, and changes to the live
+  detector, which the guess runs on).
 - Offsets are circular: −50 and +50 cents are the same tuning. Average
   them with `Circular`, never arithmetically.
 - The peak interpolation exponent is tied to the Hann window. A different
@@ -157,7 +198,9 @@ do for the ear.
 - `LiveDetector::push` must not allocate: all buffers are sized in
   `new`, and readings go into the caller's `Vec`. It runs on the audio
   worker thread.
-- The live detector is not versioned: its readings are not stored.
+- The live detector has no version of its own: its readings are not
+  stored, but the tuning guess uses it, so a change to it bumps
+  `VERSION`.
 - The NSDF search stops at half the window, and the window choice assumes
   the doubled period of the lowest target note still fits there (so the
   octave guard can check it). Keep that when changing the window lengths.
@@ -171,9 +214,10 @@ cargo test -p shredlab-tuning --release -- --nocapture live_tests
 cargo run --release -p shredlab-tuning --example measure_library -- <library root>
 ```
 
-The `measure_library` example runs the estimate on the stems of every song
-in a ShredLab library (the `library` folder in the app's data folder) and
-prints the offset, confidence, drift and segment offsets per song. Use it
+The `measure_library` example runs the estimate and the guess on the stems
+of every song in a ShredLab library (the `library` folder in the app's
+data folder) and prints the offset, confidence, drift, guess and segment
+offsets per song. Use it
 to check a change on real recordings before bumping `VERSION`. With
 `SHIFT_CENTS=-40,-25,10` set, it also resamples every song's stems by
 those amounts and prints the error of the measured change for each.
@@ -196,13 +240,23 @@ plucks (never another octave), silence, white noise and a tone under the
 quiet gate (no pitch), window sizes per rate, chunking, the median
 restarting after a gap, and plucks with a noise burst that start 40 cents
 sharp (from silence and re-plucked while ringing): no reading more than 2
-cents off, and each note shown within 0.4 s. `per_hop_cost` prints the time per hop and, in
-release builds only, fails above a tenth of the hop's duration.
+cents off, and each note shown within 0.4 s. `per_hop_cost` prints the
+time per hop and, in release builds only, fails above a tenth of the
+hop's duration.
+
+The guess tests synthesize bass lines (0.8 s plucked notes cycling
+through a pattern) and cover Eb standard (likely, with an offset),
+standard (likely, also with a few D1s under E1), drop D and drop C#
+(possible only), a bass that never reaches its low string, too little
+bass, a low note much rarer than its octave (no guess), the guitar
+backing a weak Eb guess, and the guitar alone (no guess).
 
 ## Common changes
 
 - Tuning a threshold or weight: change the constant in `src/song.rs` or
   `src/spectrum.rs`, run the tests, and bump `VERSION`.
+- Changing a guess rule: change the constant in `src/guess.rs`, run the
+  guess tests and `measure_library` on real songs, and bump `VERSION`.
 - Adding a stem kind: add it to `StemKind` with a weight and lowest
   frequency; decide whether it is a primary stem or a fallback like vocals
   in `estimate_song_tuning`.

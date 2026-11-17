@@ -26,6 +26,10 @@
     formatCents,
     formatHz,
     formatPitch,
+    guessCandidates,
+    guessEvidence,
+    guessHeadline,
+    guessPhrase,
     instrument,
     medianSmooth,
     noteLabel,
@@ -55,6 +59,15 @@
   /** The song's tuning written the way "Tune to the song" would set it. */
   const songAsTuning = $derived(t ? { ...my, refHz: songRefHz(t.offset_cents), shift: app.songSemitones } : null);
   const drift = $derived(t?.drifts ? driftSummary(t.segments) : null);
+  /** The guess of the song's tuning, offered until answered; not when it would change nothing. */
+  const guess = $derived(t?.guess ?? null);
+  const guessOptions = $derived(guess ? guessCandidates(guess.below_standard) : []);
+  const showGuess = $derived(
+    guess != null &&
+      app.tuningUsable &&
+      !app.guessAnswered &&
+      !(guessOptions.length === 1 && guessOptions[0].semitones === app.songSemitones),
+  );
   const semitoneOptions = Array.from({ length: 2 * SHIFT_MAX + 1 }, (_, i) => SHIFT_MAX - i);
   const customNotes = Array.from({ length: CUSTOM_NOTE_MAX - CUSTOM_NOTE_MIN + 1 }, (_, i) => CUSTOM_NOTE_MIN + i);
 
@@ -244,6 +257,17 @@
                 {Math.abs(Math.round(t.offset_cents))} cents {t.offset_cents < 0 ? "flat" : "sharp"} of A440, steady through the song.
               {/if}
             </p>
+            {#if showGuess && guess}
+              <div class="guess">
+                <p><strong>{guessHeadline(guess)}</strong>: {guessEvidence(guess)}.</p>
+                <div class="row wrap">
+                  {#each guessOptions as c (c.semitones)}
+                    <button class="btn small" onclick={() => app.answerGuess(c.semitones)}>Use {guessPhrase(c.label)}</button>
+                  {/each}
+                  <button class="btn ghost small" onclick={() => app.answerGuess(null)}>Not this</button>
+                </div>
+              </div>
+            {/if}
             <label class="row song-in">
               <span class="muted">Song is in</span>
               <select class="field small" value={app.songSemitones} onchange={(e) => app.setSongSemitones(Number(e.currentTarget.value))}>
@@ -252,7 +276,9 @@
             </label>
             {#if !app.matched}
               <p class="muted song-in-hint">
-                {#if app.songSemitones === 0}
+                {#if guess}
+                  The cents are measured. The tuning is a guess from the lowest bass notes: check it before shifting.
+                {:else if app.songSemitones === 0}
                   The cents are measured, the tuning isn't. If the song is in a lowered tuning (Eb, D…), set it here before shifting.
                 {:else}
                   The cents are measured; the tuning is your choice. Check it before shifting.
@@ -595,6 +621,22 @@
   }
   .song-in-hint {
     margin-top: -4px;
+  }
+  /* A suggestion, not a measurement: dashed until answered. */
+  .guess {
+    border: 1px dashed var(--control-border);
+    border-radius: var(--radius-sm);
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    font-size: 12.5px;
+  }
+  .guess strong {
+    font-weight: 600;
+  }
+  .row.wrap {
+    flex-wrap: wrap;
   }
   .field {
     height: 28px;

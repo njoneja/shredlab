@@ -292,8 +292,83 @@ export function driftSummary(segments: TuningSegment[]): { kind: "from" | "betwe
 /** Name for the song's own semitone setting ("Song is in"). */
 export function songTuningName(semitones: number): string {
   if (semitones === 0) return "Standard";
-  const n = `${noteName(64 + semitones, semitones < 0)} standard`;
+  // Lowered tunings use flats (Eb, Ab), except C# standard, which players
+  // call that rather than Db standard.
+  const note = semitones === -3 ? "C#" : noteName(64 + semitones, semitones < 0);
+  const n = `${note} standard`;
   return `${n} (${semitones > 0 ? "+" : "−"}${Math.abs(semitones)})`;
+}
+
+/** The guess of the song's tuning from its lowest bass notes (`TuningData.guess`). */
+export interface TuningGuess {
+  /** Lowest steadily played bass note, offset removed; E1 = 28. */
+  lowest_midi: number;
+  /** `lowest_midi` − 28, 0..−5. */
+  below_standard: number;
+  likely: boolean;
+}
+
+export interface GuessCandidate {
+  /** The "Song is in" value. */
+  semitones: number;
+  label: string;
+}
+
+/** Candidates per semitones below standard bass, most common first. */
+const GUESS_CANDIDATES: GuessCandidate[][] = [
+  [{ semitones: 0, label: "Standard" }],
+  [{ semitones: -1, label: "Eb standard" }],
+  [
+    { semitones: 0, label: "Drop D" },
+    { semitones: -2, label: "D standard" },
+  ],
+  [
+    { semitones: -1, label: "Drop C#" },
+    { semitones: -3, label: "C# standard" },
+  ],
+  [
+    { semitones: -2, label: "Drop C" },
+    { semitones: -4, label: "C standard" },
+  ],
+  [
+    { semitones: 0, label: "Five-string standard" },
+    { semitones: -3, label: "Drop B" },
+    { semitones: -5, label: "B standard" },
+  ],
+];
+
+/**
+ * The "Song is in" values a lowest bass note `below` semitones under E1 fits,
+ * most common first. A drop tuning and the lowered standard reach the same
+ * low note, so both are offered.
+ */
+export function guessCandidates(below: number): GuessCandidate[] {
+  const i = Math.min(5, Math.max(0, -Math.round(below)));
+  return GUESS_CANDIDATES[i].map((c) => ({ ...c }));
+}
+
+/** A candidate's name inside a sentence: "drop D", "Eb standard". */
+export function guessPhrase(label: string): string {
+  return /^(Drop|Standard|Five)/.test(label) ? label[0].toLowerCase() + label.slice(1) : label;
+}
+
+/** "Likely Eb standard", "Possibly drop D or D standard". */
+export function guessHeadline(g: TuningGuess): string {
+  const cands = guessCandidates(g.below_standard);
+  const five = cands.filter((c) => c.label.startsWith("Five"));
+  const names = cands.filter((c) => !c.label.startsWith("Five")).map((c) => guessPhrase(c.label));
+  if (five.length) names.push("a five-string bass in standard");
+  const list = names.length < 2 ? names.join("") : `${names.slice(0, -1).join(", ")} or ${names[names.length - 1]}`;
+  return `${g.likely ? "Likely" : "Possibly"} ${list}`;
+}
+
+const GUESS_NOTES = ["C", "C#", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B"];
+
+/** Why: "the bass keeps landing on Eb1" (likely) or "the bass goes down to D1". */
+export function guessEvidence(g: TuningGuess): string {
+  const midi = Math.round(g.lowest_midi);
+  const note = `${GUESS_NOTES[((midi % 12) + 12) % 12]}${Math.floor(midi / 12) - 1}`;
+  return g.likely ? `the bass keeps landing on ${note}` : `the bass goes down to ${note}`;
 }
 
 /** The shift that makes the song match `t`, in whole cents. */

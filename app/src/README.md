@@ -86,10 +86,12 @@ in the backend; the store keeps the last `AppSettingsInfo` it returned.
 and reports it in `SongInfo.tuning` or a later `tuning-ready` event; until
 then the Tuning button shows a spinner. `SongSettings.tuning` holds the
 player's tuning for the song (`my_tuning`, snake_case like the rest of the
-blob), the song's own semitones ("Song is in") and the match (`method`
-`"pitch"` or `"rate"`, and its cents), written only once the user changes
-one of them for that song. A song without it starts from the last tuning
-set on any song, which the UI keeps in localStorage (`shredlab.lastTuning`;
+blob), the song's own semitones ("Song is in"), the match (`method`
+`"pitch"` or `"rate"`, and its cents) and `guess_answered` (the user used
+or dismissed the suggested tuning, `TuningData.guess`; the panel offers it
+until then and never applies it by itself), written only once the user
+changes one of them for that song. A song without it starts from the last
+tuning set on any song, which the UI keeps in localStorage (`shredlab.lastTuning`;
 it is a starting point only, so losing it costs nothing). The pitch method
 sets Pitch, and changing Pitch by hand ends the match; the rate method
 sends `set_rate_correction` and leaves Pitch alone. A saved match is

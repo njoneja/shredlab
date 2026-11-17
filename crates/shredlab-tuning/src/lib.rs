@@ -7,21 +7,26 @@
 //! separated stems: [`estimate_song_tuning`]. Pure DSP: mono `f32` samples
 //! in, a [`TuningEstimate`] out; no paths, no devices.
 //!
+//! Guesses how the song is tuned (Eb standard, drop D…) from the lowest
+//! notes of its bass: [`guess_song_tuning`].
+//!
 //! Also holds the live tuner's pitch detector, [`LiveDetector`]: samples
 //! from an input stream in, a [`LiveReading`] per hop out.
 
 mod cents;
+mod guess;
 mod live;
 mod song;
 mod spectrum;
 
+pub use guess::{guess_song_tuning, TuningGuess, BASS_STANDARD_LOW, GUITAR_STANDARD_LOW};
 pub use live::{LiveDetector, LiveReading, LEVEL_FLOOR_DB, MIN_CLARITY, QUIET_DB};
 pub use song::estimate_song_tuning;
 
-/// Algorithm version of [`estimate_song_tuning`]. Stored results with an
-/// older version should be recomputed. Bump it whenever a change can move
-/// the measured numbers.
-pub const VERSION: u32 = 2;
+/// Algorithm version of [`estimate_song_tuning`] and [`guess_song_tuning`].
+/// Stored results with an older version should be recomputed. Bump it
+/// whenever a change can move the measured numbers or the guess.
+pub const VERSION: u32 = 3;
 
 /// Below this confidence (agreement between blocks) the estimate is not
 /// usable.
@@ -103,7 +108,7 @@ pub struct TuningEstimate {
     /// fewer than four blocks have pitched content.
     pub confidence: f32,
     /// True when the segment offsets spread by more than 8 cents after a
-    /// 3-segment moving median.
+    /// 5-segment moving median.
     pub drifts: bool,
     /// Usable segments in time order. Segments with too few peaks or little
     /// pitched content (fades, breaks) are left out, so there can be gaps.
@@ -121,6 +126,8 @@ impl TuningEstimate {
     }
 }
 
+#[cfg(test)]
+mod guess_tests;
 #[cfg(test)]
 mod live_tests;
 #[cfg(test)]

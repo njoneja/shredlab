@@ -222,6 +222,21 @@ pub struct TuningData {
     /// Per-segment offsets, for the drift curve.
     #[serde(default)]
     pub segments: Vec<TuningSegment>,
+    /// Guess of the song's tuning from the lowest bass notes; only when the
+    /// offset is reliable.
+    #[serde(default)]
+    pub guess: Option<TuningGuessData>,
+}
+
+/// [`TuningData::guess`]: the lowest steadily played bass note (offset
+/// removed, E1 = 28) and how far below standard bass that is.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+pub struct TuningGuessData {
+    pub lowest_midi: i32,
+    /// `lowest_midi - 28`, 0..=-5.
+    pub below_standard: i32,
+    /// Enough evidence to say "likely" rather than "possibly".
+    pub likely: bool,
 }
 
 /// One segment of [`TuningData::segments`].
@@ -1154,6 +1169,11 @@ mod tests {
                 offset_cents: -18.0,
                 weight: 1.0,
             }],
+            guess: Some(TuningGuessData {
+                lowest_midi: 27,
+                below_standard: -1,
+                likely: true,
+            }),
         });
         lib.save(&mut m).unwrap();
         let back = lib.load("abc").unwrap().unwrap();

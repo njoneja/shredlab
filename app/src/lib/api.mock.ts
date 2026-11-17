@@ -267,8 +267,9 @@ function blip(accent: boolean, soft = false) {
  * A fake tuning measurement. The demo songs each show one state of the
  * Tuning button: Houses Of The Holy drifts, Mr. Crowley is 18 cents flat,
  * Green-Tinted Sixties Mind is in tune, Decadence Dance is in Eb standard
- * and 4 cents flat (set "Song is in" to see it match), The Ocean can't be
- * measured. Other files are 18 cents flat. From the console,
+ * and 4 cents flat (the guess says likely Eb standard), The Ocean can't be
+ * measured. Green-Tinted Sixties Mind's guess is possibly drop D or D
+ * standard. Other files are 18 cents flat. From the console,
  * `__mockTuning({ offset_cents: 7 })` replaces the open song's measurement.
  */
 function fakeTuning(path: string, duration: number): TuningData {
@@ -281,7 +282,7 @@ function fakeTuning(path: string, duration: number): TuningData {
       weight: 1,
     }));
   const make = (offset: number, extra: Partial<TuningData> = {}): TuningData => ({
-    version: 2,
+    version: 3,
     offset_cents: offset,
     reference_hz: 440 * Math.pow(2, offset / 1200),
     confidence: 0.98,
@@ -297,9 +298,9 @@ function fakeTuning(path: string, duration: number): TuningData {
       return make(Math.round(offset * 10) / 10, { drifts: true, segments, confidence: 0.93 });
     }
     case "Green-Tinted Sixties Mind":
-      return make(1.2);
+      return make(1.2, { guess: { lowest_midi: 26, below_standard: -2, likely: false } });
     case "Decadence Dance":
-      return make(-4.3);
+      return make(-4.3, { guess: { lowest_midi: 27, below_standard: -1, likely: true } });
     case "The Ocean":
       return make(9, { confidence: 0.18, peaks: 140 });
     default:
@@ -636,7 +637,8 @@ export const mockBackend: Backend = {
       bpmVal: d.bpm,
     };
     if (tuningTimer != null) clearTimeout(tuningTimer);
-    if (cached && !song.tuning) measureTuning(2500);
+    // An older algorithm version is measured again, as in the app.
+    if (cached && (song.tuning?.version ?? 0) < 3) measureTuning(2500);
     analysisStem = null;
     updateFieldTimer();
     // A saved strength is re-applied on open, like the app does.

@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 Navneet Joneja
 
-//! Runs the tuning estimate on every song in a ShredLab library and prints
-//! the result per song, for checking the estimator on real stems.
+//! Runs the tuning estimate and the tuning guess on every song in a
+//! ShredLab library and prints the result per song, for checking them on
+//! real stems.
 //!
 //! cargo run --release -p shredlab-tuning --example measure_library -- <library root>
 
-use shredlab_tuning::{estimate_song_tuning, StemAudio, StemKind};
+use shredlab_tuning::{estimate_song_tuning, guess_song_tuning, StemAudio, StemKind};
 
 fn main() {
     let root = std::env::args()
@@ -79,6 +80,17 @@ fn main() {
             None => println!("{:40} no estimate", meta.title),
         }
         if let Some(e) = estimate_song_tuning(&input, info.sample_rate) {
+            let t0 = std::time::Instant::now();
+            let guess = match guess_song_tuning(&input, info.sample_rate, e.offset_cents) {
+                Some(g) => format!(
+                    "{} {} (lowest {})",
+                    if g.likely { "likely" } else { "possibly" },
+                    g.below_standard,
+                    g.lowest_midi
+                ),
+                None => "no guess".into(),
+            };
+            println!("    guess: {guess}  {:.2}s", t0.elapsed().as_secs_f64());
             let v: Vec<String> = e
                 .segments
                 .iter()
