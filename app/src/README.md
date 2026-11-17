@@ -45,7 +45,7 @@ Components, all in `lib/`:
 
 - Frame: `Header.svelte` (with `OpenMenu.svelte` and `SettingsPopover.svelte`: model, quality, stem format, theme), `EmptyState.svelte` (start screen and recent songs), `SeparationBanner.svelte`.
 - Song view: `Waveform.svelte` (canvas: peaks, bars, loop handles, playhead), `Mixer.svelte` (stem rows; opens `RefinePanel.svelte`), `Transport.svelte` (play, master volume, click and count-in, speed, tuning and pitch; opens `MeterPanel.svelte`; `TuningButton.svelte` is its icon-only Tuning button, whose look shows the song's tuning state).
-- Dialogs: `ExportDialog.svelte`, `TuningPanel.svelte` (the song's tuning and the match, My tuning, and tabs for reference tones and `LiveTuner.svelte`), `ShortcutsHelp.svelte`, `AboutDialog.svelte`, `StorageDialog.svelte`, `RemoveRecentDialog.svelte`. Each has an open flag in `AppState`.
+- Dialogs: `ExportDialog.svelte`, `TuningPanel.svelte` (reference pitch, tuning with the guess, the Shift split button, and tabs for reference tones and `LiveTuner.svelte`), `ShortcutsHelp.svelte`, `AboutDialog.svelte`, `StorageDialog.svelte`, `RemoveRecentDialog.svelte`. Each has an open flag in `AppState`.
 - Small parts: `Icon.svelte` (inline SVG paths), `Wordmark.svelte`.
 
 ## How it works
@@ -87,12 +87,14 @@ and reports it in `SongInfo.tuning` or a later `tuning-ready` event; until
 then the Tuning button shows a spinner. `SongSettings.tuning` holds the
 player's tuning for the song (`my_tuning`, snake_case like the rest of the
 blob), the song's own semitones ("Song is in"), the match (`method`
-`"pitch"` or `"rate"`, and its cents) and `guess_answered` (the user used
-or dismissed the suggested tuning, `TuningData.guess`; the panel offers it
-until then and never applies it by itself), written only once the user
+`"pitch"` or `"rate"`, and its cents) and `guess_answered` (the user
+pressed Guess, which shows `TuningData.guess`; until then a likely guess
+that differs from "Song is in" puts a dot on the button, and the guess is
+never applied by itself), written only once the user
 changes one of them for that song. A song without it starts from the last
 tuning set on any song, which the UI keeps in localStorage (`shredlab.lastTuning`;
-it is a starting point only, so losing it costs nothing). The pitch method
+it is a starting point only, so losing it costs nothing); a song without a
+match starts with the last Shift method used (`shredlab.lastMatchMethod`). The pitch method
 sets Pitch, and changing Pitch by hand ends the match; the rate method
 sends `set_rate_correction` and leaves Pitch alone. A saved match is
 reapplied on open, recomputed from the current measurement, and a pitch

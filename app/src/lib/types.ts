@@ -355,7 +355,7 @@ export interface SongTuningSettings {
   song_semitones: number;
   /** The active match, reapplied on open (recomputed from the current measurement). */
   match: { method: MatchMethod; cents: number } | null;
-  /** The tuning guess was used or dismissed; the panel stops suggesting it. Missing = false. */
+  /** The Guess button was pressed; it stops hinting. Missing = false. */
   guess_answered?: boolean;
 }
 

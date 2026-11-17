@@ -18,6 +18,7 @@
     export: '<path d="M12 3v12"/><path d="M7 8l5-5 5 5"/><path d="M5 15v4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4"/>',
     chevron: '<path d="M6 9l6 6 6-6"/>',
     close: '<path d="M6 6l12 12M18 6L6 18"/>',
+    check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
     minus: '<path d="M5 12h14"/>',
     plus: '<path d="M12 5v14M5 12h14"/>',
     music: '<path d="M9 18V5l11-2v13"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="17.5" cy="16" r="2.5"/>',

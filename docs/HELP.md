@@ -100,24 +100,28 @@ being measured, with a spinner), amber with a dot when it is off A440, and
 blue when the song has been shifted to match your tuning. Click it, or
 press `T`, to open the Tuning panel.
 
-- **Song** shows the measured reference (for example A435.4, 18 cents
-  flat). Only the cents are measured: a song in Eb standard sounds in
-  tune to the measurement, so if the song is in a lowered tuning, set it
-  under **Song is in** before shifting.
-- The panel may suggest the song's tuning from the lowest notes the bass
+- **Reference pitch** compares the song's A, as measured (for example
+  A435.4, 18 cents flat), with yours. A line under it shows when the
+  tuning drifts during the song.
+- **Tuning** holds **My tuning**: your instrument, preset and shift in
+  semitones, saved with each song. Under it, **Song is in** says how the
+  song itself is tuned. Only the cents are measured: a song in Eb
+  standard sounds in tune to the measurement, so set it here before
+  shifting.
+- **Guess** suggests the song's tuning from the lowest notes the bass
   plays, as **Likely** or **Possibly** (for example "Likely Eb standard").
-  It is a guess: **Use** sets **Song is in**, **Not this** dismisses it,
-  and nothing changes until you choose. A drop tuning and the lowered
-  standard reach the same low note (drop D and D standard both go down to
-  D), so both are offered.
-- **My tuning** is your instrument and how it is tuned: preset, shift in
-  semitones and the reference A. It is saved with each song.
+  **Use** sets **Song is in**; nothing changes until you choose. A drop
+  tuning and the lowered standard reach the same low note (drop D and D
+  standard both go down to D), so both are offered. A dot on the button
+  means a likely guess differs from what **Song is in** says.
 - **Shift song to my tuning** moves the song to your tuning, so you don't
-  have to retune. **Pitch shift** keeps the tempo; **Playback rate**
-  changes pitch and tempo together, like a tape running faster or slower,
-  and sounds cleanest for small corrections. **Undo shift** puts it back.
-- **Tune to the song** sets your reference to the song's instead, for
-  tuning your instrument to the recording as it is.
+  have to retune. The arrow next to it picks how: **Pitch shift** (the
+  default) keeps the tempo; **Playback rate** changes pitch and tempo
+  together, like a tape running faster or slower, and sounds cleanest for
+  small corrections. The last choice is kept for new songs. **Undo shift**
+  puts it back.
+- **Tune to the song** sets your reference and shift to the song's
+  instead, for tuning your instrument to the recording as it is.
 - **Reference tones** play each string of your tuning. Number keys play a
   string while that tab is shown (1 is the highest string), and `Space`
   stops the tone.

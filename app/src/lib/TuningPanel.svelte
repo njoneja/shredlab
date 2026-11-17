@@ -2,9 +2,10 @@
 <!-- SPDX-FileCopyrightText: 2026 Navneet Joneja -->
 
 <script lang="ts">
-  // The Tuning panel: the song's measured tuning and the match to the
-  // player's tuning (left), reference tones for the strings or the live
-  // tuner (right). The song keeps playing while it is open, except while the
+  // The Tuning panel: the reference pitch (the song's measured A and the
+  // player's), the tuning (My tuning, "Song is in" with its Guess) and the
+  // Shift button with its method menu (left); reference tones for the
+  // strings or the live tuner (right). The song keeps playing while it is open, except while the
   // live tuner listens. Opened by the transport's Tuning button or T; Esc
   // closes it and stops any tone and the tuner.
   import { onMount, tick } from "svelte";
@@ -59,15 +60,53 @@
   /** The song's tuning written the way "Tune to the song" would set it. */
   const songAsTuning = $derived(t ? { ...my, refHz: songRefHz(t.offset_cents), shift: app.songSemitones } : null);
   const drift = $derived(t?.drifts ? driftSummary(t.segments) : null);
-  /** The guess of the song's tuning, offered until answered; not when it would change nothing. */
+  /** The guess of the song's tuning, shown when Guess is pressed. */
   const guess = $derived(t?.guess ?? null);
   const guessOptions = $derived(guess ? guessCandidates(guess.below_standard) : []);
-  const showGuess = $derived(
+  let guessOpen = $state(false);
+  /** A dot on Guess: a likely guess that differs from "Song is in", until Guess is pressed. */
+  const guessHint = $derived(
     guess != null &&
-      app.tuningUsable &&
+      guess.likely &&
       !app.guessAnswered &&
-      !(guessOptions.length === 1 && guessOptions[0].semitones === app.songSemitones),
+      !guessOptions.some((c) => c.semitones === app.songSemitones),
   );
+  function toggleGuess() {
+    guessOpen = !guessOpen;
+    if (guessOpen) app.seeGuess();
+  }
+  async function useGuess(semitones: number) {
+    guessOpen = false;
+    await app.setSongSemitones(semitones);
+  }
+
+  // ---- the Shift button's method menu ----
+  let menuOpen = $state(false);
+  let menuEl = $state<HTMLDivElement>();
+  let caretBtn = $state<HTMLButtonElement>();
+  async function openMenu() {
+    menuOpen = !menuOpen;
+    if (menuOpen) {
+      await tick();
+      menuEl?.querySelector<HTMLButtonElement>('[aria-checked="true"]:not(:disabled), button:not(:disabled)')?.focus();
+    }
+  }
+  function closeMenu(refocus = true) {
+    menuOpen = false;
+    if (refocus) caretBtn?.focus();
+  }
+  async function pickMethod(v: MatchMethod) {
+    closeMenu();
+    await app.setMatchMethod(v);
+  }
+  function menuKeys(e: KeyboardEvent) {
+    const dir = e.key === "ArrowDown" ? 1 : e.key === "ArrowUp" ? -1 : 0;
+    if (!dir) return;
+    e.preventDefault();
+    const items = [...(menuEl?.querySelectorAll<HTMLButtonElement>("button:not(:disabled)") ?? [])];
+    const i = items.indexOf(document.activeElement as HTMLButtonElement);
+    items[(i + dir + items.length) % items.length]?.focus();
+  }
   const semitoneOptions = Array.from({ length: 2 * SHIFT_MAX + 1 }, (_, i) => SHIFT_MAX - i);
   const customNotes = Array.from({ length: CUSTOM_NOTE_MAX - CUSTOM_NOTE_MIN + 1 }, (_, i) => CUSTOM_NOTE_MIN + i);
 
@@ -87,6 +126,11 @@
 
   function onKey(e: KeyboardEvent) {
     if (e.key === "Escape") {
+      if (menuOpen) {
+        e.preventDefault();
+        closeMenu();
+        return;
+      }
       app.closeTuning();
       return;
     }
@@ -221,24 +265,25 @@
 
     <div class="body">
       <div class="left">
-        <section class="card" class:matched={app.matched} aria-labelledby="tuning-song">
-          <h3 class="h" id="tuning-song">Song</h3>
+        <section class="card" aria-labelledby="tuning-ref-h">
+          <h3 class="h" id="tuning-ref-h">Reference pitch</h3>
           {#if tstate === "measuring"}
-            <p class="big">Measuring tuning…</p>
+            <p class="big">Measuring the song…</p>
             <div class="bar" class:indeterminate={!app.separating}>
               <div class="fill" style:width={app.separating ? `${Math.round(app.sepFraction * 100)}%` : null}></div>
             </div>
             <p class="muted">Runs after separation, on the stems. The reference tones work meanwhile.</p>
           {:else if tstate === "unmeasured" || !t}
             {#if t}
-              <p class="big">Couldn't measure the tuning of this song.</p>
+              <p class="big">Couldn't measure this song's reference pitch.</p>
               <p class="muted">The stems have too little steady pitch to tell. Your tuning and the reference tones still work.</p>
             {:else}
               <p class="big">Not measured yet.</p>
-              <p class="muted">The tuning is measured on the stems after the song is separated.</p>
+              <p class="muted">The song is measured on the stems after it is separated.</p>
             {/if}
           {:else}
             <div class="ref">
+              <span class="muted lbl">Song</span>
               <span class="mono hz">A = {t.reference_hz.toFixed(1)} Hz</span>
               <span class="mono cents" class:warn={tstate === "off"} class:muted={tstate !== "off"}>{formatCents(t.offset_cents)}</span>
             </div>
@@ -252,108 +297,48 @@
               {#if drift}
                 Drifts {drift.kind === "from" ? "from" : "between"} {formatCents(drift.a)} {drift.kind === "from" ? "to" : "and"} {formatCents(drift.b)} over the song. Shift uses the average.
               {:else if tstate === "in-tune"}
-                Within {IN_TUNE_CENTS} cents of A440, steady through the song.{m != null && Math.abs(m) <= IN_TUNE_CENTS ? " Nothing to correct." : ""}
+                Within {IN_TUNE_CENTS} cents of A440, steady through the song.
               {:else}
                 {Math.abs(Math.round(t.offset_cents))} cents {t.offset_cents < 0 ? "flat" : "sharp"} of A440, steady through the song.
               {/if}
             </p>
-            {#if showGuess && guess}
-              <div class="guess">
-                <p><strong>{guessHeadline(guess)}</strong>: {guessEvidence(guess)}.</p>
-                <div class="row wrap">
-                  {#each guessOptions as c (c.semitones)}
-                    <button class="btn small" onclick={() => app.answerGuess(c.semitones)}>Use {guessPhrase(c.label)}</button>
-                  {/each}
-                  <button class="btn ghost small" onclick={() => app.answerGuess(null)}>Not this</button>
-                </div>
-              </div>
-            {/if}
-            <label class="row song-in">
-              <span class="muted">Song is in</span>
-              <select class="field small" value={app.songSemitones} onchange={(e) => app.setSongSemitones(Number(e.currentTarget.value))}>
-                {#each semitoneOptions as n (n)}<option value={n}>{songTuningName(n)}</option>{/each}
-              </select>
-            </label>
-            {#if !app.matched}
-              <p class="muted song-in-hint">
-                {#if guess}
-                  The cents are measured. The tuning is a guess from the lowest bass notes: check it before shifting.
-                {:else if app.songSemitones === 0}
-                  The cents are measured, the tuning isn't. If the song is in a lowered tuning (Eb, D…), set it here before shifting.
-                {:else}
-                  The cents are measured; the tuning is your choice. Check it before shifting.
-                {/if}
-              </p>
-            {/if}
-
-            {#if app.matched && app.match}
-              <p class="muted">
-                {#if app.match.method === "pitch"}
-                  Shifted <span class="mono strong">{formatPitch(splitPitch(app.match.cents) ?? { semitones: 0, cents: 0 })}</span> to match {tuningLongName(my)}. Saved with this song.
-                {:else}
-                  Playback rate <span class="mono strong">{formatCents(app.match.cents)}</span> (tempo {tempo(app.match.cents)}) to match {tuningLongName(my)}. Saved with this song.
-                {/if}
-              </p>
-              <div class="row"><button class="btn" onclick={() => app.undoShift()}>Undo shift</button></div>
-            {:else}
-              <div class="row actions">
-                <button
-                  class="btn"
-                  class:primary={m != null && Math.abs(m) > IN_TUNE_CENTS}
-                  disabled={!canShift}
-                  title={shiftReason || undefined}
-                  onclick={() => app.shiftToMyTuning()}
-                >
-                  Shift song to my tuning
-                </button>
-                <button class="btn" onclick={() => app.tuneToSong()}>Tune to the song</button>
-              </div>
-              <p class="muted">
-                {#if m != null && canShift && app.matchMethod === "pitch"}
-                  Shift sets Pitch to <span class="mono strong">{formatPitch(splitPitch(m)!)}</span>, so the song matches {tuningLongName(my)}.
-                {:else if m != null && canShift}
-                  Shift plays the song at <span class="mono strong">{formatCents(m)}</span> (tempo {tempo(m)}), so it matches {tuningLongName(my)}. Pitch stays as set.
-                {:else}
-                  {shiftReason}.
-                {/if}
-                {#if songAsTuning}Tune to the song sets your tuning to {tuningLongName(songAsTuning)} instead and leaves the audio alone.{/if}
-              </p>
-            {/if}
-
-            <div class="row">
-              <span class="muted">Shift by</span>
-              <!-- svelte-ignore a11y_interactive_supports_focus -->
-              <div
-                class="seg grow"
-                role="radiogroup"
-                aria-label="Shift by"
-                tabindex="-1"
-                onkeydown={(e) => segKeys(e, ["pitch", "rate"], app.matchMethod, (v) => app.setMatchMethod(v as MatchMethod))}
-              >
-                <button role="radio" data-v="pitch" aria-checked={app.matchMethod === "pitch"} tabindex={app.matchMethod === "pitch" ? 0 : -1} disabled={!canPitch} onclick={() => app.setMatchMethod("pitch")}>
-                  Pitch shift
-                </button>
-                <button
-                  role="radio"
-                  data-v="rate"
-                  aria-checked={app.matchMethod === "rate"}
-                  tabindex={app.matchMethod === "rate" ? 0 : -1}
-                  disabled={!canRate}
-                  title={canRate ? "Changes pitch and tempo together, like correcting a tape speed. No time-stretching." : `Playback rate works up to ±${RATE_MAX_CENTS}¢ (about ±12% tempo)`}
-                  onclick={() => app.setMatchMethod("rate")}
-                >
-                  Playback rate{m != null && canRate ? ` (tempo ${tempo(m)})` : ""}
-                </button>
-              </div>
-            </div>
           {/if}
+          <div class="row">
+            <label class="muted lbl" for="tuning-ref">Yours</label>
+            <span class="muted">A =</span>
+            <input
+              id="tuning-ref"
+              class="field mono refin"
+              class:changed={my.refHz !== 440}
+              type="text"
+              inputmode="decimal"
+              bind:value={refText}
+              title="A4 reference, {REF_MIN} to {REF_MAX} Hz. Arrow keys step 0.1 Hz (Shift: 1 Hz)."
+              onfocus={() => (refFocused = true)}
+              onblur={() => {
+                refFocused = false;
+                commitRef();
+              }}
+              onkeydown={refKeys}
+            />
+            <span class="muted">Hz</span>
+            <span class="mono muted rc">{formatCents(refCents(my.refHz))}</span>
+          </div>
         </section>
 
-        <section class="card" aria-labelledby="tuning-mine">
-          <h3 class="h" id="tuning-mine">My tuning</h3>
-          <select class="field" aria-label="Instrument" value={my.instrument} onchange={(e) => setInstrument(e.currentTarget.value as InstrumentId)}>
-            {#each INSTRUMENTS as i (i.id)}<option value={i.id}>{i.label}</option>{/each}
-          </select>
+        <section class="card" class:matched={app.matched} aria-labelledby="tuning-mine">
+          <h3 class="h" id="tuning-mine">Tuning</h3>
+          <div class="row wrap">
+            <span class="muted lbl">My tuning</span>
+            <select class="field" aria-label="Instrument" value={my.instrument} onchange={(e) => setInstrument(e.currentTarget.value as InstrumentId)}>
+              {#each INSTRUMENTS as i (i.id)}<option value={i.id}>{i.label}</option>{/each}
+            </select>
+            <div class="row">
+              <button class="btn small icon-only" aria-label="Down a semitone" disabled={my.shift <= -SHIFT_MAX} onclick={() => app.setMyTuning({ ...my, shift: my.shift - 1 })}><Icon name="minus" size={14} /></button>
+              <span class="mono shift" class:changed={my.shift !== 0} title="My tuning's shift in semitones">{shiftText(my.shift)}</span>
+              <button class="btn small icon-only" aria-label="Up a semitone" disabled={my.shift >= SHIFT_MAX} onclick={() => app.setMyTuning({ ...my, shift: my.shift + 1 })}><Icon name="plus" size={14} /></button>
+            </div>
+          </div>
           <!-- svelte-ignore a11y_interactive_supports_focus -->
           <div
             class="seg"
@@ -375,36 +360,108 @@
               {/each}
             </div>
           {/if}
-          <div class="row between">
-            <div class="row">
-              <span class="muted">Shift</span>
-              <button class="btn small icon-only" aria-label="Down a semitone" disabled={my.shift <= -SHIFT_MAX} onclick={() => app.setMyTuning({ ...my, shift: my.shift - 1 })}><Icon name="minus" size={14} /></button>
-              <span class="mono shift" class:changed={my.shift !== 0}>{shiftText(my.shift)}</span>
-              <button class="btn small icon-only" aria-label="Up a semitone" disabled={my.shift >= SHIFT_MAX} onclick={() => app.setMyTuning({ ...my, shift: my.shift + 1 })}><Icon name="plus" size={14} /></button>
-            </div>
-            <div class="row">
-              <label class="muted" for="tuning-ref">A =</label>
-              <input
-                id="tuning-ref"
-                class="field mono refin"
-                class:changed={my.refHz !== 440}
-                type="text"
-                inputmode="decimal"
-                bind:value={refText}
-                title="A4 reference, {REF_MIN} to {REF_MAX} Hz. Arrow keys step 0.1 Hz (Shift: 1 Hz)."
-                onfocus={() => (refFocused = true)}
-                onblur={() => {
-                  refFocused = false;
-                  commitRef();
-                }}
-                onkeydown={refKeys}
-              />
-              <span class="muted">Hz</span>
-              <span class="mono muted rc">{formatCents(refCents(my.refHz))}</span>
-            </div>
-          </div>
           <p class="muted">{tuningLongName(my)}{offsetText(my) === "Standard at A440" ? "" : ` (${offsetText(my)})`}.</p>
+
+          {#if app.tuningUsable}
+            <div class="row song-in">
+              <label class="muted lbl" for="tuning-song-in">Song is in</label>
+              <select id="tuning-song-in" class="field" value={app.songSemitones} onchange={(e) => app.setSongSemitones(Number(e.currentTarget.value))}>
+                {#each semitoneOptions as n (n)}<option value={n}>{songTuningName(n)}</option>{/each}
+              </select>
+              <button
+                class="btn small"
+                aria-expanded={guessOpen}
+                title="Guess the song's tuning from the lowest notes the bass plays"
+                onclick={toggleGuess}
+              >
+                Guess{#if guessHint}<span class="dot" aria-label="(a likely guess differs)"></span>{/if}
+              </button>
+            </div>
+            {#if guessOpen}
+              <div class="guess">
+                {#if guess}
+                  <p><strong>{guessHeadline(guess)}</strong>: {guessEvidence(guess)}.</p>
+                  <div class="row wrap">
+                    {#each guessOptions as c (c.semitones)}
+                      <button class="btn small" disabled={c.semitones === app.songSemitones} onclick={() => useGuess(c.semitones)}>Use {guessPhrase(c.label)}</button>
+                    {/each}
+                  </div>
+                {:else}
+                  <p>No tuning stands out: the bass is missing, too quiet or never reaches its low string.</p>
+                {/if}
+              </div>
+            {:else if !app.matched}
+              <p class="muted">Only the cents are measured. If the song is in a lowered tuning (Eb, drop D…), set it here, or press Guess.</p>
+            {/if}
+          {/if}
         </section>
+
+        {#if app.tuningUsable}
+          <div class="row actions">
+            <div class="split">
+              {#if app.matched}
+                <button class="btn" onclick={() => app.undoShift()}>Undo shift</button>
+              {:else}
+                <button
+                  class="btn"
+                  class:primary={m != null && Math.abs(m) > IN_TUNE_CENTS}
+                  disabled={!canShift}
+                  title={shiftReason || undefined}
+                  onclick={() => app.shiftToMyTuning()}
+                >
+                  Shift song to my tuning
+                </button>
+              {/if}
+              <button
+                class="btn caret"
+                class:primary={!app.matched && m != null && Math.abs(m) > IN_TUNE_CENTS}
+                bind:this={caretBtn}
+                aria-label="Shift method"
+                aria-haspopup="menu"
+                aria-expanded={menuOpen}
+                onclick={openMenu}><Icon name="chevron" size={12} /></button
+              >
+              {#if menuOpen}
+                <!-- svelte-ignore a11y_no_static_element_interactions -->
+                <div class="menu" role="menu" aria-label="Shift method" bind:this={menuEl} tabindex="-1" onkeydown={menuKeys} onfocusout={(e) => !menuEl?.contains(e.relatedTarget as Node) && e.relatedTarget !== caretBtn && closeMenu(false)}>
+                  <button role="menuitemradio" aria-checked={app.matchMethod === "pitch"} disabled={!canPitch} onclick={() => pickMethod("pitch")}>
+                    <span class="check">{#if app.matchMethod === "pitch"}<Icon name="check" size={12} />{/if}</span>
+                    <span>Pitch shift <span class="muted">keeps the tempo</span></span>
+                  </button>
+                  <button
+                    role="menuitemradio"
+                    aria-checked={app.matchMethod === "rate"}
+                    disabled={!canRate}
+                    title={canRate ? undefined : `Playback rate works up to ±${RATE_MAX_CENTS}¢ (about ±12% tempo)`}
+                    onclick={() => pickMethod("rate")}
+                  >
+                    <span class="check">{#if app.matchMethod === "rate"}<Icon name="check" size={12} />{/if}</span>
+                    <span>Playback rate <span class="muted">{m != null && canRate ? `tempo ${tempo(m)}, like a tape` : "pitch and tempo together"}</span></span>
+                  </button>
+                </div>
+              {/if}
+            </div>
+            <button class="btn" disabled={app.matched} onclick={() => app.tuneToSong()}>Tune to the song</button>
+          </div>
+          <p class="muted hint">
+            {#if app.matched && app.match}
+              {#if app.match.method === "pitch"}
+                Shifted <span class="mono strong">{formatPitch(splitPitch(app.match.cents) ?? { semitones: 0, cents: 0 })}</span> by pitch shift to match {tuningLongName(my)}. Saved with this song.
+              {:else}
+                Shifted <span class="mono strong">{formatCents(app.match.cents)}</span> by playback rate (tempo {tempo(app.match.cents)}) to match {tuningLongName(my)}. Saved with this song.
+              {/if}
+            {:else if m != null && canShift && Math.abs(m) <= IN_TUNE_CENTS}
+              The song already matches {tuningLongName(my)}. Nothing to correct.
+            {:else if m != null && canShift && app.matchMethod === "pitch"}
+              Shift sets Pitch to <span class="mono strong">{formatPitch(splitPitch(m)!)}</span>, so the song matches {tuningLongName(my)}.
+            {:else if m != null && canShift}
+              Shift plays the song at <span class="mono strong">{formatCents(m)}</span> (tempo {tempo(m)}), so it matches {tuningLongName(my)}. Pitch stays as set.
+            {:else}
+              {shiftReason}.
+            {/if}
+            {#if !app.matched && songAsTuning}Tune to the song sets your tuning to {tuningLongName(songAsTuning)} instead and leaves the audio alone.{/if}
+          </p>
+        {/if}
       </div>
 
       <div class="right">
@@ -607,20 +664,86 @@
     align-items: center;
     gap: 8px;
   }
-  .row.between {
-    justify-content: space-between;
-    flex-wrap: wrap;
-    row-gap: 8px;
-  }
   .actions {
-    margin-top: 4px;
+    flex-wrap: wrap;
+  }
+  .lbl {
+    width: 72px;
+    flex: none;
+    font-size: 12.5px;
+  }
+  .ref .lbl {
+    align-self: center;
+  }
+  .row.wrap {
     flex-wrap: wrap;
   }
   .song-in {
-    font-size: 12.5px;
+    margin-top: 4px;
   }
-  .song-in-hint {
-    margin-top: -4px;
+  .dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--accent);
+    margin-left: 6px;
+  }
+  /* The Shift button and its method menu, drawn as one split button. */
+  .split {
+    position: relative;
+    display: flex;
+  }
+  .split > .btn:first-child {
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
+  }
+  .split > .caret {
+    border-top-left-radius: 0;
+    border-bottom-left-radius: 0;
+    margin-left: -1px;
+    padding: 0 7px;
+  }
+  .menu {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    z-index: 2;
+    min-width: 100%;
+    display: flex;
+    flex-direction: column;
+    padding: 4px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    box-shadow: var(--shadow);
+  }
+  .menu button {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 8px;
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    font-size: 12.5px;
+    text-align: left;
+    white-space: nowrap;
+  }
+  .menu button:hover:not(:disabled),
+  .menu button:focus-visible {
+    background: var(--surface-3);
+    outline: none;
+  }
+  .menu button:disabled {
+    opacity: 0.5;
+  }
+  .menu .muted {
+    margin-left: 4px;
+  }
+  .check {
+    width: 12px;
+    display: inline-flex;
+    color: var(--accent);
   }
   /* A suggestion, not a measurement: dashed until answered. */
   .guess {
@@ -634,9 +757,6 @@
   }
   .guess strong {
     font-weight: 600;
-  }
-  .row.wrap {
-    flex-wrap: wrap;
   }
   .field {
     height: 28px;
@@ -679,9 +799,6 @@
     border: 1px solid var(--control-border);
     border-radius: var(--radius-sm);
     overflow: hidden;
-  }
-  .seg.grow {
-    flex: 1;
   }
   .seg button {
     flex: 1;

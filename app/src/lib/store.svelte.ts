@@ -110,6 +110,25 @@ function writeLastTuning(t: MyTuning) {
   }
 }
 
+/** The last Shift method used on any song: the start for songs without a shift. */
+const LAST_METHOD_KEY = "shredlab.lastMatchMethod";
+
+function readLastMethod(): MatchMethod {
+  try {
+    return localStorage.getItem(LAST_METHOD_KEY) === "rate" ? "rate" : "pitch";
+  } catch {
+    return "pitch";
+  }
+}
+
+function writeLastMethod(m: MatchMethod) {
+  try {
+    localStorage.setItem(LAST_METHOD_KEY, m);
+  } catch {
+    /* storage unavailable: new songs start with Pitch shift */
+  }
+}
+
 /** A reference tone moves to the next higher string after this long (Step to next string). */
 const TONE_STEP_MS = 6000;
 
@@ -204,9 +223,9 @@ class AppState {
   myTuning = $state.raw<MyTuning>({ ...DEFAULT_TUNING });
   /** "Song is in": semitones the song sits below or above its written pitch. */
   songSemitones = $state(0);
-  /** The tuning guess was used or dismissed for this song (saved with it). */
+  /** The Guess button was pressed for this song (saved with it); it stops hinting. */
   guessAnswered = $state(false);
-  /** The Shift by choice. */
+  /** The Shift method (the Shift button's menu); new songs start with the last one used. */
   matchMethod = $state<MatchMethod>("pitch");
   /** The song's match (saved with the song); it is in effect while `matchActive`. */
   match = $state.raw<{ method: MatchMethod; cents: number } | null>(null);
@@ -688,7 +707,7 @@ class AppState {
     this.guessAnswered = ts?.guess_answered === true;
     const m = ts?.match;
     this.match = m && (m.method === "pitch" || m.method === "rate") ? { method: m.method, cents: Math.round(Number(m.cents) || 0) } : null;
-    this.matchMethod = this.match?.method ?? "pitch";
+    this.matchMethod = this.match?.method ?? readLastMethod();
     this.matchActive = false;
     this.preMatchPitch = null;
   }
@@ -1052,6 +1071,7 @@ class AppState {
       await this.setRate(m);
     }
     this.matchMethod = method;
+    writeLastMethod(method);
     this.match = { method, cents: m };
     this.matchActive = true;
     this.tuningSaved = true;
@@ -1071,13 +1091,14 @@ class AppState {
     this.saveSettings();
   }
 
-  /** The Shift by switch; while matched it moves the shift to the other method. */
+  /** The Shift method menu; while matched it moves the shift to the other method. */
   async setMatchMethod(method: MatchMethod) {
     if (method === this.matchMethod && (!this.matched || this.match?.method === method)) return;
     if (this.matched) {
       if (!(await this.shiftToMyTuning(method))) this.showToast("That shift is out of range for this method");
     } else {
       this.matchMethod = method;
+      writeLastMethod(method);
     }
   }
 
@@ -1129,12 +1150,12 @@ class AppState {
     if (this.matchActive) await this.rematch();
   }
 
-  /** Answers the tuning guess: "Use" sets "Song is in" to `semitones`, "Not this" passes null. */
-  async answerGuess(semitones: number | null) {
+  /** The Guess button was pressed: it stops hinting at a likely guess for this song. */
+  seeGuess() {
+    if (this.guessAnswered) return;
     this.guessAnswered = true;
     this.tuningSaved = true;
-    if (semitones == null) this.saveSettings();
-    else await this.setSongSemitones(semitones);
+    this.saveSettings();
   }
 
   /** "Tune to the song": My tuning takes the song's reference and semitones; the audio is untouched. */
