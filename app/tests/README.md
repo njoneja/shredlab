@@ -7,7 +7,10 @@ there is no test framework or build step.
 ## Boundaries
 
 - Only modules without DOM, Svelte or Tauri imports can be tested here.
-  Type-only imports are fine (`import type`, which Node erases).
+  Type-only imports are fine (`import type`, which Node erases). A module
+  that imports another module's values does so with the `.ts` extension
+  (allowed by `allowImportingTsExtensions` in `app/tsconfig.json`), since
+  Node resolves no extensionless paths.
 - The directory is outside `app/src`, so `svelte-check` and the Vite build
   ignore it. Test files import the module under test with its `.ts`
   extension, which only Node needs.

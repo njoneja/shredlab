@@ -20,6 +20,7 @@
     [["C"], "Click on / off"],
     [["T"], "Tuning panel"],
     [["K"], "Chords panel"],
+    [["N"], "Notes panel"],
     [["1–6"], "Toggle stem on / off"],
     [["Shift", "1–6"], "Solo stem on / off"],
     [["Alt", "1–6"], "All but this stem (play along)"],
@@ -75,6 +76,7 @@
             <li><b>Speed</b> slows down without changing the key. <b>Pitch</b> moves the key in semitones (click the cents value to fine-tune) without changing the speed.</li>
             <li><b>Volume:</b> the speaker next to Play is the master volume (stems and click; exports are not affected). Click it for a slider or scroll over it. The slider inside Click sets only the click and count-in level. Double-click resets either.</li>
             <li><b>Count-in</b> length is in beats (hover for bars). For a pickup, set A on the pickup note and count in the beats before it, e.g. 7 in 4/4. The cog in Click can count in before every loop repeat.</li>
+            <li><b>Chords and notes</b> (<kbd>K</kbd>, <kbd>N</kbd>) are best guesses. The notes especially are a rough draft: expect missed notes, some wrong notes or octaves, and notes from another part. Check by ear at slow speed; Refine's stereo mask helps when two parts share a stem.</li>
             <li><b>Count in to where the music starts:</b> playing from the top skips a quiet intro (studio talk, silence) and counts you into the music. Turn it off in Settings.</li>
           </ul>
         </section>

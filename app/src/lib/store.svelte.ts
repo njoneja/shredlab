@@ -31,6 +31,7 @@ import type {
   TunerStarted,
   TuningData,
   ChordsData,
+  StemNotes,
 } from "./types";
 import { STEMS } from "./types";
 import { backingFromOriginal, clampGain } from "./mix";
@@ -38,6 +39,7 @@ import { applyTheme, currentTheme, isTheme } from "./theme";
 import { defaultRefine, exceptionSide, hasException, isIdentity, mockPresets, normalize, STRENGTH_NAMES } from "./refine";
 import { barAt, commonBeatsPerBar, effectiveDownbeats, formatTime, nearestBeatIndex, normalizeOverrides } from "./meter";
 import { chordFrame, chordIndexAt, chordViews, detailWindow, passingViews, tuningLine, type ChordView, type PassingView } from "./chords";
+import { heardViews, NOTE_STEMS, noteIndexAt, noteViews, pickNotesStem, type HeardView, type NoteView } from "./notes";
 import {
   DEFAULT_TUNING,
   fromSaved,
@@ -137,6 +139,32 @@ function readChordsPrefs(): ChordsPrefs {
 function writeChordsPrefs(p: ChordsPrefs) {
   try {
     localStorage.setItem(CHORDS_KEY, JSON.stringify(p));
+  } catch {
+    /* storage unavailable: the panel starts closed next time */
+  }
+}
+
+/** Notes panel: open, and whether it shows the other notes heard. Kept in localStorage (the stem is saved per song). */
+const NOTES_KEY = "shredlab.notes";
+
+interface NotesPrefs {
+  open: boolean;
+  /** Other notes heard, drawn faintly behind the lead line. */
+  heard: boolean;
+}
+
+function readNotesPrefs(): NotesPrefs {
+  try {
+    const v = JSON.parse(localStorage.getItem(NOTES_KEY) ?? "null");
+    return { open: v?.open === true, heard: v?.heard !== false };
+  } catch {
+    return { open: false, heard: true };
+  }
+}
+
+function writeNotesPrefs(p: NotesPrefs) {
+  try {
+    localStorage.setItem(NOTES_KEY, JSON.stringify(p));
   } catch {
     /* storage unavailable: the panel starts closed next time */
   }
@@ -270,6 +298,19 @@ class AppState {
   chordsFit = $state(true);
   /** A finer waveform for the panel (fetched when it opens). */
   detailPeaks = $state.raw<number[] | null>(null);
+
+  // notes (NotesPanel.svelte); shares the chords panel's window
+  /** Notes per pitched stem, for its current source (stem set, strength, Refine stereo mask). */
+  notes = $state.raw<Partial<Record<StemName, StemNotes>>>({});
+  /** Pitched stems whose notes for the current source are not in yet. */
+  notesPending = $state.raw<StemName[]>([]);
+  /** The stem the notes job works on now. */
+  notesRunning = $state<StemName | null>(null);
+  notesOpen = $state(readNotesPrefs().open);
+  /** The notes panel shows the other notes heard behind the lead line. */
+  notesHeard = $state(readNotesPrefs().heard);
+  /** The stem picked in the notes panel for this song (saved with its settings); null = the default. */
+  notesStemPick = $state<StemName | null>(null);
   /** The Guess button was pressed for this song (saved with it); it stops hinting. */
   guessAnswered = $state(false);
   /** The Shift method (the Shift button's menu); new songs start with the last one used. */
@@ -425,13 +466,14 @@ class AppState {
   );
   matched = $derived(this.match != null && this.matchActive);
 
-  /** Which names the chords get (shape in the confirmed tuning, and what you hear). */
+  /** Which names the chords get (shape on your instrument in My tuning, and what you hear). */
   chordFrame = $derived(
     chordFrame({
       songSemitones: this.songSemitones,
       confirmed: this.songSemitonesSet,
       offsetCents: this.tuningUsable && this.tuning ? this.tuning.offset_cents : 0,
       shiftCents: 100 * this.semitones + this.cents + this.rateCents,
+      mySemitones: Math.round(totalCents(this.myTuning) / 100),
     }),
   );
   chordViews = $derived<ChordView[]>(chordViews(this.chords, this.chordFrame, this.chordsDetailed));
@@ -449,6 +491,29 @@ class AppState {
       downbeats: this.downbeats,
     }),
   );
+  /** Pitched stems of the loaded set: with notes or with notes on the way. */
+  notesStems = $derived<StemName[]>(NOTE_STEMS.filter((s) => this.notes[s] || this.notesPending.includes(s)));
+  /** The stem the notes panel shows. */
+  notesStem = $derived<StemName | null>(
+    pickNotesStem(
+      this.notesStemPick,
+      this.notesStems,
+      (s) => (this.notes[s]?.notes.length ?? 0) > 0,
+      (s) => this.notesPending.includes(s),
+    ),
+  );
+  /** The shown stem's notes are being computed (its old ones, if any, are for another source). */
+  notesStemPending = $derived(this.notesStem != null && this.notesPending.includes(this.notesStem));
+  noteViews = $derived<NoteView[]>(
+    this.notesStem && !this.notesStemPending ? noteViews(this.notes[this.notesStem], this.chordFrame, this.chords?.key) : [],
+  );
+  /** The shown stem's other notes heard (empty while hidden). */
+  heardViews = $derived<HeardView[]>(
+    this.notesHeard && this.notesStem && !this.notesStemPending
+      ? heardViews(this.notes[this.notesStem], this.chordFrame, this.chords?.key)
+      : [],
+  );
+  noteNow = $derived<NoteView | null>(this.noteViews[noteIndexAt(this.noteViews, this.position)] ?? null);
   /** Chords are expected but not detected yet. */
   chordsPending = $derived(!!this.song && !this.chords && (this.separating || this.stemsReady));
   /**
@@ -467,6 +532,8 @@ class AppState {
     return tuningLine({
       frame: this.chordFrame,
       songSemitones: this.songSemitones,
+      mySemitones: Math.round(totalCents(this.myTuning) / 100),
+      shiftCents: 100 * this.semitones + this.cents + this.rateCents,
       guess: c ? { semitones: c.semitones, label: c.label } : null,
       mismatch: this.chordMismatch,
       sample: this.chordViews.find((v) => v.main && v.second) ?? null,
@@ -509,8 +576,9 @@ class AppState {
       if (p.song_id !== this.song?.song_id) return;
       this.separating = false;
       this.stemsReady = true;
-      // New stems: their chords are detected again once their tuning is in.
+      // New stems: their chords and notes are detected again once their tuning is in.
       this.chords = null;
+      this.notes = {};
       this.song = { ...this.song, stems_cached: true, separated_with: p.separated_with, original_available: p.original_available, chords: null };
       this.showToast("Stems ready");
       this.refreshLibrary();
@@ -527,6 +595,15 @@ class AppState {
       if (p.song_id !== this.song?.song_id) return;
       this.chords = p.chords;
       this.song = { ...this.song, chords: p.chords };
+    });
+    await api.listen("notes-ready", (p) => {
+      if (p.song_id !== this.song?.song_id) return;
+      this.notes = { ...this.notes, [p.stem]: p.notes };
+    });
+    await api.listen("notes-status", (p) => {
+      if (p.song_id !== this.song?.song_id) return;
+      this.notesPending = p.pending;
+      this.notesRunning = p.running;
     });
     await api.listen("tuning-ready", (p) => {
       if (p.song_id !== this.song?.song_id) return;
@@ -712,6 +789,9 @@ class AppState {
       this.rateCents = 0; // the backend resets the rate correction on open
       this.tuning = info.tuning ?? null;
       this.chords = info.chords ?? null;
+      this.notes = Object.fromEntries((info.notes ?? []).map((n) => [n.stem, n]));
+      this.notesPending = info.notes_pending ?? [];
+      this.notesRunning = info.notes_running ?? null;
       this.detailPeaks = null;
       this.detailFor = null;
       this.song = info;
@@ -774,7 +854,9 @@ class AppState {
     this.click.count_in_each_repeat = false;
     this.click.subdivision = 1;
     this.countInSet = false;
+    this.notesStemPick = null;
     if (!s || s.version !== 1) return;
+    if (s.notes_stem && NOTE_STEMS.includes(s.notes_stem)) this.notesStemPick = s.notes_stem;
     this.loop = { ...s.loop };
     this.overrides = normalizeOverrides(s.overrides ?? []);
     this.click.count_in_enabled = !!s.count_in_enabled;
@@ -841,6 +923,7 @@ class AppState {
       subdivision: this.click.subdivision,
       overrides: $state.snapshot(this.overrides),
       mix: STEMS.map((s) => ({ stem: s, on: this.mix[s].on, volume: this.mix[s].volume })),
+      ...(this.notesStemPick ? { notes_stem: this.notesStemPick } : {}),
     };
   }
 
@@ -1298,7 +1381,25 @@ class AppState {
     writeChordsPrefs({ open: this.chordsOpen, bars: this.chordsBars, detailed: this.chordsDetailed });
   }
 
-  /** "Use Eb shapes": confirms the tuning guess as "Song is in". */
+  // ---- notes ----
+  toggleNotes() {
+    this.notesOpen = !this.notesOpen;
+    writeNotesPrefs({ open: this.notesOpen, heard: this.notesHeard });
+  }
+
+  /** Shows or hides the other notes heard in the notes panel. */
+  setNotesHeard(on: boolean) {
+    this.notesHeard = on;
+    writeNotesPrefs({ open: this.notesOpen, heard: on });
+  }
+
+  /** The notes panel's stem, remembered for this song. */
+  setNotesStem(stem: StemName) {
+    this.notesStemPick = stem;
+    this.saveSettings();
+  }
+
+  /** "Set song to Eb standard": confirms the tuning guess as "Song is in". */
   async useGuessShapes(semitones: number) {
     this.seeGuess();
     await this.setSongSemitones(semitones);

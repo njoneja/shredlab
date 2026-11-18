@@ -59,6 +59,19 @@ else the file name), duration and decoded format, then:
   below standard bass, likely or only possible), with the
   version of the algorithm that produced it. Optional; written by the app's
   tuning job, which recomputes it when the version is older.
+- `chords`: the detected chords (`ChordsData`) with the stem set and the
+  algorithm version that produced them. Optional; written by the app.
+- `notes`: the detected notes (`NotesData`): the algorithm version and one
+  `StemNotes` per (stem, source) computed, each with its `NoteSpan`s
+  (bends as `BendSpan`), chordal stretches and the other notes heard
+  (`HeardSpan`s, outside the lead line). The source key is the app's; the
+  app keeps a few sources per stem and starts over on a new version.
+  Optional. The other notes heard number a few thousand on a guitar stem,
+  so they are stored as one string rather than pretty-printed objects:
+  `start end midi conf` per note, separated by spaces, notes separated by
+  commas, times rounded to 3 decimals and the confidence to 2, trailing
+  zeros dropped (about 24 bytes a note). Malformed notes in it are skipped
+  on load.
 - `refine`: `RefineParams` per stem name, only for refined stems.
 - `strength`: separation strength level (0 = the model's stems) and the
   smooth flag.

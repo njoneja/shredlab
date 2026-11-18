@@ -30,6 +30,7 @@ It prints `AUTOTEST PASS`.
 | `SHREDLAB_MODEL` | Separation model id, e.g. a personal model such as `bs-roformer-sw` |
 | `SHREDLAB_DEVICE` | `auto`, `cpu` or `gpu` |
 | `SHREDLAB_BEAT_MODEL` | Path of `beat_this_final0.onnx` |
+| `SHREDLAB_NOTE_MODEL` | Path of the Basic Pitch note model (`basic_pitch_nmp.onnx` in bundles) |
 | `SHREDLAB_BEATS_DEVICE` | `cpu` (default), `auto` or `gpu` for beat detection |
 | `SHREDLAB_NO_PRELOAD` | Skip loading the model at startup |
 | `SHREDLAB_AUTOTEST`, `SHREDLAB_AUTOTEST_OUT`, `SHREDLAB_AUTOTEST_EXIT` | Headless end-to-end check (above) |

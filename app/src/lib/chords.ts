@@ -54,9 +54,10 @@ export function shortNames(name: string): string[] {
 }
 
 /**
- * Which names the chords get. `main` is the shape in the confirmed song
- * tuning, or what you hear while the tuning isn't confirmed; `heard` is what
- * you hear (after any pitch shift). Both are semitones from concert pitch.
+ * Which names the chords get. `main` is the shape you would fret on your
+ * instrument in My tuning to play what you hear; `heard` is what you hear
+ * (after any pitch shift). Both are semitones from concert pitch. They
+ * differ only when My tuning isn't Standard.
  */
 export interface ChordFrame {
   main: number;
@@ -66,18 +67,21 @@ export interface ChordFrame {
 }
 
 export function chordFrame(o: {
-  /** "Song is in" (Eb standard = −1). */
+  /** "Song is in" (Eb standard = −1). Only for the tuning line. */
   songSemitones: number;
   confirmed: boolean;
   /** The song's measured offset from A440 in cents (0 when not measured). */
   offsetCents: number;
   /** Playback shift in cents: Pitch plus the tuning's rate correction. */
   shiftCents: number;
+  /** My tuning in semitones from Standard at A440 (Eb standard = −1). */
+  mySemitones?: number;
 }): ChordFrame {
   // The chords are named at the song's own reference; what plays is that
-  // plus the shift, rounded to the nearest A440 semitone.
+  // plus the shift, rounded to the nearest A440 semitone. A shape X on an
+  // instrument tuned m semitones from Standard sounds X + m.
   const heard = Math.round((o.offsetCents + o.shiftCents) / 100) || 0;
-  return { main: o.confirmed ? -o.songSemitones || 0 : heard, heard, confirmed: o.confirmed };
+  return { main: heard - (o.mySemitones ?? 0) || 0, heard, confirmed: o.confirmed };
 }
 
 export interface ChordView {
@@ -158,7 +162,7 @@ export interface TuningLine {
   text: string;
   /** The shapes won't match the player's instrument (amber). */
   warn: boolean;
-  /** Offer "Use <guess> shapes" with these semitones. */
+  /** Offer "Set song to <guess>" with these semitones. */
   useGuess: { semitones: number; label: string } | null;
   /** Offer "Shift song to my tuning" and "I'm tuned …". */
   fixes: { tunedLabel: string } | null;
@@ -167,11 +171,15 @@ export interface TuningLine {
 export function tuningLine(o: {
   frame: ChordFrame;
   songSemitones: number;
+  /** My tuning in semitones from Standard (Eb standard = −1). */
+  mySemitones: number;
+  /** Playback shift in cents (Pitch plus the tuning's rate correction). */
+  shiftCents: number;
   /** The best guess for "Song is in" (first candidate), when there is one. */
   guess: { semitones: number; label: string } | null;
   /**
    * Semitones the song would still have to move to match My tuning (after
-   * the current shift); 0 = what the player frets matches what is heard.
+   * the current shift); 0 = the song's usual shapes are what you fret.
    * Positive: the player's instrument sits higher than what plays.
    */
   mismatch: number;
@@ -179,31 +187,36 @@ export function tuningLine(o: {
   sample: ChordView | null;
 }): TuningLine {
   const { frame: f, songSemitones: s } = o;
-  const none = { legend: null, warn: false, useGuess: null, fixes: null };
+  const parts: string[] = [];
+  let useGuess: TuningLine["useGuess"] = null;
+  let fixes: TuningLine["fixes"] = null;
+  const dir = (n: number) => `${n < 0 ? "down" : "up"} ${steps(n)}`;
+  // What is known about the song's tuning: a guess, or "Song is in" (still
+  // only what the user believes), and how to play its usual shapes.
+  const shifted = Math.round(o.shiftCents / 100) || 0;
   if (!f.confirmed) {
     if (o.guess && o.guess.semitones !== 0) {
-      return {
-        ...none,
-        text: `Tuning guess: probably ${o.guess.label}. Names are what you hear.`,
-        useGuess: o.guess,
-      };
+      parts.push(`Song may be in an alternate tuning (probably ${o.guess.label}).`);
+      useGuess = o.guess;
     }
-    return { ...none, text: "Tuning not set. Names are what you hear." };
+  } else if (o.mismatch !== 0 && shifted === 0) {
+    // Once the song is shifted, the shift is the news (and the fixes stay).
+    parts.push(`Song may be in ${tuneName(s)}. To play its usual shapes, tune ${dir(-o.mismatch)} or shift the song.`);
   }
-  const diff = f.heard - f.main;
-  const warn = o.mismatch !== 0;
-  const where = tuneName(s);
-  const fixes = warn ? { tunedLabel: o.mismatch > 0 ? "I'm tuned down" : "I'm tuned up" } : null;
-  if (diff !== 0) {
-    const legend = o.sample?.main && o.sample.second ? { main: o.sample.main, heard: o.sample.second } : null;
-    let text = `${where} shapes, you hear them ${steps(diff)} ${diff < 0 ? "lower" : "higher"}.`;
-    // A shape X sounds X + s + heard: the instrument that plays what you hear.
-    if (warn) text += ` If your guitar is in ${tuneName(s + f.heard)}, you're set.`;
-    return { legend, text, warn, useGuess: null, fixes };
+  if (f.confirmed && o.mismatch !== 0) fixes = { tunedLabel: o.mismatch > 0 ? "I'm tuned down" : "I'm tuned up" };
+  if (shifted !== 0) parts.push(`Song was shifted ${dir(shifted)}.`);
+  let legend: TuningLine["legend"] = null;
+  if (f.main !== f.heard) {
+    legend = o.sample?.main && o.sample.second ? { main: o.sample.main, heard: o.sample.second } : null;
+    parts.push(
+      `Chords shifted to match your tuning shift (${dir(o.mySemitones)}). Smaller names show how they sound.`,
+    );
+  } else if (shifted !== 0) {
+    parts.push("Chords match what you hear.");
+  } else if (useGuess) {
+    parts.push("Names will adjust if you set your tuning.");
   }
-  if (warn) return { ...none, text: `${where} shapes. The song doesn't match My tuning.`, warn, fixes };
-  if (s !== 0) return { ...none, text: `Song in ${where}, shifted to your tuning.` };
-  return { ...none, text: "Song in Standard." };
+  return { legend, text: parts.join(" "), warn: false, useGuess, fixes };
 }
 
 /**

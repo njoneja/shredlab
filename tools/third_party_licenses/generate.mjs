@@ -202,6 +202,15 @@ function otherComponents(crates) {
       texts: [["Beat This! license", join(HERE, "texts", "beat_this-LICENSE.txt")]],
     },
     {
+      name: "Basic Pitch (nmp model)",
+      what: "Polyphonic note transcription model, bundled as published in ONNX form.",
+      license: "Apache-2.0",
+      notes:
+        "Copyright 2022 Spotify AB. " +
+        '<a href="https://github.com/spotify/basic-pitch">Source</a>.',
+      texts: [["Apache License 2.0", join(HERE, "spdx", "Apache-2.0.txt")]],
+    },
+    {
       name: "Rock Salt and Permanent Marker fonts",
       what: "Wordmark and stem labels (subset woff2).",
       license: "Apache-2.0",

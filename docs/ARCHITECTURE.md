@@ -23,6 +23,7 @@ app/src-tauri                       commands → backend (state, background jobs
    ├─ shredlab-beats        Beat This! pre/post-processing (ORT-free)
    ├─ shredlab-tuning       tuning offset, tuning guess, live pitch detector
    ├─ shredlab-chords       chord detection from the stems and beats
+   ├─ shredlab-notes        notes of one stem: Basic Pitch glue (ORT-free) or pitch tracker
    ├─ shredlab-audio        real-time engine, offline render, WAV/FLAC/MP3 export
    ├─ shredlab-library      song folders, song.json, stem cache
    └─ shredlab-io           decode, resample, WAV writing
@@ -34,10 +35,11 @@ app/src-tauri                       commands → backend (state, background jobs
 |---|---|
 | [crates/shredlab-dsp](../crates/shredlab-dsp/README.md) | `torch.stft`-compatible STFT/iSTFT, chunking, overlap-add, normalization; Refine DSP and separation strength |
 | [crates/shredlab-io](../crates/shredlab-io/README.md) | Decoding, resampling, WAV writing; returns planar f32 stereo |
-| [crates/shredlab-separation](../crates/shredlab-separation/README.md) | ONNX Runtime, execution providers, model registry, adapters, self-test, `Separator`, the beat model session |
+| [crates/shredlab-separation](../crates/shredlab-separation/README.md) | ONNX Runtime, execution providers, model registry, adapters, self-test, `Separator`, the beat and note model sessions |
 | [crates/shredlab-beats](../crates/shredlab-beats/README.md) | Beat This! preprocessing and peak picking; tempo and meter helpers |
 | [crates/shredlab-tuning](../crates/shredlab-tuning/README.md) | The song's offset from A440 and a guess at its tuning, measured on the stems; the live tuner's pitch detector |
 | [crates/shredlab-chords](../crates/shredlab-chords/README.md) | Chord detection on the stems and the beat grid, at concert pitch, with a key estimate |
+| [crates/shredlab-notes](../crates/shredlab-notes/README.md) | The notes of one stem at concert pitch (a lead line from Basic Pitch, or the pitch tracker for the bass), with bends, slides, hammer-ons and pull-offs, and chordal stretches |
 | [crates/shredlab-audio](../crates/shredlab-audio/README.md) | Real-time engine, mixer, time stretch, click, limiter, offline render and export |
 | [crates/shredlab-library](../crates/shredlab-library/README.md) | One folder per song with a JSON manifest and cached stems |
 | [crates/shredlab-cli](../crates/shredlab-cli/README.md) | Headless CLI: models, self-tests, separation, decoding, info |
@@ -126,10 +128,38 @@ chords. The chords need the other two: `shredlab-chords` names pitch classes
 at the song's own reference (the measured offset removed) and segments the
 song on a grid of subdivisions of the detected beats, so a chord change
 pushed an eighth before the beat stays where it is played. Its result is
-concert pitch only. The UI names the chords: the shape in the song's tuning
-once the user has set "Song is in", and what is heard after any pitch shift
-when that differs (`app/src/lib/chords.ts`), so changing Pitch or the
-tuning never reruns the detection.
+concert pitch only. The UI names the chords: the shape to fret in the
+player's tuning (Standard unless set) to play what is heard after any
+pitch shift, and what is heard when that differs (`app/src/lib/chords.ts`),
+so changing Pitch or the tuning never reruns the detection.
+
+## Notes
+
+Once the stems, beats and tuning are in, the app also finds the single
+notes of each pitched stem (guitar, bass, vocals, keys, other; not drums)
+with `shredlab-notes`, one stem at a time in the background. Unlike the
+chords, the notes are found on the stem as the mixer has it: after the
+separation strength and after Refine's stereo mask (the part of the stereo
+field the mask selects), so two guitars panned apart can be told apart.
+Refine's EQ is left out. Each result is saved in `song.json` per stem and
+source, the source naming the stem set, the strength and the mask, and a
+few sources are kept per stem so going back to an earlier setting is
+instant. A changed mask is followed a second after the last change. Like
+the chords, the notes are concert pitch only; `app/src/lib/notes.ts` names
+them in the same frame as the chords, and the notes panel shares the
+chords panel's window.
+
+The bass goes through `shredlab-notes`' own pitch tracker: it plays one
+note at a time, and the tracker keeps quick repeated low notes the model
+misses. The other stems go through Spotify's Basic Pitch model, which hears
+several notes at once; the crate picks the lead line from its notes (one at
+a time, following the melody's register, so a solo over rhythm guitar in
+the same stem keeps its notes) and marks strummed stretches as chordal.
+Every other note the model heard is kept too, at its own length, and the
+notes panel draws those faintly behind the lead line.
+Like the beat model, the network runs through
+`shredlab_separation::NoteModel` (CPU) as a closure, and the crate stays
+ORT-free. Without the model file every stem uses the pitch tracker.
 
 ## Live tuner
 
@@ -169,13 +199,16 @@ The command and event contract is in
 Every model is a folder with the ONNX file, `model.json` and `selftest.json`.
 
 - Bundled: Demucs v4 `htdemucs_6s` and the Beat This! `final0` beat model
-  (both MIT), shipped as Tauri resources.
+  (both MIT), and Spotify's Basic Pitch note model (Apache-2.0), shipped as
+  Tauri resources. The beat and note models are single ONNX files without
+  a folder.
 - Personal: models in the user models folder show up in the picker marked as
   personal, with whatever license their manifest declares. The public build
   never downloads or bundles them.
 
 The ONNX files are not in git; `tools/setup_models.py` downloads the
-official checkpoints and exports them (see [tools/](../tools/README.md)).
+official checkpoints and exports them, and downloads Basic Pitch's ONNX
+file as published (see [tools/](../tools/README.md)).
 Third-party notices for everything shipped are generated into
 `app/public/THIRD_PARTY_LICENSES.html` and shown in the app.
 

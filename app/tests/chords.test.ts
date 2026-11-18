@@ -57,8 +57,12 @@ test("unconfirmed tuning: one name, what you hear", () => {
   assert.equal(v[1].push, true);
 });
 
-test("confirmed Eb, not shifted: shape and what you hear", () => {
-  const v = chordViews(EB, frame({}));
+test("Standard guitar, song in Eb, not shifted: one name, what you hear", () => {
+  assert.deepEqual(chordViews(EB, frame({})).map((x) => [x.main, x.second])[0], ["Eb5", null]);
+});
+
+test("Eb guitar, song in Eb, not shifted: shape and what you hear", () => {
+  const v = chordViews(EB, frame({ mySemitones: -1 }));
   assert.deepEqual(
     v.map((x) => [x.main, x.second]),
     [
@@ -89,33 +93,38 @@ test("chordIndexAt finds the chord at a time", () => {
 });
 
 test("tuning line: guess, set, shifted, mismatched", () => {
-  const sample = chordViews(EB, frame({}))[0];
   const guess = { semitones: -1, label: "Eb standard" };
-  let l = tuningLine({ frame: frame({ confirmed: false }), songSemitones: 0, guess, mismatch: 0, sample: null });
-  assert.equal(l.text, "Tuning guess: probably Eb standard. Names are what you hear.");
-  assert.deepEqual(l.useGuess, guess);
-  l = tuningLine({ frame: frame({ confirmed: false }), songSemitones: 0, guess: null, mismatch: 0, sample: null });
-  assert.equal(l.text, "Tuning not set. Names are what you hear.");
+  const line = (o: Partial<Parameters<typeof tuningLine>[0]>) =>
+    tuningLine({ frame: frame({}), songSemitones: -1, mySemitones: 0, shiftCents: 0, guess, mismatch: 0, sample: null, ...o });
 
-  // Song in Eb, player in Standard, no shift: amber with both fixes.
-  l = tuningLine({ frame: frame({}), songSemitones: -1, guess, mismatch: 1, sample });
-  assert.equal(l.warn, true);
-  assert.deepEqual(l.legend, { main: "E5", heard: "Eb5" });
-  assert.equal(l.text, "Eb shapes, you hear them a half step lower. If your guitar is in Eb, you're set.");
+  // Nothing set: a likely alternate tuning, one row of names.
+  let l = line({ frame: frame({ confirmed: false }), songSemitones: 0 });
+  assert.equal(l.text, "Song may be in an alternate tuning (probably Eb standard). Names will adjust if you set your tuning.");
+  assert.deepEqual(l.useGuess, guess);
+  assert.equal(line({ frame: frame({ confirmed: false }), songSemitones: 0, guess: null }).text, "");
+
+  // Song set to Eb, Standard guitar, no shift: names are what you hear,
+  // with a tip on how to play the song's usual shapes.
+  l = line({ mismatch: 1 });
+  assert.equal(l.warn, false);
+  assert.equal(l.legend, null);
+  assert.equal(l.text, "Song may be in Eb. To play its usual shapes, tune down a half step or shift the song.");
   assert.equal(l.fixes?.tunedLabel, "I'm tuned down");
 
-  // Player in Eb: same names, nothing to fix.
-  l = tuningLine({ frame: frame({}), songSemitones: -1, guess, mismatch: 0, sample });
-  assert.equal(l.warn, false);
+  // Guitar tuned to Eb: shapes over what you hear.
+  const eb = frame({ mySemitones: -1 });
+  const sample = chordViews(EB, eb)[0];
+  l = line({ frame: eb, mySemitones: -1, sample });
+  assert.deepEqual(l.legend, { main: "E5", heard: "Eb5" });
   assert.equal(l.fixes, null);
+  assert.equal(l.text, "Chords shifted to match your tuning shift (down a half step). Smaller names show how they sound.");
 
   // Shifted to the player's Standard.
-  l = tuningLine({ frame: frame({ shiftCents: 100 }), songSemitones: -1, guess, mismatch: 0, sample: null });
-  assert.equal(l.text, "Song in Eb, shifted to your tuning.");
+  assert.equal(line({ frame: frame({ shiftCents: 100 }), shiftCents: 100 }).text, "Song was shifted up a half step. Chords match what you hear.");
 
   // Standard song pitched up a whole step for a player in Standard.
-  l = tuningLine({ frame: frame({ songSemitones: 0, shiftCents: 200 }), songSemitones: 0, guess: null, mismatch: -2, sample: null });
-  assert.equal(l.text, "Standard shapes, you hear them a whole step higher. If your guitar is in F#, you're set.");
+  l = line({ frame: frame({ songSemitones: 0, shiftCents: 200 }), songSemitones: 0, shiftCents: 200, guess: null, mismatch: -2 });
+  assert.equal(l.text, "Song was shifted up a whole step. Chords match what you hear.");
   assert.equal(l.fixes?.tunedLabel, "I'm tuned up");
 });
 
@@ -169,7 +178,7 @@ test("detailed names and passing chords", () => {
     ],
   );
   // In Eb, not shifted: the passing chord gets both names too.
-  const eb = chordFrame({ songSemitones: -1, confirmed: true, offsetCents: 0, shiftCents: 0 });
+  const eb = chordFrame({ songSemitones: -1, confirmed: true, offsetCents: 0, shiftCents: 0, mySemitones: -1 });
   // A song in A shapes, tuned down: Ab at concert pitch.
   const shifted = { ...data, key: { tonic: 8, minor: false }, passing: [{ start_s: 6, end_s: 6.25, root: 10, quality: "m" }] };
   assert.deepEqual(passingViews(shifted, eb)[0], { start: 6, end: 6.25, main: "Bm", second: "Bbm", figure: false });

@@ -165,20 +165,89 @@ it starts.
   of itself and back (A to A6 in a boogie or rock rhythm part, or A to
   Asus4 and back), as tags with a solid outline. The chords' boundaries are the same either way.
 
-The names depend on how the song is tuned. Until you set **Song is in** in
-the Tuning panel, every name is what you hear; if the guess thinks the song
-is tuned down, the panel offers **Use Eb standard shapes** (or similar).
-Once it is set, the main name is the shape you would play in that tuning,
-and when what you hear is different (a song in Eb, not shifted to your
-Standard guitar), a second, dimmer name under it says what you hear: E5
-over Eb5. The line at the end of the panel's header says which way round it
-is, and turns amber when the shapes won't match your instrument, with
-**Shift song to my tuning** and **I'm tuned down** (which sets My tuning).
+The names are for your instrument. Unless you set **My tuning** in the
+Tuning panel, ShredLab assumes Standard tuning, and every name is what you
+hear and what you would fret on a Standard guitar. With My tuning set to
+something else (say Eb standard), the main name is the shape you fret in
+that tuning, and a second, smaller name under it says how it sounds: E5
+over Eb5. The line at the end of the panel's header says what it knows
+about the song's tuning. If the guess thinks the song is in an alternate
+tuning, it says so and offers **Set song to Eb standard** (or similar).
+Once **Song is in** is set and it doesn't match your tuning, the line says
+how to play the song with its usual shapes: tune down (then press **I'm
+tuned down**, which sets My tuning) or press **Shift song to my tuning**.
+When the song is shifted (by that button or by **Pitch**), the line says by
+how much; the names follow, so they still match what you hear.
+The notes panel follows the same rules.
 
 Chord detection makes mistakes, more with dense or distorted parts and
 with chords beyond major, minor, power chords, sevenths and sus chords.
 The panel says so ("best guess"): treat the names as a starting point and
 trust your ears.
+
+## Notes
+
+ShredLab also works out the single notes of the guitar, bass, vocals, keys
+and other stems, one stem at a time in the background after the chords.
+Press **Notes** (or `N`) for the notes panel, under the chords panel. It
+shows one stem at a time as a piano roll: each note is a bar at its pitch,
+colored like the chord roots (an A note has the color of an A chord), with
+its name on it where it fits (above it when the bar is too short). A
+keyboard down the left edge names the rows, and lights the key of the
+note under the playhead. Pick the stem in the panel's header; ShredLab
+remembers it for the song. Until a stem's notes are in, the panel says it
+is finding them.
+
+The notes are a rough draft, and the panel says so. Automatic note
+detection from a mixed recording is far from reliable: expect missed
+notes (more in fast runs, chords and busy mixes), some wrong notes or
+octaves, and now and then a note from another part, such as the rhythm
+guitar under a solo. Use them as a starting point and check by ear at slow
+speed. When two parts share a stem, Refine's stereo mask on the part you
+want usually gives better notes.
+
+The notes panel uses the same stretch of the song as the chords panel, so
+the bar lines line up: **Fit loop** or **Follow playhead**, and `−` and
+`+` (or `Ctrl` and the mouse wheel) zoom both panels. With the chords
+panel closed, the notes panel's header has those switches and the tuning
+line itself.
+
+- A bend rises in a curve from the note to where it is bent, labeled ½,
+  full or 1½ (half, whole or one and a half steps).
+- A slide is a slanted line from the note before.
+- A hammer-on or pull-off is a small arc from the note before, with h or p.
+- Where the stem plays several notes at once (rhythm guitar, piano
+  chords), the panel shows a hatched block labeled CHORDS with the chord
+  names from the chords panel; no single notes are guessed there.
+
+The bold bars are the lead line, one note at a time. Behind them, thinner
+and faint bars in the same colors, without names, are the other notes
+heard in the stem: a note that keeps ringing after the next one starts
+(the lead bar ends where the next note begins, the faint bar shows how
+long it rang), notes of a rhythm part or a second voice, and inside
+CHORDS blocks the notes of the chord. They show what the detector heard
+but didn't pick for the lead line, which is also where a missed lead note
+often is. Clear **Also heard** in the panel's header to hide them;
+ShredLab remembers the choice. The keyboard only lights the lead note.
+
+Click a note to play from it (faint notes too). Shift-click two notes to
+loop from the first to the end of the second. Hover a note for its octave,
+where it starts, its length and any bend; a faint note says "Also heard
+(not in the lead line)".
+
+Names follow the same rule as the chords: the shape you fret in My tuning,
+with what you hear smaller below when the two differ.
+
+The notes are found on the stem as you hear it after **Separation**
+strength and Refine's stereo window, not its EQ. Two guitars panned left
+and right are one guitar stem; set Refine's stereo window to the side of
+the lead and the panel shows the lead line, and the stem picker says
+"Guitar, refined: left". Changing the strength or the stereo window finds
+that stem's notes again; going back to a setting you used before is
+instant.
+
+Like the chords, the notes are a best guess, more often wrong in fast,
+dense or heavily distorted parts. Check them by ear at a slower speed.
 
 ## Keyboard shortcuts
 
@@ -194,6 +263,7 @@ trust your ears.
 | `C` | Click on / off |
 | `T` | Tuning panel |
 | `K` | Chords panel |
+| `N` | Notes panel |
 | `1`–`6` | Toggle stem on / off |
 | `Shift` + `1`–`6` | Solo stem on / off |
 | `Alt` + `1`–`6` | All but this stem (play along) |

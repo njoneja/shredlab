@@ -11,6 +11,7 @@
   import SeparationBanner from "./lib/SeparationBanner.svelte";
   import Waveform from "./lib/Waveform.svelte";
   import ChordsPanel from "./lib/ChordsPanel.svelte";
+  import NotesPanel from "./lib/NotesPanel.svelte";
   import Mixer from "./lib/Mixer.svelte";
   import Transport from "./lib/Transport.svelte";
   import ExportDialog from "./lib/ExportDialog.svelte";
@@ -68,6 +69,8 @@
       app.openTuning();
     } else if (e.code === "KeyK") {
       app.toggleChords();
+    } else if (e.code === "KeyN") {
+      app.toggleNotes();
     } else {
       handled = false;
     }
@@ -97,7 +100,8 @@
       <SeparationBanner />
       <Waveform />
       {#if app.chordsOpen}<ChordsPanel />{/if}
-      <div class="mixer-scroll"><Mixer /></div>
+      {#if app.notesOpen}<NotesPanel />{/if}
+      <div class="mixer-scroll" class:both={app.chordsOpen && app.notesOpen}><Mixer /></div>
       <Transport />
     </main>
   {:else}
@@ -139,13 +143,22 @@
      ends (a Refine panel opening or closing doesn't move it). */
   main > :global(.transport) {
     margin-top: auto;
+    /* If the window is too short for everything, the rest scrolls and the
+       transport stays in view. */
+    position: sticky;
+    bottom: 0;
+    z-index: 2;
   }
   .mixer-scroll {
     flex: 0 1 auto;
-    /* Scrolls inside; with the chords panel open in a small window it gives
-       way before the transport is pushed out of view. */
+    /* Scrolls inside; with the chords or notes panel open in a small window
+       it gives way before the transport is pushed out of view. */
     min-height: 68px;
     overflow: auto;
+  }
+  /* Both panels open: the mixer may shrink away entirely in a short window. */
+  .mixer-scroll.both {
+    min-height: 0;
   }
   .error {
     display: flex;

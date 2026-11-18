@@ -44,8 +44,9 @@ backend calls are in `lib/store.svelte.ts`; read it next.
 Components, all in `lib/`:
 
 - Frame: `Header.svelte` (with `OpenMenu.svelte` and `SettingsPopover.svelte`: model, quality, stem format, theme), `EmptyState.svelte` (start screen and recent songs), `SeparationBanner.svelte`.
-- `lib/chords.ts`: chord names from the backend's concert-pitch chords (spelling by key, the shape in the song's tuning and what is heard), the tuning line of the chords panel, and the panel's window. Pure functions; the store holds the state.
-- Song view: `Waveform.svelte` (canvas: peaks, bars, loop handles, playhead, the chord lane and the outline of what the chords panel shows; the readout has the chord at the playhead and the Chords toggle), `ChordsPanel.svelte` (a few bars with chord names, fitted to the loop or following the playhead, and the tuning line), `Mixer.svelte` (stem rows; opens `RefinePanel.svelte`), `Transport.svelte` (play, master volume, click and count-in, speed, tuning and pitch; opens `MeterPanel.svelte`; `TuningButton.svelte` is its icon-only Tuning button, whose look shows the song's tuning state).
+- `lib/notes.ts`: note names in the chords' frame, bend labels, the other notes heard (read from their text form), the piano roll's pitch range, the note at a time, the Refine label and the notes panel's default stem. Pure functions; the store holds the state.
+- `lib/chords.ts`: chord names from the backend's concert-pitch chords (spelling by key, the shape in My tuning and what is heard), the tuning line of the chords panel, and the panel's window. Pure functions; the store holds the state.
+- Song view: `Waveform.svelte` (canvas: peaks, bars, loop handles, playhead, the chord lane and the outline of what the chords and notes panels show; the readout has the chord at the playhead and the Chords and Notes toggles), `ChordsPanel.svelte` (a few bars with chord names, fitted to the loop or following the playhead, and the tuning line), `NotesPanel.svelte` (one stem's notes as a piano roll on the chords panel's window, with a keyboard strip drawn over its left edge so the timeline stays aligned, with the stem picker), `Mixer.svelte` (stem rows; opens `RefinePanel.svelte`), `Transport.svelte` (play, master volume, click and count-in, speed, tuning and pitch; opens `MeterPanel.svelte`; `TuningButton.svelte` is its icon-only Tuning button, whose look shows the song's tuning state).
 - Dialogs: `ExportDialog.svelte`, `TuningPanel.svelte` (reference pitch, tuning with the guess, the Shift split button, and tabs for reference tones and `LiveTuner.svelte`), `ShortcutsHelp.svelte`, `AboutDialog.svelte`, `StorageDialog.svelte`, `RemoveRecentDialog.svelte`. Each has an open flag in `AppState`.
 - Small parts: `Icon.svelte` (inline SVG paths), `Wordmark.svelte`.
 
@@ -126,16 +127,33 @@ depend on `app.theme`.
 
 **Chords.** The backend reports chords at concert pitch in
 `SongInfo.chords` or a later `chords-ready` event, and clears them for new
-stems. The store derives the names from them and the tuning state: until
-the user sets "Song is in" (`song_semitones_set` in `SongSettings.tuning`;
-missing means set when `song_semitones` is not 0) every name is what is
-heard; after that the main name is the shape in that tuning, with what is
-heard as a second name whenever the two differ. Detailed names
+stems. The store derives the names from them and the tuning state: the
+main name is the shape you fret in My tuning (Standard unless set) to play
+what is heard, with what is heard as a second name only when the two
+differ, that is when My tuning isn't Standard. "Song is in"
+(`song_semitones_set` in `SongSettings.tuning`; missing means set when
+`song_semitones` is not 0) only changes the tuning line, which says how to
+play the song's usual shapes when it doesn't match My tuning. Detailed names
 (`ChordSpan.detail`), passing chords (`ChordsData.passing`, dashed tags)
 and figures (`ChordsData.figures`, solid tags) show only with the panel's
 Detailed switch. The panel's open state, its bars and
 that switch are kept in localStorage (`shredlab.chords`). The finer waveform
 the panel draws is fetched when it first opens for a song.
+
+**Notes.** The backend reports each pitched stem's notes for its current
+source (stem set, strength, Refine stereo mask) in `SongInfo.notes` and
+later `notes-ready` events, and the stems still to do in
+`SongInfo.notes_pending` and `notes-status` events. A pending stem shows
+the panel's progress even if older notes for it are held (they belong to
+another source). The store names the notes with the chords' frame and key
+(`lib/notes.ts`). The notes panel uses the chords panel's window, zoom and
+Fit/Follow state (`chordWindow`, `chordsBars`, `chordsFit`), so the two
+line up and zoom together. `StemNotes.others` (the other notes the model
+heard, one string) is parsed into `heardViews` and drawn faintly behind the
+lead notes; they widen the pitch range only within an octave of the lead
+notes in view. Its open state and the Also heard box are kept in
+localStorage (`shredlab.notes`); the stem is saved per song as
+`SongSettings.notes_stem`.
 
 **Mock.** `lib/api.ts` picks the mock when `window.__TAURI_INTERNALS__` is
 missing. It fakes demo songs (Open cycles through them; drops get fake
@@ -147,7 +165,15 @@ separation or open: each demo song shows one state (see the comment on
 `fakeTuning`), and `__mockTuning({...})` in the console replaces the open
 song's measurement. Made-up chords on the mock grid follow the
 measurement (a riff with pushes, a verse over a pedal, a chorus and a
-bridge; in Eb for a song whose guess is likely Eb). Reference tones play through WebAudio, and the rate
+bridge; in Eb for a song whose guess is likely Eb). Made-up notes follow
+the chords, one stem every second like the app's job: a guitar riff and a
+lead line with bends, slides and legato, chordal stretches in the verse
+(gone when Refine's stereo window is on), root eighths on the bass, a
+vocal line, chords only on keys and nothing on other. Other notes heard:
+the guitar's longer picked notes ring on for a beat, and the chord tones
+sound in the chordal stretches.
+`__mockNotesAgain(ms)` in the console finds every stem's notes again,
+`ms` per stem, to show the panel's progress. Reference tones play through WebAudio, and the rate
 correction changes how fast the position moves. The live tuner gets three
 fake inputs (a 2-channel interface, a microphone, and a line input that
 gives digital silence, for the "No input" hint) and a synthetic stream
@@ -215,7 +241,7 @@ the contract is covered by the backend tests and the autotest (see
 [app/src-tauri](../src-tauri/README.md)).
 
 ```sh
-pnpm --dir app test     # unit tests of the pure modules (lib/tuning.ts, lib/chords.ts)
+pnpm --dir app test     # unit tests of the pure modules (lib/tuning.ts, lib/chords.ts, lib/notes.ts)
 pnpm --dir app check    # svelte-check: TypeScript and Svelte diagnostics
 pnpm --dir app build    # production build into app/dist
 pnpm --dir app dev      # UI alone with the mock: http://localhost:1420

@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 pub use crate::settings::{Quality, StemFormat};
 pub use shredlab_dsp::refine::{EqParams, RefineParams};
-pub use shredlab_library::{ChordsData, StrengthSetting, TuningData};
+pub use shredlab_library::{ChordsData, StemNotes, StrengthSetting, TuningData};
 
 pub const STEMS: [&str; 6] = ["vocals", "guitar", "bass", "drums", "piano", "other"];
 
@@ -55,6 +55,14 @@ pub struct SongInfo {
     /// Detected chords of the loaded stem set; `None` until the chords job
     /// has run (it needs the stems, the beats and the tuning).
     pub chords: Option<ChordsData>,
+    /// Detected notes of the pitched stems, one entry per stem whose notes
+    /// are computed for its current source (stem set, strength and Refine
+    /// stereo mask).
+    pub notes: Vec<StemNotes>,
+    /// Pitched stems whose notes for the current source are not in yet.
+    pub notes_pending: Vec<String>,
+    /// The stem the notes job works on now.
+    pub notes_running: Option<String>,
 }
 
 /// One separation model from the registry.
@@ -351,6 +359,25 @@ pub struct SongIdPayload {
 pub struct ChordsReady {
     pub song_id: String,
     pub chords: ChordsData,
+}
+
+/// `notes-ready` payload: one stem's notes for its current source.
+#[derive(Debug, Clone, Serialize)]
+pub struct NotesReady {
+    pub song_id: String,
+    pub stem: String,
+    pub source: String,
+    pub notes: StemNotes,
+}
+
+/// `notes-status` payload.
+#[derive(Debug, Clone, Serialize)]
+pub struct NotesStatus {
+    pub song_id: String,
+    /// Pitched stems whose notes for the current source are not in yet.
+    pub pending: Vec<String>,
+    /// The stem the notes job works on now.
+    pub running: Option<String>,
 }
 
 /// `tuning-ready` payload.

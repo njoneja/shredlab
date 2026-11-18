@@ -49,6 +49,76 @@ export interface SongInfo {
   tuning: TuningData | null;
   /** Detected chords of the loaded stems; null until the chords job has run. */
   chords: ChordsData | null;
+  /** Detected notes of the pitched stems for their current source; a stem is missing until its notes job has run. */
+  notes: StemNotes[];
+  /** Pitched stems whose notes for the current source are not in yet. */
+  notes_pending: StemName[];
+  /** The stem the notes job works on now. */
+  notes_running: StemName | null;
+}
+
+// ---- Notes ----
+
+/** A bend inside a note: when the pitch leaves the note, reaches the target and comes back. */
+export interface BendSpan {
+  start_s: number;
+  peak_s: number;
+  /** Missing: held to the end of the note. */
+  release_s?: number | null;
+  /** Size in semitones, positive up (1 = half step, 2 = whole step). */
+  semitones: number;
+}
+
+/** One detected note, at concert pitch (MIDI number, before any bend). */
+export interface NoteSpan {
+  start_s: number;
+  end_s: number;
+  midi: number;
+  /** Median deviation from `midi` in cents; missing = 0. */
+  cents?: number;
+  /** Confidence 0..1. */
+  conf?: number;
+  /** Missing = picked; "legato" = hammer-on (up) or pull-off (down); "slide" = slid into from the previous note. */
+  attack?: "legato" | "slide" | null;
+  bend?: BendSpan | null;
+  /** Stored, not shown yet. */
+  vibrato?: boolean;
+}
+
+/** The notes of one stem as computed from one source (stem set, strength, Refine stereo mask). */
+export interface StemNotes {
+  stem: StemName;
+  source: string;
+  /** Sorted by start, non-overlapping. */
+  notes: NoteSpan[];
+  /** Stretches [start, end] where the stem plays several notes at once (no notes inside); missing = none. */
+  chordal?: [number, number][];
+  /**
+   * Other notes the model heard (not in the lead line), at their own length,
+   * sorted by start, possibly overlapping: one string, per note
+   * `start end midi conf` separated by spaces, notes separated by commas
+   * (`parseHeard` in lib/notes.ts). Missing = none (and always for the bass).
+   */
+  others?: string;
+}
+
+/** `song.json` `notes`: entries per (stem, source), a few sources per stem. */
+export interface NotesData {
+  version: number;
+  entries: StemNotes[];
+}
+
+export interface NotesReady {
+  song_id: string;
+  stem: StemName;
+  source: string;
+  notes: StemNotes;
+}
+
+export interface NotesStatus {
+  song_id: string;
+  pending: StemName[];
+  running: StemName | null;
 }
 
 // ---- Chords ----
@@ -394,6 +464,8 @@ export interface SongSettings {
   mix: { stem: StemName; on: boolean; volume: number }[];
   /** The song's tuning settings; missing = defaults (My tuning from the last one set). */
   tuning?: SongTuningSettings;
+  /** Stem the notes panel shows; missing = the default (guitar if it has notes, else bass). */
+  notes_stem?: StemName;
 }
 
 /** Per-song tuning settings, inside `SongSettings`. */
@@ -459,6 +531,8 @@ export interface EventMap {
   "strength-error": StrengthError;
   "tuning-ready": TuningReady;
   "chords-ready": ChordsReady;
+  "notes-ready": NotesReady;
+  "notes-status": NotesStatus;
   "tuner-reading": TunerReading;
   "tuner-error": { message: string };
   "tuner-stopped": { reason: "playback" | "song_closed" };

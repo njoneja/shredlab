@@ -2,7 +2,7 @@
 
 The Tauri 2 shell of ShredLab (cargo package `shredlab`, library
 `shredlab_lib`): the commands and events the UI uses, the state of the open
-song, the background jobs (separation, beats, tuning, chords, export, separation strength),
+song, the background jobs (separation, beats, tuning, chords, notes, export, separation strength),
 app settings and model discovery. The audio, DSP, separation and library work
 itself lives in the crates under [crates/](../../crates).
 
@@ -84,6 +84,7 @@ are serialized by `open_lock`.
 | beats | `open_song` when the grid isn't cached, or its downbeats come from an older decoder and it has no per-beat scores to decode again from (then the cached beats are kept and only the downbeats replaced, because meter overrides are beat indices) | none; the result is saved to `song.json` regardless and applied only if still current |
 | tuning | `open_song` without a current measurement, a finished separation | none; saved to `song.json` regardless, applied and emitted only if still current |
 | chords | whenever the open song has stems, beats and a current tuning but no chords for that stem set and algorithm version (`maybe_spawn_chords`: after `open_song`, the tuning job and the beats job) | none; one job per (song, stem set) at a time; saved regardless, emitted only if still current, otherwise it checks again |
+| notes | `maybe_spawn_notes`: after `open_song`, the tuning job, the beats job, a finished strength job, a finished run of itself, and a changed Refine stereo mask once it has settled for a second (`flush_notes_pans`, called by the position thread). Runs the next pitched stem whose notes for its current source (stem set, loaded strength, stereo mask: `notes_source`) are not saved, once the stems, beats and a current tuning are in. Stems other than the bass go through the note model when it is found (a load or run error falls back to the pitch tracker, logged) | none; one stem at a time; saved to `song.json` regardless (at most four sources per stem), emitted only if that source is still the stem's current one; each run starts the next |
 | export | `export_mix` | `AtomicBool`, set by `cancel_export`; the partial file is deleted |
 | strength | `set_strength`, `open_song`, a finished separation | `AtomicBool`; a newer job, `open_song` or `close_song` cancels the older one |
 | position | `start_background` | runs for the life of the backend |
@@ -119,11 +120,16 @@ wins; later duplicates are logged as problems. The model used is
 else the first non-personal model. The beat model file
 `beat_this_final0.onnx` is looked up at `SHREDLAB_BEAT_MODEL` (a file
 path), then in the same places (debug: `models/onnx/`). Without it beats
-are skipped and the click falls back to defaults.
+are skipped and the click falls back to defaults. The Basic Pitch note
+model `basic_pitch_nmp.onnx` is looked up the same way at
+`SHREDLAB_NOTE_MODEL` (debug: `models/basic_pitch/nmp.onnx`, where
+`tools/setup_models.py` puts it). Without it every stem's notes come from
+`shredlab-notes`' pitch tracker.
 
 **Device and quality.** Separation uses `SHREDLAB_DEVICE` (default `auto`),
 beats `SHREDLAB_BEATS_DEVICE` (default `cpu`; that model has no self-test;
-a GPU failure retries on CPU). Before a model is loaded, `predict_device`
+a GPU failure retries on CPU). The note model always runs on the CPU (four
+threads); the notes job loads it on first use and keeps it. Before a model is loaded, `predict_device`
 guesses the label from the loaded separator or the cached self-test result;
 the default quality is High for "GPU", Standard for "CPU".
 

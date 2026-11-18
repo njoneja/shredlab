@@ -3,8 +3,8 @@
 Runs the separation models: finds model folders, loads an ONNX Runtime
 session on the best device that produces correct output, and turns a song
 into stems through the adapter the model declares. It also holds the ORT
-session for the Beat This! beat model, so ONNX Runtime is linked in one
-place.
+sessions for the Beat This! beat model and the Basic Pitch note model, so
+ONNX Runtime is linked in one place.
 
 ## Boundaries
 
@@ -12,11 +12,13 @@ place.
   options, `model.json` / `selftest.json` parsing and validation, the model
   registry, the two adapters (`demucs-hybrid`, `roformer-mask`), the device
   self-test with its cache, sha256 verification of ONNX files, `Separator`
-  (load with fallback, separate, time-shifted passes) and `BeatModel`.
+  (load with fallback, separate, time-shifted passes), `BeatModel` and
+  `NoteModel`.
 - Does not: decode or resample audio (callers pass planar f32 at the
   model's rate, see `shredlab-io`), write stems anywhere (`shredlab-library`),
   or do beat pre/post-processing (`shredlab-beats`, which stays ORT-free
-  and receives `BeatModel::run` as a closure). The STFT, chunking and
+  and receives `BeatModel::run` as a closure) or note decoding
+  (`shredlab-notes`, likewise with `NoteModel::run`). The STFT, chunking and
   overlap-add math lives in `shredlab-dsp`; this crate wires it to the
   graph. All paths (model dirs, cache dir) are passed in by the caller; no
   Tauri dependency.
@@ -47,6 +49,7 @@ Start with `src/lib.rs` (usage example and re-exports), then
 - `src/selftest.rs`: the `synth-v1` input generator, the pass rule
   (`check`), the JSON `Cache` and `sha256_file`.
 - `src/beat_model.rs`: `BeatModel`, the session for the beat model.
+- `src/note_model.rs`: `NoteModel`, the session for the note model.
 - `build.rs`: macOS only, links clang's runtime for ORT's CoreML code in
   LTO builds.
 - `tests/golden.rs`: ignored end-to-end tests against the Python
@@ -126,6 +129,11 @@ cache dir nothing is cached.
 is no reference for it); `run` feeds `spect` `[1, frames, mels]` and
 returns the `beat` and `downbeat` logits.
 
+`NoteModel::load` builds a CPU session (the model is about 230 KB and a
+window takes milliseconds); `run` feeds one window of mono audio at
+22,050 Hz as `[1, samples, 1]` and returns the note, onset and contour
+activations, in that order (the graph's outputs `:1`, `:2` and `:0`).
+
 ## Invariants and gotchas
 
 - GPU backends can be wrong without failing. With graph fusion on,
@@ -153,13 +161,14 @@ returns the `beat` and `downbeat` logits.
   number of overlaps for `roformer-mask`; validation enforces both.
 - Only stereo models (`channels = 2`) and manifest `schema` 1 are
   accepted; `file` must be a plain file name inside the model folder.
-- `ort` is pinned to an exact version, and `shredlab-beats` pins the same
-  one for its dev tests. Change both together, then rerun the self-tests
-  and golden tests (a new ORT build also invalidates cached self-test
-  results, since the ORT version is in the key).
-- `Separator` and `BeatModel` run their sessions through `&mut self`;
-  they are `Send`, so a caller moves them to a worker thread rather than
-  sharing them.
+- `ort` is pinned to an exact version, and `shredlab-beats` and
+  `shredlab-notes` pin the same one for their dev examples and tests.
+  Change them together, then rerun the self-tests and golden tests (a new
+  ORT build also invalidates cached self-test results, since the ORT
+  version is in the key).
+- `Separator`, `BeatModel` and `NoteModel` run their sessions through
+  `&mut self`; they are `Send`, so a caller moves them to a worker thread
+  rather than sharing them.
 
 ## Testing
 

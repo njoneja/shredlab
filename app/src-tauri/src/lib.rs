@@ -145,6 +145,7 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let cfg = Config {
         model_dirs: models::model_dirs(resource_dir.as_deref(), &data_dir),
         beat_model: models::find_beat_model(resource_dir.as_deref(), &data_dir),
+        note_model: models::find_note_model(resource_dir.as_deref(), &data_dir),
         device: device_env("SHREDLAB_DEVICE", DevicePref::Auto),
         beat_device: device_env("SHREDLAB_BEATS_DEVICE", DevicePref::Cpu),
         data_dir,

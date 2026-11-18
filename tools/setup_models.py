@@ -15,9 +15,11 @@ expected sha256; --force redoes everything):
      pinned packages from requirements-models.txt. Uses uv if it is on PATH,
      else `python3.12 -m venv` + pip. The DirectML venv `.venv` is never used
      or modified.
-  2. Downloads the official checkpoints (both MIT) and checks their sha256:
-       - Demucs v4 htdemucs_6s (Meta)  -> <out>/5c90dfd2-34c22ccb.th
-       - Beat This! final0 (CPJKU)     -> <out>/beat_this/beat_this-final0.ckpt
+  2. Downloads the official checkpoints and checks their sha256:
+       - Demucs v4 htdemucs_6s (Meta, MIT)  -> <out>/5c90dfd2-34c22ccb.th
+       - Beat This! final0 (CPJKU, MIT)     -> <out>/beat_this/beat_this-final0.ckpt
+       - Basic Pitch (Spotify, Apache-2.0)  -> <out>/basic_pitch/nmp.onnx
+         (published as ONNX; used as is, no export)
   3. Exports <out>/onnx/htdemucs_6s_own.onnx   (spikes/onnx_demucs_own.py)
   4. Exports <out>/onnx/beat_this_final0.onnx  (spikes/onnx_beat_this.py)
   5. Builds <out>/registry/htdemucs_6s/        (tools/registry.py build-htdemucs)
@@ -81,10 +83,22 @@ CHECKPOINTS = [
         "sha256": "8c328b45f59d8dd3dff219253ff6a8d6482be57d0133a29140e2febbf8eb8331",
         "size": 81058141,
     },
+    {
+        "key": "basic_pitch",
+        "name": "Basic Pitch note model (Spotify, Apache-2.0)",
+        # The ONNX file in the upstream repository (main branch; the sha256
+        # pins the content).
+        "url": "https://raw.githubusercontent.com/spotify/basic-pitch/main/basic_pitch/saved_models/icassp_2022/nmp.onnx",
+        "rel": "basic_pitch/nmp.onnx",
+        # Recorded from the download.
+        "sha256": "2c3c1d144bfa61ad236e92e169c13535c880469a12a047d4e73451f2c059a0ec",
+        "size": 230444,
+    },
 ]
 
 DEMUCS_ONNX = "onnx/htdemucs_6s_own.onnx"
 BEAT_ONNX = "onnx/beat_this_final0.onnx"
+NOTE_ONNX = "basic_pitch/nmp.onnx"
 REGISTRY = "registry/htdemucs_6s"
 # Hashes of the ONNX files the app was developed against (torch 2.4.1 on
 # Windows). A fresh export on another machine or torch build may differ in
@@ -392,11 +406,13 @@ def main():
     print(f"\nAll done in {time.time() - t_start:.0f} s. Models are in {out}:")
     print(f"  {out / REGISTRY}")
     print(f"  {out / BEAT_ONNX}")
+    print(f"  {out / NOTE_ONNX}")
     if out != (REPO / "models").resolve():
         print("\nThis is not the repo's models/ folder, which the app bundle and debug builds use.")
         print("To run the app against these models:")
         print(f"  SHREDLAB_MODELS_DIR={out / 'registry'}")
         print(f"  SHREDLAB_BEAT_MODEL={out / BEAT_ONNX}")
+        print(f"  SHREDLAB_NOTE_MODEL={out / NOTE_ONNX}")
 
 
 # ------------------------------------------------- worker (model venv)

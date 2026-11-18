@@ -28,6 +28,7 @@
 pub mod adapters;
 pub mod beat_model;
 pub mod manifest;
+pub mod note_model;
 pub mod registry;
 pub mod runtime;
 pub mod selftest;
@@ -37,6 +38,7 @@ use std::path::Path;
 
 pub use beat_model::BeatModel;
 pub use manifest::{AdapterKind, Manifest, SelfTestSpec};
+pub use note_model::NoteModel;
 pub use registry::{ModelEntry, ModelRegistry, ModelSource};
 pub use runtime::{DevicePref, Ep, SessionOverrides};
 pub use selftest::SelfTestReport;

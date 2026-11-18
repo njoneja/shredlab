@@ -304,6 +304,153 @@ pub struct ChordSpan {
     pub push: bool,
 }
 
+/// Detected notes of a song's pitched stems (`song.json` `notes`), one entry
+/// per (stem, source) computed. Pitches are at concert pitch, relative to
+/// the song's own reference.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct NotesData {
+    /// Algorithm version that produced the entries; on a change they are
+    /// all recomputed.
+    pub version: u32,
+    /// Oldest first. The app keeps a few sources per stem, so switching
+    /// back to an earlier setting is instant.
+    #[serde(default)]
+    pub entries: Vec<StemNotes>,
+}
+
+/// The notes of one stem as computed from one source ([`NotesData::entries`]).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct StemNotes {
+    /// The app's stem name ("bass", "guitar", "vocals", "piano", "other").
+    pub stem: String,
+    /// What the notes were computed from: the stem set, the separation
+    /// strength and Refine's stereo mask, as a key built by the app.
+    pub source: String,
+    /// Sorted by start, non-overlapping.
+    #[serde(default)]
+    pub notes: Vec<NoteSpan>,
+    /// Stretches `[start, end]` in seconds where the stem plays several
+    /// notes at once (no notes inside).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub chordal: Vec<[f64; 2]>,
+    /// Other notes the model heard (not in the lead line), at their own
+    /// length, sorted by start; they may overlap each other and the notes.
+    /// Stored as one string, see [`HeardSpan`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty", with = "heard_text")]
+    pub others: Vec<HeardSpan>,
+}
+
+/// One note of [`StemNotes::others`]. In `song.json` (and over IPC) all of
+/// a stem's are one string, a few thousand per guitar stem: per note
+/// `start end midi conf` separated by spaces, notes separated by commas,
+/// times in seconds rounded to 3 decimals and the confidence to 2, trailing
+/// zeros dropped (`"12.5 13.034 64 0.52,12.71 14 67 0.3"`). Each note takes
+/// about 24 bytes where a pretty-printed array of four numbers would take
+/// over 100. Malformed notes are skipped when reading.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct HeardSpan {
+    pub start_s: f64,
+    pub end_s: f64,
+    /// MIDI note number at concert pitch.
+    pub midi: u8,
+    /// The model's confidence, 0..1.
+    pub conf: f32,
+}
+
+/// [`StemNotes::others`] as one string (see [`HeardSpan`]).
+mod heard_text {
+    use super::HeardSpan;
+    use serde::{Deserialize, Deserializer, Serializer};
+    use std::fmt::Write;
+
+    /// `v` with `decimals` decimals, without trailing zeros.
+    fn num(out: &mut String, v: f64, decimals: usize) {
+        let start = out.len();
+        let _ = write!(out, "{v:.decimals$}");
+        if out[start..].contains('.') {
+            let trimmed = out.trim_end_matches('0').trim_end_matches('.').len();
+            out.truncate(trimmed);
+        }
+        if &out[start..] == "-0" {
+            out.truncate(start);
+            out.push('0');
+        }
+    }
+
+    pub fn encode(v: &[HeardSpan]) -> String {
+        let mut out = String::with_capacity(v.len() * 24);
+        for (i, h) in v.iter().enumerate() {
+            if i > 0 {
+                out.push(',');
+            }
+            num(&mut out, h.start_s, 3);
+            out.push(' ');
+            num(&mut out, h.end_s, 3);
+            let _ = write!(out, " {} ", h.midi);
+            num(&mut out, f64::from(h.conf), 2);
+        }
+        out
+    }
+
+    pub fn decode(s: &str) -> Vec<HeardSpan> {
+        s.split(',')
+            .filter_map(|n| {
+                let mut f = n.split_whitespace();
+                let h = HeardSpan {
+                    start_s: f.next()?.parse().ok()?,
+                    end_s: f.next()?.parse().ok()?,
+                    midi: f.next()?.parse().ok()?,
+                    conf: f.next()?.parse().ok()?,
+                };
+                (f.next().is_none() && h.end_s > h.start_s).then_some(h)
+            })
+            .collect()
+    }
+
+    pub fn serialize<S: Serializer>(v: &[HeardSpan], s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&encode(v))
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<HeardSpan>, D::Error> {
+        Ok(decode(&String::deserialize(d)?))
+    }
+}
+
+/// One note of [`StemNotes::notes`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct NoteSpan {
+    pub start_s: f64,
+    pub end_s: f64,
+    /// MIDI note number at concert pitch (before any bend).
+    pub midi: u8,
+    /// Median deviation from `midi` in cents.
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub cents: f32,
+    /// Confidence, 0..1.
+    #[serde(default)]
+    pub conf: f32,
+    /// How the note starts: `None` = picked, "legato" (hammer-on or
+    /// pull-off) or "slide".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attack: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bend: Option<BendSpan>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub vibrato: bool,
+}
+
+/// [`NoteSpan::bend`]: when the pitch leaves the note, reaches the target
+/// and comes back (if it does inside the note), and the size in semitones
+/// (positive up).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+pub struct BendSpan {
+    pub start_s: f64,
+    pub peak_s: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release_s: Option<f64>,
+    pub semitones: f32,
+}
+
 /// [`TuningData::guess`]: the lowest steadily played bass note (offset
 /// removed, E1 = 28) and how far below standard bass that is.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
@@ -364,6 +511,9 @@ pub struct SongMeta {
     /// Detected chords (from the stems and beats).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chords: Option<ChordsData>,
+    /// Detected notes of the pitched stems.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notes: Option<NotesData>,
     /// Opaque UI settings, stored and returned verbatim.
     #[serde(default)]
     pub settings: Option<serde_json::Value>,
@@ -402,6 +552,7 @@ impl SongMeta {
             beats: None,
             tuning: None,
             chords: None,
+            notes: None,
             settings: None,
             refine: BTreeMap::new(),
             strength: StrengthSetting::default(),
@@ -434,6 +585,10 @@ impl SongMeta {
         }
         self.schema = SCHEMA;
     }
+}
+
+fn is_zero_f32(v: &f32) -> bool {
+    *v == 0.0
 }
 
 fn is_false(b: &bool) -> bool {
@@ -1210,6 +1365,34 @@ mod tests {
     }
 
     #[test]
+    fn heard_notes_are_one_rounded_string() {
+        let v = [
+            HeardSpan {
+                start_s: 0.0004,
+                end_s: 123.45678,
+                midi: 40,
+                conf: 0.999,
+            },
+            HeardSpan {
+                start_s: 2.0,
+                end_s: 2.5,
+                midi: 67,
+                conf: 0.4,
+            },
+        ];
+        let s = heard_text::encode(&v);
+        assert_eq!(s, "0 123.457 40 1,2 2.5 67 0.4");
+        let back = heard_text::decode(&s);
+        assert_eq!(back.len(), 2);
+        assert_eq!((back[0].end_s, back[0].conf), (123.457, 1.0));
+        assert_eq!(back[1], v[1]);
+        // Malformed notes are skipped, the rest kept.
+        let odd = heard_text::decode("1 2 64 0.5,x 3 60 0.2,4 5 61,6 5 60 0.1,7 8 62 0.3");
+        assert_eq!(odd.iter().map(|h| h.midi).collect::<Vec<_>>(), [64, 62]);
+        assert!(heard_text::decode("").is_empty());
+    }
+
+    #[test]
     fn manifest_roundtrip_and_update() {
         let lib = Library::open(&tmpdir("manifest")).unwrap();
         assert!(lib.load("abc").unwrap().is_none());
@@ -1293,11 +1476,60 @@ mod tests {
                 quality: "6".into(),
             }],
         });
+        m.notes = Some(NotesData {
+            version: 1,
+            entries: vec![StemNotes {
+                stem: "guitar".into(),
+                source: "htdemucs_6s_s1|st0|pan-1.00:1.34:0.20".into(),
+                notes: vec![
+                    NoteSpan {
+                        start_s: 1.0,
+                        end_s: 1.5,
+                        midi: 64,
+                        conf: 0.8,
+                        ..Default::default()
+                    },
+                    NoteSpan {
+                        start_s: 1.5,
+                        end_s: 2.5,
+                        midi: 67,
+                        cents: -6.0,
+                        conf: 0.7,
+                        attack: Some("legato".into()),
+                        bend: Some(BendSpan {
+                            start_s: 1.7,
+                            peak_s: 1.9,
+                            release_s: Some(2.3),
+                            semitones: 2.0,
+                        }),
+                        vibrato: true,
+                    },
+                ],
+                chordal: vec![[3.0, 5.0]],
+                others: vec![
+                    HeardSpan {
+                        start_s: 1.25,
+                        end_s: 2.75,
+                        midi: 64,
+                        conf: 0.52,
+                    },
+                    HeardSpan {
+                        start_s: 3.5,
+                        end_s: 4.125,
+                        midi: 59,
+                        conf: 0.3,
+                    },
+                ],
+            }],
+        });
         lib.save(&mut m).unwrap();
         // Empty fields stay out of the file.
         let json = std::fs::read_to_string(lib.song_dir("abc").join("song.json")).unwrap();
         assert!(!json.contains("\"bass\": null") && !json.contains("\"root\": null"));
         assert!(!json.contains("\"push\": false") && !json.contains("\"quality\": \"\""));
+        assert!(!json.contains("\"cents\": 0") && !json.contains("\"vibrato\": false"));
+        assert!(!json.contains("\"attack\": null") && !json.contains("\"release_s\": null"));
+        assert!(json.contains("\"others\": \"1.25 2.75 64 0.52,3.5 4.125 59 0.3\""));
         let back = lib.load("abc").unwrap().unwrap();
         assert_eq!(back, m);
         assert!(lib.update("abc", |m| m.title = "Other".into()).unwrap());

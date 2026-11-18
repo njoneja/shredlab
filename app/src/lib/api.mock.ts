@@ -5,7 +5,9 @@
 // song, separation progress, a beat grid, the tuning measurement, playback
 // position and export. Audio: a soft WebAudio click when the click track /
 // count-in is on, and the reference tones; otherwise silence. The live
-// tuner gets fake input devices and a synthetic stream of readings.
+// tuner gets fake input devices and a synthetic stream of readings. Notes
+// are made up on the mock grid, in step with the fake chords, one stem at a
+// time like the app's notes job.
 import type {
   AppSettingsInfo,
   AppSettingsUpdate,
@@ -34,9 +36,12 @@ import type {
   TuningData,
   ChordsData,
   ChordSpan,
+  NoteSpan,
+  StemNotes,
 } from "./types";
 import { THEMES } from "./types";
 import { isIdentity, mockPresets } from "./refine";
+import { formatHeard, type HeardSpan } from "./notes";
 
 type Handler = (payload: unknown) => void;
 const handlers = new Map<string, Set<Handler>>();
@@ -241,6 +246,8 @@ function runStrength(song_id: string, strength: StrengthSetting): number {
       clearInterval(strengthTimer!);
       strengthTimer = null;
       emit("strength-done", { song_id, job, strength });
+      // The notes follow the loaded stems' strength.
+      runNotes();
     }
   }, 100);
   return job;
@@ -326,6 +333,7 @@ function measureTuning(ms: number) {
       if (!song || song.song_id !== id) return;
       song.chords = songChords();
       if (song.chords) emit("chords-ready", { song_id: song.song_id, chords: song.chords });
+      runNotes();
     }, 900);
   }, ms);
 }
@@ -579,6 +587,228 @@ function fakeChords(g: BeatGrid, duration: number, shift: number): ChordsData {
   return { version: 8, stems: "htdemucs_6s_s1", key: { tonic: tr(E), minor: false }, segments: segs, passing: pass, figures: figs };
 }
 
+// ---- notes ----
+
+const NOTE_STEMS_MOCK: StemName[] = ["guitar", "bass", "vocals", "piano", "other"];
+
+/** Time of `beat` (fractional) in `bar` on the grid, or null past the end. */
+function gridTime(g: BeatGrid) {
+  const beatIdx = new Map(g.beats.map((t, i) => [t, i]));
+  return (bar: number, beat: number): number | null => {
+    if (bar < 0 || bar >= g.downbeats.length) return null;
+    const i0 = beatIdx.get(g.downbeats[bar]);
+    if (i0 == null) return null;
+    const i = i0 + Math.floor(beat);
+    if (i + 1 >= g.beats.length) return null;
+    return g.beats[i] + (beat % 1) * (g.beats[i + 1] - g.beats[i]);
+  };
+}
+
+/**
+ * Made-up notes for one stem, following the fake chords' song form (riff,
+ * verse, chorus, bridge): the guitar plays a single-note riff and a lead
+ * line in the chorus with bends, slides, hammer-ons and pull-offs, and
+ * chords in the verse and bridge (chordal stretches, dropped when a stereo
+ * mask isolates the lead); the bass plays root eighths; vocals sing in
+ * the verse and chorus; keys only play chords; other has no notes. In E
+ * shapes moved by `shift` semitones, like the chords. Other notes heard:
+ * the guitar's longer picked notes ring on for a beat under the next ones,
+ * and the chord tones sound in the chordal stretches (guitar and keys).
+ */
+function fakeNotes(g: BeatGrid, chords: ChordsData, shift: number, stem: StemName, masked: boolean): Omit<StemNotes, "source"> {
+  const at = gridTime(g);
+  const notes: NoteSpan[] = [];
+  const chordal: [number, number][] = [];
+  const others: HeardSpan[] = [];
+  const bars = g.downbeats.length;
+  type L = [number, number, number, number, NoteSpan["attack"]?, number?, boolean?]; // bar, beat, len, shape midi, attack, bend, release
+  const play = (b0: number, lick: L[]) => {
+    for (const [bar, beat, len, m, attack, bend, release] of lick) {
+      const a = at(b0 + bar, beat);
+      const e = at(b0 + bar, beat + len);
+      if (a == null || e == null) continue;
+      const end = e - 0.03;
+      const n: NoteSpan = { start_s: a, end_s: end, midi: m + shift, conf: 0.8 };
+      if (attack) n.attack = attack;
+      if (bend) {
+        const d = end - a;
+        n.bend = { start_s: a + 0.25 * d, peak_s: a + 0.45 * d, semitones: bend, ...(release ? { release_s: a + 0.85 * d } : {}) };
+      }
+      notes.push(n);
+      // A longer picked guitar note rings on under the next one.
+      const ring = at(b0 + bar, beat + len + 1);
+      if (stem === "guitar" && !attack && !bend && len >= 1 && ring != null) {
+        others.push({ start_s: end, end_s: ring - 0.05, midi: m + shift, conf: 0.45 });
+      }
+    }
+  };
+  const stretch = (b0: number, n: number) => {
+    const a = at(b0, 0);
+    const e = at(b0 + n, 0) ?? g.beats[g.beats.length - 1];
+    if (a != null && e != null && e > a) chordal.push([a, e]);
+  };
+  const riffLick: L[] = [
+    [0, 0, 1, 52], [0, 1, 0.5, 52], [0, 1.5, 0.5, 55], [0, 2, 0.5, 57, "legato"], [0, 2.5, 1, 50, "slide"], [0, 3.5, 0.5, 45],
+    [1, 0, 1.5, 59, undefined, 2], [1, 2, 0.5, 52], [1, 2.5, 0.5, 55], [1, 3, 0.5, 57, "legato"], [1, 3.5, 0.5, 55, "legato"],
+  ];
+  const chorusLick: L[] = [
+    [0, 0, 1, 69], [0, 1, 0.5, 72, "legato"], [0, 1.5, 0.5, 74, "legato"], [0, 2, 2, 76, undefined, 2],
+    [1, 0, 1, 74], [1, 1, 1, 72, "slide"], [1, 2, 1, 69], [1, 3, 0.5, 67], [1, 3.5, 0.5, 64, "legato"],
+    [2, 0, 2, 67, undefined, 1, true], [2, 2, 1, 69, "slide"], [2, 3, 1, 71],
+    [3, 0, 1.5, 64], [3, 1.5, 0.5, 67, "legato"], [3, 2, 2, 69, undefined, 3],
+  ];
+  const vocalLick: L[] = [[0, 0, 1.5, 68], [0, 2, 2, 66, "slide"], [1, 0, 3, 64], [1, 3, 1, 66]];
+  const blocks: number[] = [];
+  for (let b = 8; b + 40 <= bars; b += 40) blocks.push(b);
+  if (stem === "guitar") {
+    for (let b = 0; b < 8; b += 2) play(b, riffLick);
+    for (const b of blocks) {
+      if (!masked) stretch(b, 16);
+      for (let c = b + 16; c < b + 32; c += 4) play(c, chorusLick);
+      if (!masked) stretch(b + 32, 4);
+      for (let r = b + 36; r < b + 40; r += 2) play(r, riffLick);
+    }
+  } else if (stem === "vocals") {
+    for (const b of blocks) for (let v = b; v < b + 32; v += 2) play(v, vocalLick);
+  } else if (stem === "piano") {
+    for (const b of blocks) stretch(b, 36);
+  } else if (stem === "bass") {
+    const low = 28 + shift; // E1 in the song's tuning
+    let k = 0;
+    for (const s of chords.segments) {
+      if (s.root == null) continue;
+      const root = s.bass ?? s.root;
+      const m = low + ((((root - (4 + shift)) % 12) + 12) % 12);
+      for (const t of g.beats) {
+        if (t < s.start_s || t >= s.end_s) continue;
+        const next = g.beats.find((x) => x > t) ?? t + 0.5;
+        const mid = (t + next) / 2;
+        const fifth = k % 8 === 7;
+        notes.push({ start_s: t, end_s: mid - 0.02, midi: m, conf: 0.85 });
+        notes.push({ start_s: mid, end_s: Math.min(next, s.end_s) - 0.02, midi: fifth ? m + 7 : m, conf: 0.8, ...(fifth ? { attack: "slide" as const } : {}) });
+        k++;
+      }
+    }
+  }
+  // Chord tones in the chordal stretches: root, third and fifth from E2 up.
+  for (const [a, e] of chordal) {
+    for (const c of chords.segments) {
+      if (c.root == null || c.end_s <= a || c.start_s >= e) continue;
+      const root = 40 + ((c.root - 4 + 12) % 12);
+      const q = c.quality ?? "";
+      const third = q.startsWith("m") && !q.startsWith("maj") ? 3 : 4;
+      for (const [k, m] of [root, root + third, root + 7, root + 12].entries()) {
+        others.push({ start_s: Math.max(a, c.start_s) + 0.01 * k, end_s: Math.min(e, c.end_s) - 0.05, midi: m, conf: 0.6 - 0.05 * k });
+      }
+    }
+  }
+  notes.sort((a, b) => a.start_s - b.start_s);
+  // Nothing inside a chordal stretch, nothing overlapping.
+  const kept = notes.filter((n) => !chordal.some(([a, e]) => n.start_s < e && n.end_s > a));
+  for (let i = 1; i < kept.length; i++) kept[i - 1].end_s = Math.min(kept[i - 1].end_s, kept[i].start_s - 0.01);
+  const heard = others.filter((h) => h.end_s - h.start_s >= 0.07).sort((a, b) => a.start_s - b.start_s);
+  return { stem, notes: kept.filter((n) => n.end_s > n.start_s), chordal, ...(heard.length ? { others: formatHeard(heard) } : {}) };
+}
+
+/** The source key of a stem's notes now (as the app builds it). */
+function notesSource(stem: StemName): string | null {
+  if (!song?.separated_with) return null;
+  const sw = song.separated_with;
+  const st = song.strength;
+  let key = `${sw.model_id}_s${sw.quality === "high" ? 2 : 1}|st${st.level}${st.level > 0 && st.smooth ? "s" : ""}`;
+  const p = notesPans[stem];
+  if (p?.enabled) key += `|pan${(p.center + 0).toFixed(2)}:${(p.width + 0).toFixed(2)}:${(p.softness + 0).toFixed(2)}`;
+  return key;
+}
+
+/** Stereo masks the notes follow (settled a second after the last change), by stem. */
+let notesPans: Partial<Record<StemName, RefineParams["pan"]>> = {};
+let notesPanTimer: number | null = null;
+let notesTimer: number | null = null;
+/** Sources computed per song: `${song_id}|${stem}|${source}`, so going back is instant. */
+const notesSeen = new Set<string>();
+let notesRunning: StemName | null = null;
+let notesStepMs = 900;
+
+function notesFor(stem: StemName): StemNotes | null {
+  const src = notesSource(stem);
+  if (!song || !grid || !song.chords || src == null) return null;
+  const g = song.tuning?.guess;
+  const shift = g?.likely ? g.below_standard : 0;
+  return { ...fakeNotes(grid, song.chords, shift, stem, !!notesPans[stem]?.enabled), source: src };
+}
+
+function notesPending(): StemName[] {
+  if (!song?.stems_cached) return [];
+  return NOTE_STEMS_MOCK.filter((s) => !notesSeen.has(`${song!.song_id}|${s}|${notesSource(s)}`));
+}
+
+function emitNotesStatus() {
+  if (song) emit("notes-status", { song_id: song.song_id, pending: notesPending(), running: notesRunning });
+}
+
+/** Runs the pending stems one at a time, like the app's notes job (needs the chords' grid and tuning). */
+function runNotes() {
+  if (notesTimer != null || !song || !song.chords) {
+    emitNotesStatus();
+    return;
+  }
+  const next = notesPending()[0];
+  if (!next) {
+    notesRunning = null;
+    emitNotesStatus();
+    return;
+  }
+  notesRunning = next;
+  emitNotesStatus();
+  const id = song.song_id;
+  notesTimer = window.setTimeout(() => {
+    notesTimer = null;
+    notesRunning = null;
+    if (!song || song.song_id !== id) return;
+    const n = notesFor(next);
+    if (n) {
+      notesSeen.add(`${id}|${next}|${n.source}`);
+      emit("notes-ready", { song_id: id, stem: next, source: n.source, notes: n });
+    }
+    runNotes();
+  }, notesStepMs);
+}
+
+function stopNotes() {
+  if (notesTimer != null) clearTimeout(notesTimer);
+  if (notesPanTimer != null) clearTimeout(notesPanTimer);
+  notesTimer = null;
+  notesPanTimer = null;
+  notesRunning = null;
+}
+
+/** The notes follow a changed stereo mask a second after the last change. */
+function followNotesPans() {
+  if (notesPanTimer != null) clearTimeout(notesPanTimer);
+  notesPanTimer = window.setTimeout(() => {
+    notesPanTimer = null;
+    if (!song) return;
+    const before = notesPans;
+    notesPans = Object.fromEntries(Object.entries(song.refine).filter(([, p]) => p?.pan.enabled).map(([k, p]) => [k, p!.pan]));
+    for (const s of NOTE_STEMS_MOCK) {
+      if (JSON.stringify(before[s]) === JSON.stringify(notesPans[s])) continue;
+      const n = notesFor(s);
+      if (n && notesSeen.has(`${song.song_id}|${s}|${n.source}`)) emit("notes-ready", { song_id: song.song_id, stem: s, source: n.source, notes: n });
+    }
+    runNotes();
+  }, 1000);
+}
+
+/** Debug: find every stem's notes again, slowly (shows the panel's progress). */
+(globalThis as { __mockNotesAgain?: unknown }).__mockNotesAgain = (stepMs = 4000) => {
+  if (!song) return;
+  for (const k of [...notesSeen]) if (k.startsWith(song.song_id + "|")) notesSeen.delete(k);
+  stopNotes();
+  notesStepMs = stepMs;
+  runNotes();
+};
+
 /** Mock chords for the open song: in Eb when its tuning guess says Eb. */
 function songChords(): ChordsData | null {
   if (!song || !song.tuning || !grid) return null;
@@ -714,6 +944,8 @@ export const mockBackend: Backend = {
       if (old) emit("separation-error", { song_id: old.song_id, message: "Canceled", canceled: true });
     }
     if (beatsTimer != null) clearTimeout(beatsTimer);
+    stopNotes();
+    notesStepMs = 900;
     const d = describe(path);
     const song_id = songIdFor(path);
     const loaded = cachedSetFor(song_id);
@@ -744,9 +976,23 @@ export const mockBackend: Backend = {
       strength_job: 0,
       tuning: cached ? lsGet<TuningData | null>(LS_TUNING + song_id, null) : null,
       chords: null,
+      notes: [],
+      notes_pending: [],
+      notes_running: null,
       bpmVal: d.bpm,
     };
     song.chords = cached ? songChords() : null;
+    notesPans = Object.fromEntries(Object.entries(song.refine).filter(([, p]) => p?.pan.enabled).map(([k, p]) => [k, p!.pan]));
+    if (song.chords) {
+      // Saved notes come with the song (computed earlier, as the app caches them).
+      for (const s of NOTE_STEMS_MOCK) {
+        const n = notesFor(s);
+        if (!n) continue;
+        notesSeen.add(`${song_id}|${s}|${n.source}`);
+        song.notes.push(n);
+      }
+    }
+    song.notes_pending = notesPending();
     if (tuningTimer != null) clearTimeout(tuningTimer);
     // An older algorithm version is measured again, as in the app.
     if (cached && (song.tuning?.version ?? 0) < 3) measureTuning(2500);
@@ -775,6 +1021,7 @@ export const mockBackend: Backend = {
   },
   async closeSong() {
     stopTunerStream("song_closed");
+    stopNotes();
     stopSeparation();
     if (tuningTimer != null) clearTimeout(tuningTimer);
     analysisStem = null;
@@ -869,11 +1116,14 @@ export const mockBackend: Backend = {
           song.separated_with = sw;
           song.original_available = true;
           addToLibrary(song);
-          // New stems: the tuning is measured again on them (then the chords).
+          // New stems: the tuning is measured again on them (then the chords and notes).
           song.chords = null;
+          song.notes = [];
+          for (const k of [...notesSeen]) if (k.startsWith(id + "|")) notesSeen.delete(k);
           measureTuning(1500);
         }
         emit("separation-done", { song_id: id, separated_with: sw, original_available: true });
+        emitNotesStatus();
       }
     }, 100);
     return sw;
@@ -1019,6 +1269,7 @@ export const mockBackend: Backend = {
     else all[stem] = params;
     lsSet(key, all);
     song.refine = all;
+    followNotesPans();
   },
   async setRefineAnalysis(stem) {
     analysisStem = stem;

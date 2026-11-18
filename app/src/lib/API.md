@@ -71,7 +71,35 @@ SongInfo {
   strength_job: number,       // id of a strength job open_song started (re-applying a saved
                               // strength), 0 = none; its strength-done/-error has this id
   tuning: TuningData | null,  // measured tuning; null until the tuning job has run on the stems
-  chords: ChordsData | null   // chords of the loaded stems; null until the chords job has run
+  chords: ChordsData | null,  // chords of the loaded stems; null until the chords job has run
+  notes: StemNotes[],         // per pitched stem, its notes for the current source; a stem is
+                              // missing until its notes job has run
+  notes_pending: StemName[],  // pitched stems whose notes for the current source are not in yet
+  notes_running: StemName | null  // the stem the notes job works on now
+}
+
+StemNotes {
+  stem: StemName,           // "guitar" | "bass" | "vocals" | "piano" | "other"
+  source: string,           // what they were found on: "<model id>_s<shifts>|st<level>[s]"
+                            // plus "|pan<center>:<width>:<softness>" when Refine's stereo mask is on
+  notes: {                  // sorted by start, non-overlapping
+    start_s: number,
+    end_s: number,
+    midi: number,           // MIDI note at concert pitch (the song's offset removed), before any bend
+    cents?: number,         // median deviation from midi; missing = 0
+    conf?: number,          // 0..1
+    attack?: "legato" | "slide" | null,  // missing = picked; legato = hammer-on (up) or pull-off
+                            // (down) from the note before; slide = slid into from the note before
+    bend?: { start_s: number, peak_s: number, release_s?: number | null, semitones: number } | null,
+    vibrato?: boolean,      // stored, not shown yet
+  }[],
+  chordal?: [number, number][],  // stretches with several notes at once (no notes inside)
+  others?: string           // other notes the model heard (not in the lead line), at their own
+                            // length, sorted by start, possibly overlapping each other and the
+                            // notes: "start end midi conf" per note, notes separated by commas,
+                            // times rounded to 3 decimals, conf to 2 ("12.5 13.034 64 0.52,...");
+                            // missing = none (always for the bass). A lead note that rang on
+                            // under the next one appears as its part after its lead note ends.
 }
 
 ChordsData {
@@ -334,6 +362,8 @@ StrengthSetting { level: number, smooth: boolean }
 | `tuner-error` | `{ message: string }` | The tuner's input stream failed (device unplugged); the tuner has stopped. |
 | `tuner-stopped` | `{ reason: "playback" \| "song_closed" }` | The backend stopped the tuner by itself: `play` started playback (so the speakers don't feed the microphone), or `close_song`. Not sent for `stop_tuner`. |
 | `chords-ready` | `{ song_id, chords: ChordsData }` | Chord detection finished for the open song's loaded stems. It runs once the stems, the beats and a current tuning measurement are all in and the saved chords are missing, from another stem set, or from an older algorithm version. |
+| `notes-ready` | `{ song_id, stem: StemName, source: string, notes: StemNotes }` | One stem's notes for its current source: a notes job finished, or a changed Refine stereo mask (followed a second after the last change) brought back a saved source. |
+| `notes-status` | `{ song_id, pending: StemName[], running: StemName \| null }` | The stems whose notes are not in yet for their current source, and the one being worked on. Sent when the notes job starts or ends a stem, after a separation, a strength change and a settled stereo-mask change. |
 | `tuning-ready` | `{ song_id, tuning: TuningData }` | The tuning measurement finished: after a separation (on the new stems), or after `open_song` of a separated song with no measurement or one from an older algorithm version. A song that can't be measured still gets one (low confidence). |
 
 Events for a `song_id` that is no longer current are ignored by the UI.

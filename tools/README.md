@@ -94,7 +94,9 @@ venv. Six steps, each skipped when its output already exists and checks out:
 2. Checkpoints, sha256-checked: `5c90dfd2-34c22ccb.th` (Demucs v4
    htdemucs_6s, Meta, MIT, from dl.fbaipublicfiles.com) and
    `beat_this/beat_this-final0.ckpt` (Beat This! final0, CPJKU, MIT, from
-   cloud.cp.jku.at). A checkpoint with a `mirror` URL (Beat This!) is
+   cloud.cp.jku.at), and `basic_pitch/nmp.onnx` (Basic Pitch, Spotify,
+   Apache-2.0, the ONNX file from the upstream repository's main branch;
+   used as is, no export). A checkpoint with a `mirror` URL (Beat This!) is
    fetched from the project's `checkpoints` GitHub release first, with the
    original host as the fallback; either source must match the pinned
    sha256.
@@ -117,8 +119,8 @@ the same checkpoint hash and `EXPORT_VERSION`. Exports go to a temporary
 file first. Nothing is deleted: a file that has to be replaced is renamed to
 `<name>.bak-<timestamp>`. `models/personal/` and the personal-model list
 are never touched. With a non-default `--out`, the script prints the
-`SHREDLAB_MODELS_DIR` and `SHREDLAB_BEAT_MODEL` values that point the app at
-the result.
+`SHREDLAB_MODELS_DIR`, `SHREDLAB_BEAT_MODEL` and `SHREDLAB_NOTE_MODEL`
+values that point the app at the result.
 
 Model code comes from pinned PyPI packages (`demucs`, `beat-this`). The
 spikes prefer those and fall back to audio-separator's vendored Demucs or a
@@ -204,7 +206,7 @@ targets, merged, so one file covers every platform. Each crate's texts come
 from its own LICENSE / COPYING / NOTICE files in the cargo registry; a crate
 without any gets `spdx/<ID>.txt` with `{{COPYRIGHT}}` replaced by its
 authors. Components that are not crates (ONNX Runtime, DirectML, LAME,
-Signalsmith, the two bundled models, fonts, `@tauri-apps/api`, Svelte) are
+Signalsmith, the bundled models, fonts, `@tauri-apps/api`, Svelte) are
 listed in `otherComponents()`, with texts from `texts/`, the vendored source
 trees, `app/node_modules` or the LAME sources inside the `mp3lame-sys`
 crate. Identical texts are shown once. The output is deterministic and
@@ -214,9 +216,9 @@ first; CI runs `--check` on Windows.
 ## Invariants and gotchas
 
 - Personal models are never bundled or downloaded by the public build: the
-  Tauri resources list only `models/registry/htdemucs_6s/` and
-  `models/onnx/beat_this_final0.onnx`, and the notices generator lists only
-  the bundled models. Never commit `personal_models.local.json`, a converted
+  Tauri resources list only `models/registry/htdemucs_6s/`,
+  `models/onnx/beat_this_final0.onnx` and `models/basic_pitch/nmp.onnx`,
+  and the notices generator lists only the bundled models. Never commit `personal_models.local.json`, a converted
   personal model, or URLs for models with unclear licenses.
 - A model's `selftest.json` is computed by the reference on the CPU EP. Any
   change to the reference DSP, the synth-v1 generator or the export changes

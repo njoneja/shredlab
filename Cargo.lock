@@ -3512,6 +3512,7 @@ dependencies = [
  "shredlab-dsp",
  "shredlab-io",
  "shredlab-library",
+ "shredlab-notes",
  "shredlab-separation",
  "shredlab-tuning",
  "tauri",
@@ -3603,6 +3604,19 @@ dependencies = [
  "shredlab-io",
  "symphonia",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "shredlab-notes"
+version = "0.1.3"
+dependencies = [
+ "ort",
+ "realfft",
+ "serde_json",
+ "shredlab-beats",
+ "shredlab-dsp",
+ "shredlab-library",
+ "shredlab-tuning",
 ]
 
 [[package]]

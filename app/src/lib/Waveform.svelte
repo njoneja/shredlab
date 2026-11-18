@@ -49,7 +49,7 @@
   $effect(() => {
     void app.theme;
     draw(app.peaks, app.position, app.loop.a_sec, app.loop.b_sec, app.loop.enabled, app.downbeats, width, height);
-    drawChords(app.chordViews, app.chords?.segments.map((s) => s.root ?? null) ?? [], app.chordFrame.main, app.position, app.chordsOpen ? app.chordWindow : null);
+    drawChords(app.chordViews, app.chords?.segments.map((s) => s.root ?? null) ?? [], app.chordFrame.main, app.position, app.chordsOpen || app.notesOpen ? app.chordWindow : null);
   });
 
   function draw(
@@ -161,7 +161,7 @@
   /**
    * The chord lane along the bottom: one block per chord, tinted by its root
    * so sections read as patterns, names only where they fit. Then the
-   * outline of what the chords panel shows.
+   * outline of what the chords and notes panels show.
    */
   function drawChords(
     views: ChordView[],
@@ -330,6 +330,12 @@
       aria-pressed={app.chordsOpen}
       title="{app.chordsOpen ? 'Hide' : 'Show'} chords (K)"
       onclick={() => app.toggleChords()}>Chords</button
+    >
+    <button
+      class="btn small toggle"
+      aria-pressed={app.notesOpen}
+      title="{app.notesOpen ? 'Hide' : 'Show'} notes (N)"
+      onclick={() => app.toggleNotes()}>Notes</button
     >
   </div>
 </section>

@@ -4,7 +4,7 @@
 <!--
   Chords panel: a few bars of the song with the chord of each stretch, under
   the waveform. Fits the loop when one is on, otherwise follows the playhead.
-  Names come from lib/chords.ts via the store (shape in the confirmed song
+  Names come from lib/chords.ts via the store (the shape you fret in My
   tuning, and what you hear when that differs). The tuning line at the end of
   the header row is always there, on one line, so the strip never moves.
 -->
@@ -422,7 +422,8 @@
       <span class="tbtns">
         {#if line.useGuess}
           {@const g = line.useGuess}
-          <button class="btn small" onclick={() => app.useGuessShapes(g.semitones)}>Use {g.label} shapes</button>
+          <button class="btn small" title="Sets Song is in. Names stay those for your tuning."
+            onclick={() => app.useGuessShapes(g.semitones)}>Set song to {g.label}</button>
         {/if}
         {#if line.fixes}
           <button class="btn small" disabled={app.matchNow == null} title={app.matchNow == null ? "Needs a measured tuning" : ""} onclick={() => app.shiftToMyTuning()}
