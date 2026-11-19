@@ -9,7 +9,8 @@ models.
 ## Boundaries
 
 - Load-bearing: `onnx_demucs_own.py` and `onnx_beat_this.py` contain the
-  export code for the two bundled models, and `onnx_demucs.py` provides the
+  export code for the bundled Demucs and Beat This! models (Basic Pitch is
+  downloaded as ONNX and needs no export), and `onnx_demucs.py` provides the
   Demucs model loading they import. `tools/setup_models.py` runs them inside
   `.venv-models`, and CI's model cache key includes all three. Changing them
   changes what ships.

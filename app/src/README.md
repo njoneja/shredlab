@@ -141,7 +141,7 @@ that switch are kept in localStorage (`shredlab.chords`). The finer waveform
 the panel draws is fetched when it first opens for a song.
 
 **Notes.** The backend reports each pitched stem's notes for its current
-source (stem set, strength, Refine stereo mask, note detail) in `SongInfo.notes` and
+source (stem set, strength, Refine stereo mask, note settings) in `SongInfo.notes` and
 later `notes-ready` events, and the stems still to do in
 `SongInfo.notes_pending` and `notes-status` events. A pending stem shows
 the panel's progress even if older notes for it are held (they belong to
@@ -196,7 +196,7 @@ lead line with bends, slides and legato, chordal stretches in the verse
 (gone when Refine's stereo window is on), root eighths on the bass, a
 vocal line, chords only on keys and nothing on other. Other notes heard:
 the guitar's longer picked notes ring on for a beat, and the chord tones
-sound in the chordal stretches. The note detail level shows: Fewer drops
+sound in the chordal stretches. Fast runs shows: Fewer drops
 the short notes, More adds a grace note before each longer unbent note
 (not on the bass).
 `__mockNotesAgain(ms)` in the console finds every stem's notes again,

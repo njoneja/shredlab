@@ -6,8 +6,9 @@ then plays the stems back through a mixer. Musicians use it to practice with
 an instrument removed, or to listen to one instrument by itself, with speed
 change without pitch change, transposition, A–B loops and a click track.
 Separation runs once per song and is cached; everything after that is mixing
-of cached stems. The app is a Tauri 2 shell around a Rust core, with a
-Svelte 5 UI.
+of cached stems. The stems are also analyzed for the song's tuning, chords
+and notes, and the results are cached with the song. The app is a Tauri 2
+shell around a Rust core, with a Svelte 5 UI.
 
 This page is the map: what each piece does and how they connect. Each
 directory has a README with the detail (layout, invariants, tests, common
@@ -240,7 +241,8 @@ end-to-end check.
   and logo are trademarks ([TRADEMARKS.md](../TRADEMARKS.md)). Some
   dependencies are Apache-2.0 only, so the code cannot move to GPL-2.0.
 - Model weights carry their own licenses, declared in each `model.json` and
-  shown in the model picker. Both bundled models are MIT.
+  shown in the model picker. The bundled Demucs and Beat This! models are
+  MIT; Basic Pitch is Apache-2.0.
 - Signalsmith Stretch and Signalsmith Linear are vendored (MIT); MP3 export
   uses LAME (LGPL), statically linked. Details in
   [crates/shredlab-audio/THIRD_PARTY.md](../crates/shredlab-audio/THIRD_PARTY.md).

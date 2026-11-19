@@ -53,10 +53,7 @@ one are out of scope.
 
 ### Transcription
 
-- **Tuning detection**: notice that a song is a half step down or not at
-  A = 440 Hz and retune it in one click.
-- Key and chord detection.
-- Note readout for the bass stem (and possibly single-note guitar parts).
+- Showing the song's key.
 - Spectrogram or pitch view of a stem.
 - Repeat a tiny slice while held, for fast licks.
 - Drum hits shown as kick, snare and hi-hat lanes.

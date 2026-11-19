@@ -5,7 +5,10 @@ It separates a song into instruments (vocals, drums, bass, guitar, piano,
 other) on your own machine, so you can play along with an instrument
 removed or listen to one by itself. You can also slow songs down or speed
 them up without changing the pitch, transpose them, loop a section and play
-along with a click track and count-in. It is built with
+along with a click track and count-in. It also measures how the song is
+tuned and can shift it to your tuning, has a live tuner for your
+instrument, and shows a best guess at the chords and at the single notes
+of each part. It is built with
 Tauri 2 and a Rust core, runs separation models with ONNX Runtime
 (DirectML / CoreML / CPU), and targets Windows, macOS and Linux.
 
@@ -73,6 +76,9 @@ Each source directory has its own README with the details.
 | `crates/shredlab-separation` | ONNX Runtime sessions, model registry, adapters |
 | `crates/shredlab-audio` | Real-time audio engine, offline render, WAV/FLAC/MP3 export |
 | `crates/shredlab-beats` | Beat/downbeat detection (Beat This! ONNX) |
+| `crates/shredlab-tuning` | Tuning offset from A440, tuning guess, live tuner pitch detection |
+| `crates/shredlab-chords` | Chord detection from the stems and beats |
+| `crates/shredlab-notes` | Note detection for one stem (Basic Pitch ONNX, or a pitch tracker for the bass) |
 | `crates/shredlab-library` | Song folders, JSON manifest, stem cache |
 | `crates/shredlab-cli` | `shredlab-cli`, headless CLI |
 | `tools/` | Python tooling: model setup/export, model folders, fixtures ([tools/README.md](tools/README.md)) |
@@ -113,10 +119,12 @@ pnpm --dir app install
 
 The ONNX models are not in git (`models/` is ignored). They are built from
 the official MIT-licensed checkpoints (Demucs v4 `htdemucs_6s`, Beat This!
-`final0`). Every app build needs them, because the Tauri config bundles
-them. One command does it all: creates a CPU-only Python venv
-(`.venv-models`), downloads the checkpoints (~140 MB, sha256-checked),
-exports the ONNX files and verifies them against reference outputs.
+`final0`), plus Spotify's Basic Pitch note model (Apache-2.0), which is
+published as an ONNX file (about 230 KB) and used as is. Every app build
+needs them, because the Tauri config bundles them. One command does it
+all: creates a CPU-only Python venv (`.venv-models`), downloads the
+checkpoints (~140 MB, sha256-checked), exports the ONNX files and verifies
+them against reference outputs.
 
 ```powershell
 # Windows (PowerShell)
