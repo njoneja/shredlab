@@ -31,6 +31,7 @@ import type {
   TunerStarted,
   TuningData,
   ChordsData,
+  NotesFast,
   StemNotes,
 } from "./types";
 import { STEMS } from "./types";
@@ -39,7 +40,20 @@ import { applyTheme, currentTheme, isTheme } from "./theme";
 import { defaultRefine, exceptionSide, hasException, isIdentity, mockPresets, normalize, STRENGTH_NAMES } from "./refine";
 import { barAt, commonBeatsPerBar, effectiveDownbeats, formatTime, nearestBeatIndex, normalizeOverrides } from "./meter";
 import { chordFrame, chordIndexAt, chordViews, detailWindow, passingViews, tuningLine, type ChordView, type PassingView } from "./chords";
-import { heardViews, NOTE_STEMS, noteIndexAt, noteViews, pickNotesStem, type HeardView, type NoteView } from "./notes";
+import {
+  heardViews,
+  NOTE_STEMS,
+  noteIndexAt,
+  noteViews,
+  panelNoteSettings,
+  pickNotesStem,
+  sameSpan,
+  withLoopNotes,
+  type HeardView,
+  type LoopNoteSettings,
+  type NoteView,
+  type Span,
+} from "./notes";
 import {
   DEFAULT_TUNING,
   fromSaved,
@@ -300,7 +314,7 @@ class AppState {
   detailPeaks = $state.raw<number[] | null>(null);
 
   // notes (NotesPanel.svelte); shares the chords panel's window
-  /** Notes per pitched stem, for its current source (stem set, strength, Refine stereo mask). */
+  /** Notes per pitched stem, for its current source (stem set, strength, Refine stereo mask, note detail). */
   notes = $state.raw<Partial<Record<StemName, StemNotes>>>({});
   /** Pitched stems whose notes for the current source are not in yet. */
   notesPending = $state.raw<StemName[]>([]);
@@ -311,6 +325,21 @@ class AppState {
   notesHeard = $state(readNotesPrefs().heard);
   /** The stem picked in the notes panel for this song (saved with its settings); null = the default. */
   notesStemPick = $state<StemName | null>(null);
+  /** The song's Fast runs setting (saved with the song by the backend). */
+  notesFast = $state<NotesFast>("normal");
+  /** The song's Quiet notes setting, true = Include (saved with the song by the backend). */
+  notesQuiet = $state(false);
+  /**
+   * The loop's own Fast runs and Quiet notes, with the loop they were set on; null = the song's. Not saved:
+   * dropped when the loop changes or is cleared.
+   */
+  notesLoopOwn = $state.raw<LoopNoteSettings | null>(null);
+  /** Notes found for the loop with its own settings (`key`), by stem. */
+  loopNotes = $state.raw<{ key: LoopNoteSettings; notes: Partial<Record<StemName, StemNotes>> } | null>(null);
+  /** Number of the newest loop notes request; an answer to an older one is dropped. */
+  private loopNotesReq = 0;
+  /** The loop notes request running now (`stem|start|end|fast|quiet`), so the same one is not restarted. */
+  private loopNotesRunning: string | null = null;
   /** The Guess button was pressed for this song (saved with it); it stops hinting. */
   guessAnswered = $state(false);
   /** The Shift method (the Shift button's menu); new songs start with the last one used. */
@@ -504,13 +533,35 @@ class AppState {
   );
   /** The shown stem's notes are being computed (its old ones, if any, are for another source). */
   notesStemPending = $derived(this.notesStem != null && this.notesPending.includes(this.notesStem));
+  /** The loop the notes panel's settings apply to: the A–B loop while it is on, else null (the whole song). */
+  notesLoop = $derived<Span | null>(
+    this.loop.enabled && this.loop.a_sec != null && this.loop.b_sec != null ? { start: this.loop.a_sec, end: this.loop.b_sec } : null,
+  );
+  /** The settings the notes panel shows, and whether they are the loop's (`scope`) and differ from the song's (`own`). */
+  notesPanel = $derived(panelNoteSettings({ fast: this.notesFast, quiet: this.notesQuiet }, this.notesLoop, this.notesLoopOwn));
+  /** Where the shown stem shows notes found for the loop's own settings (the bass ignores the settings). */
+  notesLoopSpan = $derived<Span | null>(this.notesPanel.own && this.notesStem && this.notesStem !== "bass" ? this.notesLoop : null);
+  /** The shown stem's notes for the loop's own settings, once found. */
+  notesLoopResult = $derived.by((): StemNotes | null => {
+    const l = this.loopNotes;
+    const p = this.notesPanel;
+    if (!l || !this.notesStem || !this.notesLoop) return null;
+    if (l.key.fast !== p.fast || l.key.quiet !== p.quiet || !sameSpan(l.key, this.notesLoop)) return null;
+    return l.notes[this.notesStem] ?? null;
+  });
+  /** The loop's own notes are being found: the panel shows the song's notes around an empty loop. */
+  notesLoopPending = $derived(this.notesLoopSpan != null && this.notesLoopResult == null);
+  /** The shown stem's notes as the panel draws them: the song's, with the loop's own inside the loop. */
+  shownNotes = $derived<StemNotes | undefined>(
+    this.notesStem ? withLoopNotes(this.notes[this.notesStem], this.notesLoopResult, this.notesLoopSpan) : undefined,
+  );
   noteViews = $derived<NoteView[]>(
-    this.notesStem && !this.notesStemPending ? noteViews(this.notes[this.notesStem], this.chordFrame, this.chords?.key) : [],
+    this.notesStem && !this.notesStemPending ? noteViews(this.shownNotes, this.chordFrame, this.chords?.key) : [],
   );
   /** The shown stem's other notes heard (empty while hidden). */
   heardViews = $derived<HeardView[]>(
     this.notesHeard && this.notesStem && !this.notesStemPending
-      ? heardViews(this.notes[this.notesStem], this.chordFrame, this.chords?.key)
+      ? heardViews(this.shownNotes, this.chordFrame, this.chords?.key)
       : [],
   );
   noteNow = $derived<NoteView | null>(this.noteViews[noteIndexAt(this.noteViews, this.position)] ?? null);
@@ -598,7 +649,16 @@ class AppState {
     });
     await api.listen("notes-ready", (p) => {
       if (p.song_id !== this.song?.song_id) return;
+      const before = this.notes[p.stem]?.source;
       this.notes = { ...this.notes, [p.stem]: p.notes };
+      // The stem's notes follow a new source (strength, stereo mask): so do the loop's.
+      const l = this.loopNotes;
+      if (before !== p.source && l?.notes[p.stem]) {
+        const notes = { ...l.notes };
+        delete notes[p.stem];
+        this.loopNotes = { ...l, notes };
+      }
+      this.findLoopNotes();
     });
     await api.listen("notes-status", (p) => {
       if (p.song_id !== this.song?.song_id) return;
@@ -792,6 +852,8 @@ class AppState {
       this.notes = Object.fromEntries((info.notes ?? []).map((n) => [n.stem, n]));
       this.notesPending = info.notes_pending ?? [];
       this.notesRunning = info.notes_running ?? null;
+      this.notesFast = info.notes_fast ?? "normal";
+      this.notesQuiet = info.notes_quiet ?? false;
       this.detailPeaks = null;
       this.detailFor = null;
       this.song = info;
@@ -855,6 +917,7 @@ class AppState {
     this.click.subdivision = 1;
     this.countInSet = false;
     this.notesStemPick = null;
+    this.dropLoopNotes();
     if (!s || s.version !== 1) return;
     if (s.notes_stem && NOTE_STEMS.includes(s.notes_stem)) this.notesStemPick = s.notes_stem;
     this.loop = { ...s.loop };
@@ -985,8 +1048,11 @@ class AppState {
   async setLoop(a: number | null, b: number | null, enabled?: boolean) {
     if (a != null && b != null && b < a) [a, b] = [b, a];
     if (a != null && b != null && b - a < MIN_LOOP) b = a + MIN_LOOP;
+    const before = this.notesLoop;
     this.loop = { a_sec: a, b_sec: b, enabled: enabled ?? this.loop.enabled };
     if (this.loop.a_sec == null || this.loop.b_sec == null) this.loop.enabled = false;
+    // A changed or cleared loop goes back to the song's note settings.
+    if (!sameSpan(before, this.notesLoop)) this.dropLoopNotes();
     await api.setLoop($state.snapshot(this.loop));
     this.saveSettings();
   }
@@ -1397,6 +1463,79 @@ class AppState {
   setNotesStem(stem: StemName) {
     this.notesStemPick = stem;
     this.saveSettings();
+    this.findLoopNotes();
+  }
+
+  /**
+   * How notes are found (Fast runs, Quiet notes), set together. With a loop on, for the loop only: its notes are found
+   * for these settings (the song's notes stay outside it, and settings equal to the song's show the song's notes).
+   * Without a loop, for the song: saved notes for the settings come at once, the rest are found again.
+   */
+  async setNotesOptions(fast: NotesFast, quiet: boolean) {
+    if (!this.song) return;
+    const loop = this.notesLoop;
+    if (loop) {
+      this.notesLoopOwn = fast === this.notesFast && quiet === this.notesQuiet ? null : { ...loop, fast, quiet };
+      this.findLoopNotes();
+      return;
+    }
+    if (fast === this.notesFast && quiet === this.notesQuiet) return;
+    const prev = [this.notesFast, this.notesQuiet] as const;
+    this.notesFast = fast;
+    this.notesQuiet = quiet;
+    try {
+      await api.setNotesOptions(fast, quiet);
+    } catch (e) {
+      [this.notesFast, this.notesQuiet] = prev;
+      console.warn("set_notes_options failed", e);
+    }
+  }
+
+  /** The notes panel's Reset: with a loop on, the loop goes back to the song's settings; else the song to Normal and Skip. */
+  async resetNotesOptions() {
+    if (this.notesLoop) await this.setNotesOptions(this.notesFast, this.notesQuiet);
+    else await this.setNotesOptions("normal", false);
+  }
+
+  /** Forgets the loop's own note settings and notes, and drops the answer of a running request. */
+  private dropLoopNotes() {
+    this.notesLoopOwn = null;
+    this.loopNotes = null;
+    this.loopNotesReq++;
+    this.loopNotesRunning = null;
+  }
+
+  /**
+   * Finds the shown stem's notes for the loop's own settings when they are needed and not in yet. A newer request
+   * replaces an older one (its answer is dropped); on an error the loop goes back to the song's settings.
+   */
+  private async findLoopNotes() {
+    const own = this.notesLoopOwn;
+    const span = this.notesLoopSpan;
+    const stem = this.notesStem;
+    const song = this.song;
+    if (!song || !own || !span || !stem || this.notesStemPending || this.notesLoopResult) {
+      this.loopNotesRunning = null;
+      this.loopNotesReq++;
+      return;
+    }
+    const what = `${stem}|${span.start}|${span.end}|${own.fast}|${own.quiet}`;
+    if (this.loopNotesRunning === what) return;
+    const req = ++this.loopNotesReq;
+    this.loopNotesRunning = what;
+    try {
+      const n = await api.detectLoopNotes(span.start, span.end, own.fast, own.quiet, stem);
+      if (req !== this.loopNotesReq || this.song?.song_id !== song.song_id) return;
+      const l = this.loopNotes;
+      const same = l && l.key.fast === own.fast && l.key.quiet === own.quiet && sameSpan(l.key, own);
+      this.loopNotes = { key: own, notes: { ...(same ? l.notes : {}), [stem]: n } };
+    } catch (e) {
+      if (req !== this.loopNotesReq) return;
+      console.warn("detect_loop_notes failed", e);
+      this.notesLoopOwn = null;
+    } finally {
+      if (req === this.loopNotesReq) this.loopNotesRunning = null;
+    }
   }
 
   /** "Set song to Eb standard": confirms the tuning guess as "Song is in". */

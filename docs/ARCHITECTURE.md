@@ -141,10 +141,22 @@ with `shredlab-notes`, one stem at a time in the background. Unlike the
 chords, the notes are found on the stem as the mixer has it: after the
 separation strength and after Refine's stereo mask (the part of the stereo
 field the mask selects), so two guitars panned apart can be told apart.
-Refine's EQ is left out. Each result is saved in `song.json` per stem and
-source, the source naming the stem set, the strength and the mask, and a
-few sources are kept per stem so going back to an earlier setting is
-instant. A changed mask is followed a second after the last change. Like
+Refine's EQ is left out. The song's two note settings in the notes panel,
+saved in `song.json`, set the model path's thresholds: Fast runs (Fewer,
+Normal, More: how quick runs are split into notes) and Quiet notes (Skip,
+Include: whether softer notes join the lead line); the bass ignores them.
+Each result is saved in `song.json` per stem and source, the source naming
+the stem set, the strength, the mask and the note settings other than the
+defaults, and a few
+sources are kept per stem so going back to an earlier setting is
+instant. A changed mask is followed a second after the last change.
+While an A-B loop is on, the panel's settings apply to the loop only: the
+UI asks `detect_loop_notes` for the shown stem, which detects the loop
+alone (plus context on each side, from the start of a model window so the
+model hears it as in the whole song) and clips the result to the loop.
+The UI draws it inside the loop and the song's notes outside; nothing is
+saved in `song.json`, and loop results are cached in the song folder
+(`loop_notes.json`, the most recent 20). Like
 the chords, the notes are concert pitch only; `app/src/lib/notes.ts` names
 them in the same frame as the chords, and the notes panel shares the
 chords panel's window.

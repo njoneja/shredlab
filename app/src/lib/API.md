@@ -70,6 +70,8 @@ SongInfo {
   strength: StrengthSetting,  // saved separation strength of the song
   strength_job: number,       // id of a strength job open_song started (re-applying a saved
                               // strength), 0 = none; its strength-done/-error has this id
+  notes_fast: NotesFast,      // the song's Fast runs setting: "fewer" | "normal" | "more"
+  notes_quiet: boolean,       // the song's Quiet notes setting: true = Include, false = Skip
   tuning: TuningData | null,  // measured tuning; null until the tuning job has run on the stems
   chords: ChordsData | null,  // chords of the loaded stems; null until the chords job has run
   notes: StemNotes[],         // per pitched stem, its notes for the current source; a stem is
@@ -81,7 +83,10 @@ SongInfo {
 StemNotes {
   stem: StemName,           // "guitar" | "bass" | "vocals" | "piano" | "other"
   source: string,           // what they were found on: "<model id>_s<shifts>|st<level>[s]"
-                            // plus "|pan<center>:<width>:<softness>" when Refine's stereo mask is on
+                            // plus "|pan<center>:<width>:<softness>" when Refine's stereo mask is on,
+                            // plus "|ffewer" or "|fmore" for Fast runs other than Normal and "|q"
+                            // when Quiet notes is Include (not on the bass, which ignores both);
+                            // from detect_loop_notes also "|loop<start ms>-<end ms>"
   notes: {                  // sorted by start, non-overlapping
     start_s: number,
     end_s: number,
@@ -333,6 +338,8 @@ StrengthSetting { level: number, smooth: boolean }
 | `get_refine_presets` | – | `RefinePreset[]` | The Refine panel's EQ presets (shredlab-dsp `presets.rs`). A preset sets the EQ and keeps the stereo selection. |
 | `set_refine` | `update: { stem: StemName, params: RefineParams }` | `()` | Live: heard at once (smoothed, no clicks), also during playback; turning an exception on or off on an off row also makes it audible or silent; saved in the song's `song.json` about 600 ms after the last change (and on song switch, close and app exit). Identity params = unrefined. `Err` for an unknown stem or no song. |
 | `set_refine_analysis` | `stem: Option<String>` | `()` | Turns the stereo-field analysis on for this stem only (the open Refine panel) or off (`null`). Data comes as `refine-field` events while playing. |
+| `set_notes_options` | `fast: NotesFast, quiet: bool` | `()` | Saves the song's note settings for the stems other than the bass at once, both together (one change, so a reset to the defaults reruns the notes once): Fast runs (`"fewer"`, `"normal"`, `"more"`; how quick runs are split into notes) and Quiet notes (`true` = Include: softer notes take part in the lead line). Stems whose notes for the new settings are saved get them at once (`notes-ready`); the others are queued for the notes job (`notes-status`). `Err` with no song open. |
+| `detect_loop_notes` | `start: f64, end: f64, fast: NotesFast, quiet: bool, stem: String` | `StemNotes` | The notes of one stem (not the bass) in the loop `start`..`end` (seconds, clamped to the song) of the open song, found with the loop's own Fast runs and Quiet notes instead of the song's. Detects the loop plus 1 s of context on each side on its own (the stem as the notes job sees it: strength and Refine's stereo mask) and returns the lead notes, chordal stretches and other notes heard that overlap the loop, cut at its edges; `source` is the stem's source for those settings plus `"\|loop<start ms>-<end ms>"`. Results are cached in the song folder (`loop_notes.json`, the 20 most recent), so the same loop and settings come back at once, also after a restart; nothing is saved in `song.json` and the song's notes and settings are untouched. Runs on a blocking thread, one request at a time; a request that a newer one replaced before it started returns `Err`. No events. `Err` with no song open, for the bass or a stem not in the set, for a loop under 50 ms inside the song, and before the stems, beats and tuning are in. |
 | `set_strength` | `strength: StrengthSetting` | `{ job: number }` | Saves the song's strength at once and re-derives the stems on a background thread (re-reads the cached set, about 1–2 s for a 5-min song; a newer call cancels the older job), then swaps the stems in with the usual crossfade. `job` 0 = nothing to compute (same as loaded, or not separated yet: applied after separation). |
 | `set_rate_correction` | `cents: i32` | `()` | Playback-rate correction for matching the song to the player's tuning: the song plays `2^(cents/1200)` faster or slower (pitch and tempo together, on top of Speed; no time-stretching). −200..200, 0 = off. Reset to 0 by `open_song`, so the UI sends it after every open. Exports take it as `ExportRequest.rate_cents`. |
 | `play_tone` | `hz: f32, sound: String` | `()` | Plays a reference tone at `hz` (the UI computes it, octave up included), replacing any playing tone. `sound`: `"pluck"` (a plucked string retriggered every 2.5 s) or `"drone"` (steady). About −12 dBFS under the master volume; ignores Speed, Pitch and the rate correction; never exported. Plays whether or not the song plays; the backend never pauses the song for it (the UI does, if asked). `Err` for an unknown sound. |
@@ -362,8 +369,8 @@ StrengthSetting { level: number, smooth: boolean }
 | `tuner-error` | `{ message: string }` | The tuner's input stream failed (device unplugged); the tuner has stopped. |
 | `tuner-stopped` | `{ reason: "playback" \| "song_closed" }` | The backend stopped the tuner by itself: `play` started playback (so the speakers don't feed the microphone), or `close_song`. Not sent for `stop_tuner`. |
 | `chords-ready` | `{ song_id, chords: ChordsData }` | Chord detection finished for the open song's loaded stems. It runs once the stems, the beats and a current tuning measurement are all in and the saved chords are missing, from another stem set, or from an older algorithm version. |
-| `notes-ready` | `{ song_id, stem: StemName, source: string, notes: StemNotes }` | One stem's notes for its current source: a notes job finished, or a changed Refine stereo mask (followed a second after the last change) brought back a saved source. |
-| `notes-status` | `{ song_id, pending: StemName[], running: StemName \| null }` | The stems whose notes are not in yet for their current source, and the one being worked on. Sent when the notes job starts or ends a stem, after a separation, a strength change and a settled stereo-mask change. |
+| `notes-ready` | `{ song_id, stem: StemName, source: string, notes: StemNotes }` | One stem's notes for its current source: a notes job finished, or a changed Refine stereo mask (followed a second after the last change) or note detail level brought back a saved source. |
+| `notes-status` | `{ song_id, pending: StemName[], running: StemName \| null }` | The stems whose notes are not in yet for their current source, and the one being worked on. Sent when the notes job starts or ends a stem, after a separation, a strength change, a settled stereo-mask change and a note detail change. |
 | `tuning-ready` | `{ song_id, tuning: TuningData }` | The tuning measurement finished: after a separation (on the new stems), or after `open_song` of a separated song with no measurement or one from an older algorithm version. A song that can't be measured still gets one (low confidence). |
 
 Events for a `song_id` that is no longer current are ignored by the UI.

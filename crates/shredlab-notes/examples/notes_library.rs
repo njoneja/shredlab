@@ -7,7 +7,7 @@
 //! heard (model path) and the bytes they take in `song.json`, and the
 //! runtime, for checking it on real stems.
 //!
-//! cargo run --release -p shredlab-notes --example notes_library -- <library root> [title filter] [from-to] [stem] [--model <nmp.onnx>] [--pan <center>,<width>]
+//! cargo run --release -p shredlab-notes --example notes_library -- <library root> [title filter] [from-to] [stem] [--model <nmp.onnx>] [--pan <center>,<width>] [--fast fewer|normal|more] [--quiet] [--loop]
 //!
 //! With `from-to` (seconds, e.g. `60-75`) it also lists the notes in that
 //! stretch: start, end, name, cents, confidence, attack, bend and vibrato,
@@ -16,14 +16,18 @@
 //! `stem` limits it to
 //! one stem (bass, guitar, piano, other, vocals). `--model` runs Basic
 //! Pitch (ONNX Runtime on the CPU) for the stems that use it, as the app
-//! does; `--pan` applies Refine's stereo mask (softness 0.2) first.
+//! does; `--pan` applies Refine's stereo mask (softness 0.2) first;
+//! `--fast fewer|normal|more` sets how quick runs are split (Normal by
+//! default); `--quiet` lets softer notes into the lead line. `--loop`
+//! detects only the `from-to` stretch, as the app does for a loop with its
+//! own settings (the stretch plus a second on each side, clipped to it).
 
 use ort::session::Session;
 use ort::value::TensorRef;
 use shredlab_dsp::refine::pan::{pan_offline, PanParams};
 use shredlab_notes::{
-    detect_notes, detect_notes_with_model, Attack, Note, NoteAnalysis, NoteInput, StemKind,
-    WindowOutput,
+    detect_notes, detect_notes_with_model, Attack, Detail, Excerpt, Fast, Note, NoteAnalysis,
+    NoteInput, StemKind, WindowOutput,
 };
 
 const NAMES: [&str; 12] = [
@@ -93,14 +97,26 @@ impl Model {
 }
 
 fn main() {
-    let usage = "usage: notes_library <library root> [title filter] [from-to] [stem] [--model <nmp.onnx>] [--pan <center>,<width>]";
+    let usage = "usage: notes_library <library root> [title filter] [from-to] [stem] [--model <nmp.onnx>] [--pan <center>,<width>] [--fast fewer|normal|more] [--quiet] [--loop]";
     let mut model: Option<Model> = None;
     let mut pan: Option<PanParams> = None;
+    let mut detail = Detail::default();
+    let mut loop_only = false;
     let mut rest = Vec::new();
     let mut all = std::env::args().skip(1);
     while let Some(a) = all.next() {
         match a.as_str() {
             "--model" => model = Some(Model::load(&all.next().expect(usage))),
+            "--fast" => {
+                detail.fast = match all.next().expect(usage).as_str() {
+                    "fewer" => Fast::Fewer,
+                    "normal" => Fast::Normal,
+                    "more" => Fast::More,
+                    _ => panic!("{usage}"),
+                }
+            }
+            "--quiet" => detail.quiet = true,
+            "--loop" => loop_only = true,
             "--pan" => {
                 let v = all.next().expect(usage);
                 let (c, w) = v.split_once(',').expect(usage);
@@ -123,6 +139,10 @@ fn main() {
         Some((a.parse().ok()?, b.parse().ok()?))
     });
     let only = args.next();
+    assert!(
+        !loop_only || range.is_some(),
+        "--loop needs a from-to range"
+    );
     let lib = shredlab_library::Library::open(std::path::Path::new(&root)).expect("open library");
     let songs = std::fs::read_dir(std::path::Path::new(&root).join("songs")).expect("songs");
     println!(
@@ -177,27 +197,39 @@ fn main() {
             if only.as_deref().is_some_and(|o| o != stem) {
                 continue;
             }
+            let duration = l.len() as f64 / f64::from(info.sample_rate);
+            // With --loop, only the stretch and its context, as the app cuts it.
+            let excerpt = range
+                .filter(|_| loop_only)
+                .map(|(from, to)| Excerpt::new(from, to, duration).expect("range inside the song"));
+            let t0 = std::time::Instant::now();
+            let part = excerpt.map_or(0..l.len(), |x| x.samples(info.sample_rate, l.len()));
             let [l, r] = match &pan {
-                Some(p) => pan_offline(p, info.sample_rate, l, r),
-                None => [l.clone(), r.clone()],
+                Some(p) => pan_offline(p, info.sample_rate, &l[part.clone()], &r[part]),
+                None => [l[part.clone()].to_vec(), r[part].to_vec()],
             };
             let mono: Vec<f32> = l.iter().zip(&r).map(|(a, b)| 0.5 * (a + b)).collect();
+            let beats = excerpt.map_or_else(|| beats.clone(), |x| x.beats(&beats));
             let input = NoteInput {
                 samples: &mono,
                 sample_rate: info.sample_rate,
                 kind,
                 offset_cents: offset,
                 beats: &beats,
+                detail,
             };
-            let t0 = std::time::Instant::now();
             let a = match model.as_mut() {
                 Some(m) => {
                     detect_notes_with_model(&input, &mut |x: &[f32]| m.run(x)).expect("note model")
                 }
                 None => detect_notes(&input),
             };
+            let a = match excerpt {
+                Some(x) => x.finish(a),
+                None => a,
+            };
             let elapsed = t0.elapsed().as_secs_f64();
-            let duration = mono.len() as f64 / f64::from(info.sample_rate);
+            let duration = excerpt.map_or(duration, |x| x.end_s - x.start_s);
             print_summary(&title, stem, &a, duration, elapsed);
             if let Some((from, to)) = range {
                 print_range(&a, from, to);

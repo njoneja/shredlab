@@ -37,11 +37,12 @@ import type {
   ChordsData,
   ChordSpan,
   NoteSpan,
+  NotesFast,
   StemNotes,
 } from "./types";
 import { THEMES } from "./types";
 import { isIdentity, mockPresets } from "./refine";
-import { formatHeard, type HeardSpan } from "./notes";
+import { formatHeard, parseHeard, type HeardSpan } from "./notes";
 
 type Handler = (payload: unknown) => void;
 const handlers = new Map<string, Set<Handler>>();
@@ -57,6 +58,8 @@ const LS_APP = "shredlab.mock.app_settings";
 const LS_THEME = "shredlab.mock.theme";
 const LS_REFINE = "shredlab.mock.refine.";
 const LS_STRENGTH = "shredlab.mock.strength.";
+const LS_NOTES_FAST = "shredlab.mock.notes_fast.";
+const LS_NOTES_QUIET = "shredlab.mock.notes_quiet.";
 const LS_TUNING = "shredlab.mock.tuning.";
 // Song ids removed from the recent list, and demo songs whose data was deleted.
 const LS_HIDDEN = "shredlab.mock.hidden";
@@ -710,14 +713,57 @@ function fakeNotes(g: BeatGrid, chords: ChordsData, shift: number, stem: StemNam
   return { stem, notes: kept.filter((n) => n.end_s > n.start_s), chordal, ...(heard.length ? { others: formatHeard(heard) } : {}) };
 }
 
+type NotesDetail = { fast: NotesFast; quiet: boolean };
+
+/** The note settings that apply to `stem` (the bass ignores them, as in the app). */
+function detailFor(stem: StemName): NotesDetail {
+  return stem === "bass" || !song ? { fast: "normal", quiet: false } : { fast: song.notes_fast, quiet: song.notes_quiet };
+}
+
+/**
+ * The note settings made visible: Fast runs Fewer drops the short notes;
+ * More adds a short grace note a whole step under each longer unbent note,
+ * which becomes a hammer-on from it. Quiet notes Include adds a short soft
+ * note at the previous pitch in each gap of half a second or more.
+ */
+function withDetail(n: Omit<StemNotes, "source">, detail: NotesDetail): Omit<StemNotes, "source"> {
+  let notes: NoteSpan[] = n.notes;
+  if (detail.fast === "fewer") notes = notes.filter((x) => x.end_s - x.start_s >= 0.3);
+  if (detail.fast === "more") {
+    const split: NoteSpan[] = [];
+    for (const x of notes) {
+      if (x.end_s - x.start_s < 0.4 || x.bend) {
+        split.push(x);
+        continue;
+      }
+      const mid = x.start_s + 0.1;
+      split.push({ start_s: x.start_s, end_s: mid, midi: x.midi - 2, conf: 0.4 });
+      split.push({ ...x, start_s: mid, attack: "legato" });
+    }
+    notes = split;
+  }
+  if (detail.quiet) {
+    const soft: NoteSpan[] = [];
+    notes.forEach((x, i) => {
+      soft.push(x);
+      const next = notes[i + 1];
+      if (next && next.start_s - x.end_s >= 0.5) soft.push({ start_s: x.end_s + 0.1, end_s: x.end_s + 0.25, midi: x.midi, conf: 0.3 });
+    });
+    notes = soft;
+  }
+  return notes === n.notes ? n : { ...n, notes };
+}
+
 /** The source key of a stem's notes now (as the app builds it). */
-function notesSource(stem: StemName): string | null {
+function notesSource(stem: StemName, d: NotesDetail = detailFor(stem)): string | null {
   if (!song?.separated_with) return null;
   const sw = song.separated_with;
   const st = song.strength;
   let key = `${sw.model_id}_s${sw.quality === "high" ? 2 : 1}|st${st.level}${st.level > 0 && st.smooth ? "s" : ""}`;
   const p = notesPans[stem];
   if (p?.enabled) key += `|pan${(p.center + 0).toFixed(2)}:${(p.width + 0).toFixed(2)}:${(p.softness + 0).toFixed(2)}`;
+  if (d.fast !== "normal") key += `|f${d.fast}`;
+  if (d.quiet) key += "|q";
   return key;
 }
 
@@ -735,7 +781,8 @@ function notesFor(stem: StemName): StemNotes | null {
   if (!song || !grid || !song.chords || src == null) return null;
   const g = song.tuning?.guess;
   const shift = g?.likely ? g.below_standard : 0;
-  return { ...fakeNotes(grid, song.chords, shift, stem, !!notesPans[stem]?.enabled), source: src };
+  const n = fakeNotes(grid, song.chords, shift, stem, !!notesPans[stem]?.enabled);
+  return { ...withDetail(n, detailFor(stem)), source: src };
 }
 
 function notesPending(): StemName[] {
@@ -798,6 +845,50 @@ function followNotesPans() {
     }
     runNotes();
   }, 1000);
+}
+
+/** Loop results already found (`${song_id}|${stem}|${source}`): they come back at once, like the app's cache. */
+const loopNotesSeen = new Set<string>();
+let loopNotesSeq = 0;
+
+/** The notes of `stem` in `start`..`end` with the loop's own settings, clipped to the loop (the app's `detect_loop_notes`). */
+async function detectLoopNotes(start: number, end: number, fast: NotesFast, quiet: boolean, stem: StemName): Promise<StemNotes> {
+  if (!song) throw new Error("No song open");
+  if (stem === "bass" || !NOTE_STEMS_MOCK.includes(stem)) throw new Error(`No loop notes for the ${stem} stem`);
+  if (!song.stems_cached || !grid || !song.chords) throw new Error("The song's notes are not ready yet");
+  const s = Math.max(0, start);
+  const e = Math.min(song.duration_sec, end);
+  if (!(e - s >= 0.05)) throw new Error("The loop is too short or outside the song");
+  let src = notesSource(stem, { fast, quiet });
+  if (src == null) throw new Error("The song's notes are not ready yet");
+  src += `|loop${Math.round(s * 1000)}-${Math.round(e * 1000)}`;
+  const id = song.song_id;
+  const key = `${id}|${stem}|${src}`;
+  const seq = ++loopNotesSeq;
+  if (!loopNotesSeen.has(key)) {
+    await new Promise((r) => window.setTimeout(r, 700));
+    if (seq !== loopNotesSeq) throw new Error("Superseded by a newer loop request");
+  }
+  if (!song || song.song_id !== id || !grid || !song.chords) throw new Error("No song open");
+  loopNotesSeen.add(key);
+  const g = song.tuning?.guess;
+  const shift = g?.likely ? g.below_standard : 0;
+  const n = withDetail(fakeNotes(grid, song.chords, shift, stem, !!notesPans[stem]?.enabled), { fast, quiet });
+  const clip = (a: number, b: number): [number, number] | null => (Math.min(b, e) > Math.max(a, s) ? [Math.max(a, s), Math.min(b, e)] : null);
+  const notes: NoteSpan[] = [];
+  for (const x of n.notes) {
+    const c = clip(x.start_s, x.end_s);
+    if (!c) continue;
+    const y: NoteSpan = { ...x, start_s: c[0], end_s: c[1] };
+    if (y.bend && (y.bend.start_s < c[0] || y.bend.start_s >= c[1])) delete y.bend;
+    notes.push(y);
+  }
+  const chordal = (n.chordal ?? []).map(([a, b]) => clip(a, b)).filter((c): c is [number, number] => c != null);
+  const heard = parseHeard(n.others)
+    .map((h) => ({ h, c: clip(h.start_s, h.end_s) }))
+    .filter((x) => x.c != null)
+    .map(({ h, c }) => ({ ...h, start_s: c![0], end_s: c![1] }));
+  return { stem, source: src, notes, ...(chordal.length ? { chordal } : {}), ...(heard.length ? { others: formatHeard(heard) } : {}) };
 }
 
 /** Debug: find every stem's notes again, slowly (shows the panel's progress). */
@@ -974,6 +1065,8 @@ export const mockBackend: Backend = {
       refine: lsGet<Partial<Record<StemName, RefineParams>>>(LS_REFINE + song_id, {}),
       strength: lsGet<StrengthSetting>(LS_STRENGTH + song_id, { level: 0, smooth: false }),
       strength_job: 0,
+      notes_fast: lsGet<NotesFast>(LS_NOTES_FAST + song_id, "normal"),
+      notes_quiet: lsGet<boolean>(LS_NOTES_QUIET + song_id, false),
       tuning: cached ? lsGet<TuningData | null>(LS_TUNING + song_id, null) : null,
       chords: null,
       notes: [],
@@ -1077,7 +1170,7 @@ export const mockBackend: Backend = {
     lsSet(LS_CACHED, lsGet<string[]>(LS_CACHED, []).filter((k) => !k.startsWith(songId + "|")));
     lsSet(LS_HIDDEN, lsGet<string[]>(LS_HIDDEN, []).filter((id) => id !== songId));
     lsSet(LS_GONE, [...lsGet<string[]>(LS_GONE, []), songId]);
-    for (const k of [LS_SETTINGS, LS_REFINE, LS_STRENGTH, LS_TUNING]) {
+    for (const k of [LS_SETTINGS, LS_REFINE, LS_STRENGTH, LS_NOTES_FAST, LS_NOTES_QUIET, LS_TUNING]) {
       try {
         localStorage.removeItem(k + songId);
       } catch {
@@ -1285,6 +1378,24 @@ export const mockBackend: Backend = {
     if (!song.stems_cached || same) return { job: 0 };
     return { job: runStrength(song.song_id, s) };
   },
+  async setNotesOptions(fast, quiet) {
+    if (!song) throw new Error("No song open");
+    if (fast !== "fewer" && fast !== "normal" && fast !== "more") throw new Error(`unknown fast runs setting: ${fast}`);
+    if (typeof quiet !== "boolean") throw new Error(`bad quiet notes setting: ${quiet}`);
+    if (song.notes_fast === fast && song.notes_quiet === quiet) return;
+    song.notes_fast = fast;
+    song.notes_quiet = quiet;
+    lsSet(LS_NOTES_FAST + song.song_id, fast);
+    lsSet(LS_NOTES_QUIET + song.song_id, quiet);
+    // Saved notes for the new settings come at once; the others are queued.
+    for (const s of NOTE_STEMS_MOCK) {
+      if (s === "bass") continue;
+      const n = notesFor(s);
+      if (n && notesSeen.has(`${song.song_id}|${s}|${n.source}`)) emit("notes-ready", { song_id: song.song_id, stem: s, source: n.source, notes: n });
+    }
+    runNotes();
+  },
+  detectLoopNotes,
   async setRateCorrection(cents) {
     if (!song) return;
     rateCents = Math.max(-200, Math.min(200, Math.round(cents)));

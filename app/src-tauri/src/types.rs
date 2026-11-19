@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 pub use crate::settings::{Quality, StemFormat};
 pub use shredlab_dsp::refine::{EqParams, RefineParams};
-pub use shredlab_library::{ChordsData, StemNotes, StrengthSetting, TuningData};
+pub use shredlab_library::{ChordsData, NotesFast, StemNotes, StrengthSetting, TuningData};
 
 pub const STEMS: [&str; 6] = ["vocals", "guitar", "bass", "drums", "piano", "other"];
 
@@ -50,14 +50,19 @@ pub struct SongInfo {
     /// saved strength), 0 when none; its `strength-done`/`-error` event
     /// carries the same id.
     pub strength_job: u64,
+    /// The song's Fast runs setting (stems on the note model).
+    pub notes_fast: NotesFast,
+    /// Whether the song's softer notes take part in the lead line (stems on
+    /// the note model).
+    pub notes_quiet: bool,
     /// Measured tuning; `None` until the tuning job has run on the stems.
     pub tuning: Option<TuningData>,
     /// Detected chords of the loaded stem set; `None` until the chords job
     /// has run (it needs the stems, the beats and the tuning).
     pub chords: Option<ChordsData>,
     /// Detected notes of the pitched stems, one entry per stem whose notes
-    /// are computed for its current source (stem set, strength and Refine
-    /// stereo mask).
+    /// are computed for its current source (stem set, strength, Refine
+    /// stereo mask and note detail level).
     pub notes: Vec<StemNotes>,
     /// Pitched stems whose notes for the current source are not in yet.
     pub notes_pending: Vec<String>,

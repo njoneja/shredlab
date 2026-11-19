@@ -32,6 +32,7 @@ Start with `Library` and `SongMeta` in `src/lib.rs`.
 
 ```text
 <root>/songs/<song_id>/song.json                          manifest (schema 2)
+<root>/songs/<song_id>/loop_notes.json                    notes found for loops (a cache)
 <root>/songs/<song_id>/original.<ext>                     copy of the original mix
 <root>/songs/<song_id>/stems/<model_id>_s<shifts>/<stem>.<mp3|flac|wav>
 <root>/songs/<song_id>/stems/<stem>.wav                   schema 1 stem sets
@@ -75,10 +76,22 @@ else the file name), duration and decoded format, then:
 - `refine`: `RefineParams` per stem name, only for refined stems.
 - `strength`: separation strength level (0 = the model's stems) and the
   smooth flag.
+- `notes_fast`: the Fast runs setting (`fewer`, `more`); missing = Normal.
+- `notes_quiet`: `true` when Quiet notes is Include; missing = Skip. An
+  older single `notes_detail` is read and migrated on load (`fewer` to
+  Fewer fast runs, `more` to More fast runs with quiet notes included) and
+  never written.
 - `settings`: per-song UI settings, stored and returned verbatim.
 - `hidden` (removed from the recent list, data kept) and timestamps.
 
 `save` writes `song.json.tmp` and renames it, bumping `updated_ms`.
+
+`loop_notes.json` holds notes the app found for a loop with settings of its
+own, in the same shape as `song.json`'s `notes` (`NotesData`, with the
+app's loop keys as sources), written compactly by `update_loop_notes`
+(atomically, under a lock of its own) and read by `load_loop_notes`, which
+treats a missing or broken file as empty: it is only a cache, and the app
+decides what it keeps. It goes with the song folder (size, deletion).
 
 Stems are cached per model and shifts, so switching back is instant. Each
 stem is divided by `scale = max(peak, 1)` before encoding and multiplied by
@@ -155,7 +168,8 @@ FLAC at the song rate. Older `original.*` files are removed.
 cargo test -p shredlab-library
 ```
 
-Tests use temp directories; no models or fixtures are needed. The MP3
+Tests use temp directories; no models or fixtures are needed. The loop
+notes file is covered by `loop_notes_live_beside_the_manifest`. The MP3
 alignment check is `mp3_is_sample_aligned`; manifest compatibility is
 covered by `old_manifests_load_as_wav` and
 `schema1_stems_migrate_to_stem_sets`.

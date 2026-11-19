@@ -141,7 +141,7 @@ that switch are kept in localStorage (`shredlab.chords`). The finer waveform
 the panel draws is fetched when it first opens for a song.
 
 **Notes.** The backend reports each pitched stem's notes for its current
-source (stem set, strength, Refine stereo mask) in `SongInfo.notes` and
+source (stem set, strength, Refine stereo mask, note detail) in `SongInfo.notes` and
 later `notes-ready` events, and the stems still to do in
 `SongInfo.notes_pending` and `notes-status` events. A pending stem shows
 the panel's progress even if older notes for it are held (they belong to
@@ -153,7 +153,30 @@ heard, one string) is parsed into `heardViews` and drawn faintly behind the
 lead notes; they widen the pitch range only within an octave of the lead
 notes in view. Its open state and the Also heard box are kept in
 localStorage (`shredlab.notes`); the stem is saved per song as
-`SongSettings.notes_stem`.
+`SongSettings.notes_stem`. The header's Fast runs (Fewer / Normal / More)
+and Quiet notes (Skip / Include) are the song's note settings: the backend
+keeps them (`SongInfo.notes_fast` and `notes_quiet`, `set_notes_options`,
+which sets both at once), since they change what the notes job computes,
+and answers with `notes-ready` for saved sources and `notes-status` for the
+rest, so the panel shows its usual progress. Reset, shown while either is
+off its default, sets both back in one call.
+
+While the A-B loop is on (`notesLoop`), the two controls apply to the loop
+only, and a muted label says "This loop" or "Whole song". The loop starts
+on the song's settings; settings of its own (`notesLoopOwn`, with the loop
+they were set on) are kept in the store only and dropped when the loop
+moves, changes or is turned off, so there is no list of per-loop settings
+and nothing is saved. With settings of its own, the store asks
+`detect_loop_notes` for the shown stem (not the bass, which ignores them;
+again when the stem changes or its song notes move to a new source), keeps
+the answers per stem in `loopNotes`, and draws them inside the loop and
+the song's notes outside it (`withLoopNotes` in `lib/notes.ts`, which also
+has `panelNoteSettings`, the settings the controls show). Until the answer
+arrives the loop stays empty under a "Finding notes in the loop" spinner;
+each request gets a number and an answer to an older one is dropped, so
+quick changes never show stale notes. A failed request puts the loop back
+on the song's settings. Reset with a loop on drops the loop's own
+settings.
 
 **Mock.** `lib/api.ts` picks the mock when `window.__TAURI_INTERNALS__` is
 missing. It fakes demo songs (Open cycles through them; drops get fake
@@ -166,12 +189,16 @@ separation or open: each demo song shows one state (see the comment on
 song's measurement. Made-up chords on the mock grid follow the
 measurement (a riff with pushes, a verse over a pedal, a chorus and a
 bridge; in Eb for a song whose guess is likely Eb). Made-up notes follow
-the chords, one stem every second like the app's job: a guitar riff and a
+the chords, one stem every second like the app's job (loop requests take
+under a second, with the Fast runs and Quiet notes changes made visible
+inside the loop): a guitar riff and a
 lead line with bends, slides and legato, chordal stretches in the verse
 (gone when Refine's stereo window is on), root eighths on the bass, a
 vocal line, chords only on keys and nothing on other. Other notes heard:
 the guitar's longer picked notes ring on for a beat, and the chord tones
-sound in the chordal stretches.
+sound in the chordal stretches. The note detail level shows: Fewer drops
+the short notes, More adds a grace note before each longer unbent note
+(not on the bass).
 `__mockNotesAgain(ms)` in the console finds every stem's notes again,
 `ms` per stem, to show the panel's progress. Reference tones play through WebAudio, and the rate
 correction changes how fast the position moves. The live tuner gets three

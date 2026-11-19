@@ -8,6 +8,8 @@
 //! runs in the caller's closure, so this crate stays free of ONNX Runtime.
 //! The lead line, bends and chordal stretches are in `lead.rs`.
 
+use crate::Tuning;
+
 /// Model sample rate.
 pub const SAMPLE_RATE: u32 = 22_050;
 /// Samples per model window (input shape `[1, WINDOW, 1]`).
@@ -24,16 +26,14 @@ const FFT_HOP: usize = 256;
 const OVERLAP_FRAMES: usize = 30;
 pub(crate) const MIDI_OFFSET: usize = 21;
 const OVERLAP: usize = OVERLAP_FRAMES * FFT_HOP;
-const HOP: usize = WINDOW - OVERLAP;
+pub(crate) const HOP: usize = WINDOW - OVERLAP;
 const TRIM: usize = OVERLAP_FRAMES / 2;
 /// Seconds per model frame.
 pub(crate) const FRAME_S: f64 = FFT_HOP as f64 / SAMPLE_RATE as f64;
 
-/// Upstream note creation defaults: an onset peak at least this high starts
-/// a note, which lasts while the note activation stays at least this high,
-/// allowing this many frames under it.
-const ONSET_THRESHOLD: f32 = 0.5;
-const FRAME_THRESHOLD: f32 = 0.3;
+/// Note creation: a note lasts while its activation stays over the frame
+/// threshold ([`Tuning`]), allowing this many frames under it (upstream
+/// default).
 const ENERGY_TOLERANCE: usize = 11;
 
 /// The model's output for one window, each row-major `[frames][bins]`
@@ -220,11 +220,15 @@ fn onset_strength(a: &Activations, start: usize, k: usize) -> f32 {
 }
 
 /// Upstream `output_to_notes_polyphonic` with inferred onsets and the
-/// melodia trick: onset peaks (latest first) start notes that last while
-/// the note activation stays above the frame threshold; then the remaining
-/// energy is tracked from its maxima both ways. Events of `min_frames` or
-/// fewer are dropped.
-pub(crate) fn note_events(a: &Activations, min_frames: usize) -> Vec<Event> {
+/// melodia trick: onset peaks (latest first) over the onset threshold start
+/// notes that last while the note activation stays above the frame
+/// threshold; then the remaining energy is tracked from its maxima both
+/// ways. Events shorter than the shortest event are dropped. A lower onset
+/// threshold than upstream's 0.5 splits fast and legato runs that would
+/// otherwise merge.
+pub(crate) fn note_events(a: &Activations, tuning: &Tuning) -> Vec<Event> {
+    let min_frames = (tuning.min_event_s / FRAME_S).round() as usize;
+    let (onset_threshold, frame_threshold) = (tuning.onset_threshold, tuning.frame_threshold);
     let (n, b) = (a.n, N_NOTES);
     if n < 3 {
         return vec![];
@@ -235,7 +239,7 @@ pub(crate) fn note_events(a: &Activations, min_frames: usize) -> Vec<Event> {
     for t in 1..n - 1 {
         for k in 0..b {
             let v = onsets[t * b + k];
-            if v >= ONSET_THRESHOLD && v > onsets[(t - 1) * b + k] && v > onsets[(t + 1) * b + k] {
+            if v >= onset_threshold && v > onsets[(t - 1) * b + k] && v > onsets[(t + 1) * b + k] {
                 peaks.push((t, k));
             }
         }
@@ -263,7 +267,7 @@ pub(crate) fn note_events(a: &Activations, min_frames: usize) -> Vec<Event> {
         let mut i = start + 1;
         let mut low = 0;
         while i < n - 1 && low < ENERGY_TOLERANCE {
-            if energy[i * b + k] < FRAME_THRESHOLD {
+            if energy[i * b + k] < frame_threshold {
                 low += 1;
             } else {
                 low = 0;
@@ -282,11 +286,11 @@ pub(crate) fn note_events(a: &Activations, min_frames: usize) -> Vec<Event> {
     // Melodia trick: frames by falling remaining energy (the same as
     // repeated argmax, since visiting only lowers values to zero).
     let mut order: Vec<usize> = (0..n * b)
-        .filter(|&i| energy[i] > FRAME_THRESHOLD)
+        .filter(|&i| energy[i] > frame_threshold)
         .collect();
     order.sort_by(|&x, &y| energy[y].total_cmp(&energy[x]));
     for idx in order {
-        if energy[idx] <= FRAME_THRESHOLD {
+        if energy[idx] <= frame_threshold {
             continue;
         }
         let (mid, k) = (idx / b, idx % b);
@@ -294,7 +298,7 @@ pub(crate) fn note_events(a: &Activations, min_frames: usize) -> Vec<Event> {
         let mut i = mid + 1;
         let mut low = 0;
         while i < n - 1 && low < ENERGY_TOLERANCE {
-            if energy[i * b + k] < FRAME_THRESHOLD {
+            if energy[i * b + k] < frame_threshold {
                 low += 1;
             } else {
                 low = 0;
@@ -307,7 +311,7 @@ pub(crate) fn note_events(a: &Activations, min_frames: usize) -> Vec<Event> {
         let mut low = 0;
         while i > 0 && low < ENERGY_TOLERANCE {
             let t = i as usize;
-            if energy[t * b + k] < FRAME_THRESHOLD {
+            if energy[t * b + k] < frame_threshold {
                 low += 1;
             } else {
                 low = 0;

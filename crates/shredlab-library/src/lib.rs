@@ -8,6 +8,7 @@
 //!
 //! ```text
 //! <root>/songs/<song_id>/song.json
+//! <root>/songs/<song_id>/loop_notes.json            notes found for loops (a cache)
 //! <root>/songs/<song_id>/original.<ext>             copy of the original mix
 //! <root>/songs/<song_id>/stems/<model_id>_s<shifts>/<stem>.<mp3|flac|wav>
 //! <root>/songs/<song_id>/stems/<stem>.wav           (schema 1 entries)
@@ -56,6 +57,9 @@ pub const NAME: &str = env!("CARGO_PKG_NAME");
 /// `song.json` schema version. 2: `stem_sets` (per model and shifts) and
 /// `original`; schema 1 `stems` is migrated on load.
 pub const SCHEMA: u32 = 2;
+
+/// Notes found for loops, in the song folder ([`Library::load_loop_notes`]).
+const LOOP_NOTES_FILE: &str = "loop_notes.json";
 
 /// Bytes hashed from the start and from the end of the file for the song id.
 const HASH_SPAN: u64 = 4 * 1024 * 1024;
@@ -324,7 +328,8 @@ pub struct StemNotes {
     /// The app's stem name ("bass", "guitar", "vocals", "piano", "other").
     pub stem: String,
     /// What the notes were computed from: the stem set, the separation
-    /// strength and Refine's stereo mask, as a key built by the app.
+    /// strength, Refine's stereo mask and the note detail level, as a key
+    /// built by the app.
     pub source: String,
     /// Sorted by start, non-overlapping.
     #[serde(default)]
@@ -481,6 +486,33 @@ pub struct StrengthSetting {
     pub smooth: bool,
 }
 
+/// How the notes job splits quick runs into notes in a song (the Notes
+/// panel's Fast runs: Fewer / Normal / More).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum NotesFast {
+    Fewer,
+    #[default]
+    Normal,
+    More,
+}
+
+impl NotesFast {
+    fn is_normal(&self) -> bool {
+        *self == NotesFast::Normal
+    }
+}
+
+/// The single note detail level of older manifests, read only to migrate
+/// it to `notes_fast` and `notes_quiet`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum LegacyNotesDetail {
+    Fewer,
+    Normal,
+    More,
+}
+
 /// Contents of `song.json`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SongMeta {
@@ -523,6 +555,15 @@ pub struct SongMeta {
     /// Separation strength.
     #[serde(default)]
     pub strength: StrengthSetting,
+    /// How quick runs are split into notes; missing = Normal.
+    #[serde(default, skip_serializing_if = "NotesFast::is_normal")]
+    pub notes_fast: NotesFast,
+    /// Whether softer notes take part in the lead line; missing = false.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub notes_quiet: bool,
+    /// Older manifests' single detail level; migrated on load, never written.
+    #[serde(default, skip_serializing)]
+    notes_detail: Option<LegacyNotesDetail>,
     /// Hidden from the recent-songs list (the user removed it there); the
     /// data stays. Cleared when the song is opened again.
     #[serde(default, skip_serializing_if = "is_false")]
@@ -556,6 +597,9 @@ impl SongMeta {
             settings: None,
             refine: BTreeMap::new(),
             strength: StrengthSetting::default(),
+            notes_fast: NotesFast::Normal,
+            notes_quiet: false,
+            notes_detail: None,
             hidden: false,
             created_ms: now,
             last_opened_ms: now,
@@ -576,12 +620,22 @@ impl SongMeta {
         self.stem_sets.push(info);
     }
 
-    /// Moves a schema 1 `stems` entry into `stem_sets`.
+    /// Moves a schema 1 `stems` entry into `stem_sets` and an old
+    /// `notes_detail` into `notes_fast` and `notes_quiet`.
     fn migrate(&mut self) {
         if let Some(s) = self.stems.take() {
             if self.stem_set(&s.model_id, s.shifts).is_none() {
                 self.stem_sets.insert(0, s);
             }
+        }
+        // The old More lowered both thresholds; Include is its quiet half.
+        match self.notes_detail.take() {
+            Some(LegacyNotesDetail::Fewer) => self.notes_fast = NotesFast::Fewer,
+            Some(LegacyNotesDetail::More) => {
+                self.notes_fast = NotesFast::More;
+                self.notes_quiet = true;
+            }
+            Some(LegacyNotesDetail::Normal) | None => {}
         }
         self.schema = SCHEMA;
     }
@@ -836,6 +890,39 @@ impl Library {
         f(&mut meta);
         self.save_locked(&mut meta)?;
         Ok(true)
+    }
+
+    /// The notes found for loops of the song (`loop_notes.json` next to
+    /// `song.json`), same shape as [`SongMeta::notes`] with the app's loop
+    /// keys as sources. Empty when missing or unreadable: it is only a cache.
+    pub fn load_loop_notes(&self, song_id: &str) -> NotesData {
+        let Ok(dir) = self.safe_song_dir(song_id) else {
+            return NotesData::default();
+        };
+        fs::read_to_string(dir.join(LOOP_NOTES_FILE))
+            .ok()
+            .and_then(|t| serde_json::from_str(&t).ok())
+            .unwrap_or_default()
+    }
+
+    /// Loads, modifies and writes `loop_notes.json` (atomically), under a
+    /// lock of its own so concurrent updates are not lost. Does nothing
+    /// when the song's folder does not exist.
+    pub fn update_loop_notes(&self, song_id: &str, f: impl FnOnce(&mut NotesData)) -> Result<()> {
+        static LOOP_NOTES_LOCK: Mutex<()> = Mutex::new(());
+        let _guard = LOOP_NOTES_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = self.safe_song_dir(song_id)?;
+        if !dir.is_dir() {
+            return Ok(());
+        }
+        let mut d = self.load_loop_notes(song_id);
+        f(&mut d);
+        let path = dir.join(LOOP_NOTES_FILE);
+        let text = serde_json::to_vec(&d).map_err(|e| Error::Json {
+            path: path.display().to_string(),
+            msg: e.to_string(),
+        })?;
+        codec::write_atomic(&path, &text)
     }
 
     /// All songs with a readable manifest (hidden ones included), most
@@ -1530,13 +1617,94 @@ mod tests {
         assert!(!json.contains("\"cents\": 0") && !json.contains("\"vibrato\": false"));
         assert!(!json.contains("\"attack\": null") && !json.contains("\"release_s\": null"));
         assert!(json.contains("\"others\": \"1.25 2.75 64 0.52,3.5 4.125 59 0.3\""));
+        // The default note options stay out of the file too.
+        assert!(!json.contains("notes_fast") && !json.contains("notes_quiet"));
         let back = lib.load("abc").unwrap().unwrap();
         assert_eq!(back, m);
+        m.notes_fast = NotesFast::More;
+        m.notes_quiet = true;
+        lib.save(&mut m).unwrap();
+        let json = std::fs::read_to_string(lib.song_dir("abc").join("song.json")).unwrap();
+        assert!(json.contains("\"notes_fast\": \"more\""));
+        assert!(json.contains("\"notes_quiet\": true"));
+        assert_eq!(lib.load("abc").unwrap().unwrap(), m);
         assert!(lib.update("abc", |m| m.title = "Other".into()).unwrap());
         assert_eq!(lib.load("abc").unwrap().unwrap().title, "Other");
         assert!(!lib.update("nope", |_| {}).unwrap());
         let mut bad = meta("../x", 1);
         assert!(lib.save(&mut bad).is_err());
+    }
+
+    #[test]
+    fn loop_notes_live_beside_the_manifest() {
+        let lib = Library::open(&tmpdir("loop_notes")).unwrap();
+        // No song folder: nothing written, nothing read.
+        lib.update_loop_notes("abc", |d| d.version = 1).unwrap();
+        assert_eq!(lib.load_loop_notes("abc"), NotesData::default());
+        lib.save(&mut meta("abc", 1)).unwrap();
+        let entry = StemNotes {
+            stem: "guitar".into(),
+            source: "m_s1|st0|fmore|loop1000-2500".into(),
+            notes: vec![NoteSpan {
+                start_s: 1.0,
+                end_s: 1.5,
+                midi: 64,
+                conf: 0.5,
+                ..Default::default()
+            }],
+            chordal: vec![],
+            others: vec![HeardSpan {
+                start_s: 1.2,
+                end_s: 2.0,
+                midi: 60,
+                conf: 0.3,
+            }],
+        };
+        lib.update_loop_notes("abc", |d| {
+            d.version = 7;
+            d.entries.push(entry.clone());
+        })
+        .unwrap();
+        let d = lib.load_loop_notes("abc");
+        assert_eq!((d.version, d.entries.clone()), (7, vec![entry]));
+        // Not part of song.json, and a broken file reads as empty.
+        let json = std::fs::read_to_string(lib.song_dir("abc").join("song.json")).unwrap();
+        assert!(!json.contains("loop1000"));
+        std::fs::write(lib.song_dir("abc").join(LOOP_NOTES_FILE), "{").unwrap();
+        assert_eq!(lib.load_loop_notes("abc"), NotesData::default());
+        assert!(lib.update_loop_notes("../x", |_| {}).is_err());
+    }
+
+    #[test]
+    fn old_notes_detail_migrates_to_fast_and_quiet() {
+        let lib = Library::open(&tmpdir("notes_detail")).unwrap();
+        let path = lib.song_dir("abc").join("song.json");
+        let cases = [
+            ("fewer", NotesFast::Fewer, false),
+            ("normal", NotesFast::Normal, false),
+            ("more", NotesFast::More, true),
+        ];
+        for (old, fast, quiet) in cases {
+            lib.save(&mut meta("abc", 1)).unwrap();
+            let json = std::fs::read_to_string(&path).unwrap();
+            let json = json.replacen(
+                '{',
+                &format!(
+                    "{{
+  \"notes_detail\": \"{old}\","
+                ),
+                1,
+            );
+            std::fs::write(&path, json).unwrap();
+            let m = lib.load("abc").unwrap().unwrap();
+            assert_eq!((m.notes_fast, m.notes_quiet), (fast, quiet), "{old}");
+            // Saving writes the new fields only.
+            assert!(lib.update("abc", |_| {}).unwrap());
+            let json = std::fs::read_to_string(&path).unwrap();
+            assert!(!json.contains("notes_detail"), "{old}");
+            let m = lib.load("abc").unwrap().unwrap();
+            assert_eq!((m.notes_fast, m.notes_quiet), (fast, quiet), "{old}");
+        }
     }
 
     #[test]

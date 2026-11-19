@@ -246,6 +246,34 @@ the lead and the panel shows the lead line, and the stem picker says
 that stem's notes again; going back to a setting you used before is
 instant.
 
+Two settings in the panel's header change how notes are found, for every
+stem of the song but the bass (the bass ignores them); ShredLab remembers
+them for the song.
+
+- **Fast runs: Fewer · Normal · More.** When a quick run comes out as a few
+  long notes, **More** splits it into separate notes, but it can also chop
+  a held note into repeated short ones. **Fewer** keeps only clearly picked
+  notes, for a part that comes out cluttered.
+- **Quiet notes: Skip · Include.** **Include** lets softer notes into the
+  lead line, such as quiet fills and the softer notes of a run. It adds
+  few wrong notes.
+
+The defaults are Normal and Skip. While either setting is off its default,
+**Reset** next to them puts both back in one step. Changing a setting
+finds the notes again; going back to settings you used before is instant.
+
+While a loop is on, the two settings apply to the loop only, so you can
+tune them for a solo without changing the rest of the song. A small label
+next to them says which they apply to: **This loop** or **Whole song**. A
+new loop starts with the song's settings. Changing one finds the notes of
+the loop alone (a second or so for a short loop) and shows them inside the
+loop, with the song's notes around it; the song's own settings and notes
+stay as they were. Going back to settings you used before on the same
+loop is instant. When you move, change or turn off the loop, its settings
+go back to the song's. With a loop on, **Reset** puts the loop back on
+the song's settings; with no loop, it puts the song back on Normal and
+Skip.
+
 Like the chords, the notes are a best guess, more often wrong in fast,
 dense or heavily distorted parts. Check them by ear at a slower speed.
 

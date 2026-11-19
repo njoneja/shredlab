@@ -45,6 +45,10 @@ export interface SongInfo {
   strength: StrengthSetting;
   /** Strength job the backend started while opening (0 = none); its done/error event has this id. */
   strength_job: number;
+  /** The song's Fast runs setting (stems on the note model; the bass ignores it). */
+  notes_fast: NotesFast;
+  /** Whether the song's softer notes take part in the lead line (stems on the note model; the bass ignores it). */
+  notes_quiet: boolean;
   /** Measured tuning; null until the tuning job has run on the stems. */
   tuning: TuningData | null;
   /** Detected chords of the loaded stems; null until the chords job has run. */
@@ -58,6 +62,9 @@ export interface SongInfo {
 }
 
 // ---- Notes ----
+
+/** How the notes job splits quick runs into notes: More splits fast runs but can chop held notes, Fewer keeps only clearly attacked notes. */
+export type NotesFast = "fewer" | "normal" | "more";
 
 /** A bend inside a note: when the pitch leaves the note, reaches the target and comes back. */
 export interface BendSpan {
@@ -583,6 +590,14 @@ export interface Backend {
   setRefineAnalysis(stem: StemName | null): Promise<void>;
   /** Saves the song's strength and re-derives the stems in the background; job 0 = nothing to do. */
   setStrength(strength: StrengthSetting): Promise<{ job: number }>;
+  /** Saves the song's Fast runs and Quiet notes settings together; saved notes for them come at once (`notes-ready`), the rest are queued (`notes-status`). */
+  setNotesOptions(fast: NotesFast, quiet: boolean): Promise<void>;
+  /**
+   * The notes of one stem (not the bass) in the loop `start`..`end` of the open song, found with the loop's
+   * own settings; clipped to the loop, cached by the backend. Nothing is saved with the song. A newer call
+   * can make an older one that has not started fail.
+   */
+  detectLoopNotes(start: number, end: number, fast: NotesFast, quiet: boolean, stem: StemName): Promise<StemNotes>;
   /** Playback-rate correction in cents (−200..200, 0 = off); reset to 0 by open_song. */
   setRateCorrection(cents: number): Promise<void>;
   /** Plays a reference tone (replaces any playing one); runs whether or not the song plays. */

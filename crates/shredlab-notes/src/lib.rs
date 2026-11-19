@@ -14,18 +14,24 @@
 //! model for every stem but the bass: the caller runs the network through a
 //! closure (one window in, a [`WindowOutput`] out), so this crate stays
 //! free of ONNX Runtime.
+//!
+//! [`Excerpt`] runs either on one stretch of a stem (a loop): the caller
+//! detects the padded stretch's audio and [`Excerpt::finish`] moves the
+//! result back to song time, clipped to the stretch.
 
 pub mod basic_pitch;
+mod excerpt;
 mod lead;
 mod onset;
 mod pitch;
 mod poly;
+mod quick_bend;
 mod segment;
 mod signal;
 
 /// Algorithm version of [`detect_notes`]. Stored results with an older
 /// version are recomputed. Bump it whenever a change can move the result.
-pub const VERSION: u32 = 4;
+pub const VERSION: u32 = 7;
 
 /// Pitched stems the detector understands. Drums are never passed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,11 +49,20 @@ impl StemKind {
         match self {
             // A 5-string bass's low B is 31 Hz.
             StemKind::Bass => (29.0, 400.0),
-            StemKind::Guitar => (72.0, 1400.0),
+            StemKind::Guitar => (72.0, 2100.0),
             // E2 to C#6; a lower reading is more often two voices a
             // fifth apart than a low voice.
             StemKind::Vocals => (80.0, 1100.0),
             StemKind::Keys | StemKind::Other => (29.0, 2000.0),
+        }
+    }
+
+    /// Above this (Hz) the model path keeps only notes in a high run (a solo
+    /// bent past the top of the neck); `range_hz` reaches further for them.
+    pub fn usual_top_hz(self) -> Option<f64> {
+        match self {
+            StemKind::Guitar => Some(1400.0),
+            _ => None,
         }
     }
 
@@ -71,6 +86,70 @@ impl StemKind {
     }
 }
 
+/// How the model path splits quick runs into notes (the Notes panel's Fast
+/// runs). More splits fast runs into separate notes but can also chop held
+/// notes into repeats; Fewer keeps only clearly attacked notes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Fast {
+    Fewer,
+    #[default]
+    Normal,
+    More,
+}
+
+/// The note detection settings of the model path. The pitch tracker (the
+/// bass) ignores them. The default (Normal fast runs, quiet notes skipped)
+/// is the detector's standard tuning.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Detail {
+    /// How quick runs are split into notes.
+    pub fast: Fast,
+    /// Whether softer notes take part in the lead line (the Notes panel's
+    /// Quiet notes: Include).
+    pub quiet: bool,
+}
+
+/// The thresholds a [`Detail`] sets on the model path.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct Tuning {
+    /// Shortest note event kept from the model (s); also the shortest part
+    /// of a lead note's event outside the note reported as heard.
+    pub min_event_s: f64,
+    /// An onset peak at least this high starts a note (upstream uses 0.5).
+    pub onset_threshold: f32,
+    /// A note lasts while its activation stays at least this high.
+    pub frame_threshold: f32,
+    /// A note takes part in the lead line from this mean activation up.
+    pub lead_min_amp: f32,
+    /// A note in a high run (a solo far above the part under it) takes
+    /// part from this mean activation up.
+    pub high_run_min_amp: f32,
+}
+
+impl Detail {
+    pub(crate) fn tuning(self) -> Tuning {
+        // Measured on sparse and dense solos: the two thresholds act
+        // independently. A lower onset threshold splits fast runs but also
+        // chops held notes into repeats; a lower strength floor lets quiet
+        // notes into the lead line with little noise, and going under 0.25
+        // adds nothing. A lower frame threshold merges notes and turns lines
+        // into chordal stretches, so it stays put.
+        let (min_event_s, onset_threshold) = match self.fast {
+            Fast::Fewer => (0.07, 0.5),
+            Fast::Normal => (0.05, 0.4),
+            Fast::More => (0.05, 0.35),
+        };
+        let (lead_min_amp, high_run_min_amp) = if self.quiet { (0.25, 0.2) } else { (0.3, 0.24) };
+        Tuning {
+            min_event_s,
+            onset_threshold,
+            frame_threshold: 0.3,
+            lead_min_amp,
+            high_run_min_amp,
+        }
+    }
+}
+
 /// One stem to analyze.
 #[derive(Debug, Clone, Copy)]
 pub struct NoteInput<'a> {
@@ -85,6 +164,8 @@ pub struct NoteInput<'a> {
     /// Detected beat times in seconds (may be empty). Used for the minimum
     /// note length and onset weighting, never to move notes.
     pub beats: &'a [f64],
+    /// Note detection settings (model path only).
+    pub detail: Detail,
 }
 
 /// How a note was reached.
@@ -197,6 +278,7 @@ pub fn detect_notes(input: &NoteInput) -> NoteAnalysis {
 }
 
 pub use basic_pitch::WindowOutput;
+pub use excerpt::{Excerpt, MIN_LEN_S as EXCERPT_MIN_S, PAD_S as EXCERPT_PAD_S};
 
 /// Detects the notes of one stem with the Basic Pitch model, run through
 /// `model`: it gets one window of [`basic_pitch::WINDOW`] samples at
@@ -217,7 +299,13 @@ pub fn detect_notes_with_model(
     }
     let audio = basic_pitch::resample(input.samples, input.sample_rate)?;
     let act = basic_pitch::infer(&audio, model)?;
-    Ok(lead::transcribe(&act, input.kind, input.offset_cents))
+    Ok(lead::transcribe(
+        &act,
+        input.kind,
+        input.offset_cents,
+        input.detail,
+        Some((input.samples, input.sample_rate)),
+    ))
 }
 
 #[cfg(test)]

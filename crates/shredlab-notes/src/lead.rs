@@ -8,20 +8,19 @@
 use std::collections::VecDeque;
 
 use crate::basic_pitch::{self as bp, Activations, Event};
-use crate::{segment, Attack, Bend, Heard, Note, NoteAnalysis, StemKind};
+use crate::{
+    quick_bend, segment, Attack, Bend, Detail, Heard, Note, NoteAnalysis, StemKind, Tuning,
+};
 
-/// Shortest note event kept from the model (s); a lead note trimmed by the
-/// next one may end up shorter, down to [`MIN_LEAD_S`]. Also the shortest
-/// part of a lead note's event outside the note reported as heard.
-const MIN_EVENT_S: f64 = 0.07;
+/// A lead note trimmed by the next one may end up shorter than the
+/// shortest model event ([`Tuning::min_event_s`]; at the Normal level short
+/// enough for 32nds at 120 BPM in fast runs), down to this (s).
 const MIN_LEAD_S: f64 = 0.03;
 /// Notes whose loudest frame is more than this under the stem's reference
 /// level, or under the floor (dBFS), are dropped: the model transcribes
 /// faint bleed as readily as the stem's own part.
 const GATE_BELOW_REF_DB: f32 = 40.0;
 const GATE_FLOOR_DB: f32 = -60.0;
-/// A note takes part in the lead line from this mean activation up.
-const LEAD_MIN_AMP: f32 = 0.3;
 /// The model's onset activation from which a note counts as attacked.
 const PICK_ONSET: f32 = 0.5;
 /// Notes starting within this of each other start together (s); three or
@@ -56,6 +55,15 @@ const ALONE_S: f64 = 0.5;
 const RUN_NOTES: usize = 3;
 const RUN_GAP_S: f64 = 0.15;
 const RUN_STEP_ST: f32 = 5.0;
+/// High runs: a solo far above the part under it (a lead up at the top of
+/// the neck over a riff) comes out of the model as short, weak notes. At
+/// least [`RUN_NOTES`] single notes from [`HIGH_RUN_MIDI`] up, each
+/// starting within [`HIGH_RUN_GAP_S`] of the previous one's end and within
+/// [`HIGH_RUN_STEP_ST`] of its pitch, at strength
+/// [`Tuning::high_run_min_amp`] or more, join the lead line like a run.
+const HIGH_RUN_MIDI: f32 = 84.0;
+const HIGH_RUN_GAP_S: f64 = 0.5;
+const HIGH_RUN_STEP_ST: f32 = 7.0;
 // A run outside the register does not move it (see `select_lead`).
 /// A new lead note within this of the previous one's end (s) continues it
 /// (legato or slide when not attacked); after a longer gap it is picked.
@@ -75,6 +83,14 @@ const BEND_MAX_SPEED: f64 = 30.0;
 const BEND_ONSET_MAX: f32 = 0.8;
 /// Slides: a glide of at least this many semitones into a new note.
 const SLIDE_MIN_ST: f32 = 1.0;
+/// Fast bends found on the audio: the lower pitch may read this far flat
+/// of its semitone (semitones), and must not belong to a note sounding
+/// since this long before it (s).
+const QUICK_FLAT_ST: f32 = 0.2;
+const QUICK_OWN_S: f64 = 0.05;
+/// A lead note keeps at least this much (s) when the next note's bend
+/// starts inside it.
+const QUICK_KEEP_S: f64 = 0.1;
 /// Chordal stretches: frames where at least `STRUM_NOTES` notes sound make
 /// up this share of the sounding frames in a window this long, for at least
 /// this long, with gaps up to this joined (s); they are reported (and
@@ -101,10 +117,20 @@ struct Cand {
     alive: bool,
 }
 
-/// Turns stitched activations into the lead line and chordal stretches.
-pub(crate) fn transcribe(a: &Activations, kind: StemKind, offset_cents: f64) -> NoteAnalysis {
-    let min_frames = (MIN_EVENT_S / bp::FRAME_S).round() as usize;
-    let events = bp::note_events(a, min_frames);
+/// Turns stitched activations into the lead line and chordal stretches,
+/// with the thresholds of `detail`.
+///
+/// With the stem's audio (mono samples and their rate), stems that bend get
+/// a check for fast bends at each lead note's start ([`quick_bends`]).
+pub(crate) fn transcribe(
+    a: &Activations,
+    kind: StemKind,
+    offset_cents: f64,
+    detail: Detail,
+    audio: Option<(&[f32], u32)>,
+) -> NoteAnalysis {
+    let tuning = detail.tuning();
+    let events = bp::note_events(a, &tuning);
     // The stem's range, as for the pitch tracker (a quarter tone of slack).
     let (lo_hz, hi_hz) = kind.range_hz();
     let hz_midi = |hz: f64| (69.0 + 12.0 * (hz / 440.0).log2()) as f32;
@@ -134,13 +160,29 @@ pub(crate) fn transcribe(a: &Activations, kind: StemKind, offset_cents: f64) -> 
     }
     cands.retain(|c| c.alive);
     cands.sort_by_key(|c| (c.ev.start, c.ev.bin));
+    // Over the stem's usual top ([`StemKind::usual_top_hz`]) only notes in
+    // a high run stay, so overtones up there don't become the top of a
+    // group and push the real lead note under them out.
+    if let Some(top_hz) = kind.usual_top_hz() {
+        let top = hz_midi(top_hz) + 0.5;
+        let high = high_chains(a, &cands, tuning.high_run_min_amp);
+        let mut k = 0;
+        cands.retain(|c| {
+            let keep = c.pitch <= top || high[k];
+            k += 1;
+            keep
+        });
+    }
     groups(a, &mut cands);
-    let picked = select_lead(a, &cands);
-    let built = build_notes(a, &cands, &picked, offset_cents);
+    let picked = select_lead(a, &cands, &tuning);
+    let mut built = build_notes(a, &cands, &picked, offset_cents);
+    if let Some((samples, rate)) = audio.filter(|(x, r)| kind.bends() && !x.is_empty() && *r > 0) {
+        quick_bends(a, &mut built, &cands, samples, rate, offset_cents);
+    }
     let chordal = chordal(a, &cands, &built);
     let mut notes: Vec<Note> = built.iter().map(|&(_, n)| n).collect();
     segment::remove_chordal(&mut notes, &chordal, MIN_LEAD_S);
-    let others = others(a, &cands, &built, &notes, offset_cents);
+    let others = others(a, &cands, &built, &notes, offset_cents, tuning.min_event_s);
     NoteAnalysis {
         notes,
         chordal,
@@ -151,7 +193,7 @@ pub(crate) fn transcribe(a: &Activations, kind: StemKind, offset_cents: f64) -> 
 /// Every note the model heard outside the lead line, sorted by start: a
 /// candidate that is not a lead note whole, and of a lead note's candidate
 /// the parts outside the lead note (it rang on under the next lead note, or
-/// a chordal stretch trimmed it) from [`MIN_EVENT_S`] up. `built` are the
+/// a chordal stretch trimmed it) from `min_event_s` up. `built` are the
 /// lead notes before chordal stretches removed or trimmed them into `notes`.
 fn others(
     a: &Activations,
@@ -159,6 +201,7 @@ fn others(
     built: &[(usize, Note)],
     notes: &[Note],
     offset_cents: f64,
+    min_event_s: f64,
 ) -> Vec<Heard> {
     let offset = (offset_cents / 100.0) as f32;
     // The lead note each candidate became, if it survived.
@@ -179,7 +222,7 @@ fn others(
         };
         let midi = (c.pitch - offset).round().clamp(0.0, 127.0) as u8;
         for (start_s, end_s) in parts {
-            if end_s - start_s >= MIN_EVENT_S - 1e-9 {
+            if end_s - start_s >= min_event_s - 1e-9 {
                 out.push(Heard {
                     start_s,
                     end_s,
@@ -432,14 +475,20 @@ fn groups(a: &Activations, cands: &mut [Cand]) {
 /// note above it. Every other candidate takes over from the sounding lead
 /// note. The register is forgotten after [`REGISTER_KEEP_S`] without a
 /// lead note.
-fn select_lead(a: &Activations, cands: &[Cand]) -> Vec<usize> {
+fn select_lead(a: &Activations, cands: &[Cand], tuning: &Tuning) -> Vec<usize> {
+    let min_amp = tuning.lead_min_amp;
     let mut lead: Vec<usize> = Vec::new();
     let mut recent: VecDeque<f32> = VecDeque::new();
     // End of the last lead note (frames), as trimmed by the next.
     let mut cur_end = 0usize;
-    let in_run = runs(a, cands);
+    let in_high = high_runs(a, cands, tuning.high_run_min_amp);
+    let in_run: Vec<bool> = runs(a, cands, min_amp)
+        .into_iter()
+        .zip(&in_high)
+        .map(|(r, &h)| r || h)
+        .collect();
     for (i, c) in cands.iter().enumerate() {
-        if !c.top || c.ev.amp < LEAD_MIN_AMP {
+        if !c.top || (c.ev.amp < min_amp && !in_high[i]) {
             continue;
         }
         let t = a.time_of(c.ev.start);
@@ -457,10 +506,7 @@ fn select_lead(a: &Activations, cands: &[Cand]) -> Vec<usize> {
         // The only candidate around: no other lead candidate starts within
         // ALONE_S.
         let alone = !cands.iter().enumerate().any(|(j, o)| {
-            j != i
-                && o.top
-                && o.ev.amp >= LEAD_MIN_AMP
-                && (a.time_of(o.ev.start) - t).abs() <= ALONE_S
+            j != i && o.top && o.ev.amp >= min_amp && (a.time_of(o.ev.start) - t).abs() <= ALONE_S
         });
         let clear = !strum
             && ((c.ev.amp >= CLEAR_AMP && dur >= CLEAR_S) || dur >= LONG_S || alone || in_run[i]);
@@ -495,12 +541,70 @@ fn select_lead(a: &Activations, cands: &[Cand]) -> Vec<usize> {
     lead
 }
 
-/// Which candidates belong to a run (see [`RUN_NOTES`]).
-fn runs(a: &Activations, cands: &[Cand]) -> Vec<bool> {
+/// Which candidates belong to a run (see [`RUN_NOTES`]) of notes at
+/// `min_amp` or more.
+fn runs(a: &Activations, cands: &[Cand], min_amp: f32) -> Vec<bool> {
+    chains(a, cands, min_amp, f32::MIN, RUN_GAP_S, RUN_STEP_ST)
+}
+
+/// Before grouping: candidates from [`HIGH_RUN_MIDI`] up at `min_amp` or
+/// more that chain into a high run, whatever starts with them.
+fn high_chains(a: &Activations, cands: &[Cand], min_amp: f32) -> Vec<bool> {
+    let high: Vec<usize> = (0..cands.len())
+        .filter(|&i| cands[i].pitch >= HIGH_RUN_MIDI && cands[i].ev.amp >= min_amp)
+        .collect();
+    let mut out = vec![false; cands.len()];
+    let mut chain: Vec<usize> = Vec::new();
+    let mut flush = |chain: &mut Vec<usize>| {
+        if chain.len() >= RUN_NOTES {
+            for &k in chain.iter() {
+                out[k] = true;
+            }
+        }
+        chain.clear();
+    };
+    for &i in &high {
+        if let Some(&p) = chain.last() {
+            let (x, y) = (&cands[p], &cands[i]);
+            let gap = a.time_of(y.ev.start) - a.time_of(x.ev.end);
+            if gap > HIGH_RUN_GAP_S || (y.pitch - x.pitch).abs() > HIGH_RUN_STEP_ST {
+                flush(&mut chain);
+            }
+        }
+        chain.push(i);
+    }
+    flush(&mut chain);
+    out
+}
+
+/// Which candidates belong to a high run (see [`HIGH_RUN_MIDI`]) of notes
+/// at `min_amp` or more.
+fn high_runs(a: &Activations, cands: &[Cand], min_amp: f32) -> Vec<bool> {
+    chains(
+        a,
+        cands,
+        min_amp,
+        HIGH_RUN_MIDI,
+        HIGH_RUN_GAP_S,
+        HIGH_RUN_STEP_ST,
+    )
+}
+
+/// Candidates in chains of at least [`RUN_NOTES`] single notes (tops, not
+/// strums) at `min_amp` or more and pitch `min_pitch` or more, each within
+/// `gap_s` of the previous one's end and `step_st` of its pitch.
+fn chains(
+    a: &Activations,
+    cands: &[Cand],
+    min_amp: f32,
+    min_pitch: f32,
+    gap_s: f64,
+    step_st: f32,
+) -> Vec<bool> {
     let single: Vec<usize> = (0..cands.len())
         .filter(|&i| {
             let c = &cands[i];
-            c.top && c.group < STRUM_NOTES && c.ev.amp >= LEAD_MIN_AMP
+            c.top && c.group < STRUM_NOTES && c.ev.amp >= min_amp && c.pitch >= min_pitch
         })
         .collect();
     let mut out = vec![false; cands.len()];
@@ -517,7 +621,7 @@ fn runs(a: &Activations, cands: &[Cand]) -> Vec<bool> {
         if let Some(&p) = chain.last() {
             let (x, y) = (&cands[p], &cands[i]);
             let gap = a.time_of(y.ev.start) - a.time_of(x.ev.end);
-            if gap > RUN_GAP_S || (y.pitch - x.pitch).abs() > RUN_STEP_ST {
+            if gap > gap_s || (y.pitch - x.pitch).abs() > step_st {
                 flush(&mut chain, &mut out);
             }
         }
@@ -599,6 +703,92 @@ fn build_notes(
     notes
 }
 
+/// Fast bends the model missed ([`quick_bend`]): a lead note without a
+/// bend, not reached by a slide, whose audio shows a new lower pitch at its
+/// start that the note takes over from becomes the lower note with a bend
+/// up to the model's note. The lower note is the semitone at or under the
+/// lower pitch (allowing [`QUICK_FLAT_ST`] of intonation): a string only
+/// bends up, and the window catches the first part of the rise, so the
+/// measured start reads sharp. The note starts with the lower pitch when
+/// that is earlier, but not before the previous lead note's end. The lower
+/// pitch must not be another note the model heard (one sounding since
+/// [`QUICK_OWN_S`] before it, the previous lead note included).
+fn quick_bends(
+    a: &Activations,
+    built: &mut [(usize, Note)],
+    cands: &[Cand],
+    samples: &[f32],
+    rate: u32,
+    offset_cents: f64,
+) {
+    let offset = (offset_cents / 100.0) as f32;
+    let mut probe = quick_bend::Probe::new(samples, rate);
+    for k in 0..built.len() {
+        let (i, n) = built[k];
+        if n.bend.is_some() || n.attack == Attack::Slide {
+            continue;
+        }
+        let Some(b) = probe.find(cands[i].pitch, offset, n.start_s, n.end_s) else {
+            continue;
+        };
+        let prev = k.checked_sub(1).map(|p| built[p].1);
+        // The previous lead note, where its pitch was when it ended.
+        let prev_ends_low = prev.is_some_and(|p| {
+            let bent = p
+                .bend
+                .filter(|b| b.release_s.is_none())
+                .map_or(0.0, |b| b.semitones);
+            let ended = f32::from(p.midi) + p.cents / 100.0 + bent + offset;
+            p.end_s > b.onset_s - QUICK_OWN_S && (ended - b.from).abs() <= 0.5
+        });
+        let heard_low = cands.iter().enumerate().any(|(j, c)| {
+            j != i
+                && (c.pitch - b.from).abs() <= 0.5
+                && a.time_of(c.ev.start) < b.onset_s - QUICK_OWN_S
+                && a.time_of(c.ev.end) > b.onset_s
+        });
+        if prev_ends_low || heard_low {
+            continue;
+        }
+        let from = b.from - offset;
+        let midi = (from + QUICK_FLAT_ST).floor().clamp(0.0, 127.0);
+        let to = b.to - offset;
+        // The previous lead note may give up its end, keeping
+        // QUICK_KEEP_S and its own bend's peak.
+        let floor = prev.map_or(0.0, |p| {
+            let keep = (p.start_s + QUICK_KEEP_S).max(p.bend.map_or(0.0, |b| b.peak_s));
+            keep.min(p.end_s)
+        });
+        let start_s = if b.onset_s < n.start_s - bp::FRAME_S {
+            b.onset_s.max(floor)
+        } else {
+            n.start_s
+        };
+        if start_s > b.start_s {
+            continue;
+        }
+        if let Some(p) = k.checked_sub(1).map(|p| &mut built[p].1) {
+            if p.end_s > start_s {
+                p.end_s = start_s;
+                if let Some(b) = p.bend.as_mut() {
+                    b.release_s = b.release_s.filter(|&r| r < start_s);
+                }
+            }
+        }
+        let note = &mut built[k].1;
+        note.start_s = start_s;
+        note.midi = midi as u8;
+        // The tuning's deviation, as the model's note had it.
+        note.cents = ((to - to.round()) * 100.0).clamp(-50.0, 50.0);
+        note.bend = Some(Bend {
+            start_s: b.start_s.max(start_s),
+            peak_s: b.peak_s.max(start_s),
+            release_s: None,
+            semitones: to - midi - note.cents / 100.0,
+        });
+    }
+}
+
 /// Stretches where the stem plays chords without a lead line of its own.
 fn chordal(a: &Activations, cands: &[Cand], notes: &[(usize, Note)]) -> Vec<(f64, f64)> {
     let n = a.n;
@@ -658,6 +848,7 @@ fn chordal(a: &Activations, cands: &[Cand], notes: &[(usize, Note)]) -> Vec<(f64
 mod tests {
     use super::*;
     use crate::basic_pitch::{N_CONTOUR, N_NOTES};
+    use crate::Fast;
 
     const K: usize = bp::MIDI_OFFSET;
 
@@ -714,7 +905,7 @@ mod tests {
             assert!(w[0].start_s <= w[1].start_s, "{:?}", r.others);
         }
         for h in &r.others {
-            assert!(h.end_s - h.start_s >= MIN_EVENT_S - 1e-9);
+            assert!(h.end_s - h.start_s >= Detail::default().tuning().min_event_s - 1e-9);
             assert!((0.0..=1.0).contains(&h.confidence));
         }
     }
@@ -728,7 +919,7 @@ mod tests {
         let mut a = act(300);
         note(&mut a, 69, 20, 80, 0.8, true);
         note(&mut a, 72, 100, 160, 0.7, true);
-        let r = transcribe(&a, StemKind::Guitar, 0.0);
+        let r = transcribe(&a, StemKind::Guitar, 0.0, Detail::default(), None);
         check(&r);
         assert_eq!(midis(&r), vec![69, 72]);
         assert!((r.notes[0].start_s - 20.0 * bp::FRAME_S).abs() < 1e-6);
@@ -739,9 +930,37 @@ mod tests {
             .all(|n| n.cents.abs() < 10.0 && n.bend.is_none()));
         assert!(r.chordal.is_empty());
         // A song 30 cents flat reads as its intended notes.
-        let flat = transcribe(&a, StemKind::Guitar, -30.0);
+        let flat = transcribe(&a, StemKind::Guitar, -30.0, Detail::default(), None);
         assert_eq!(midis(&flat), vec![69, 72]);
         assert!(flat.notes.iter().all(|n| (n.cents - 30.0).abs() < 10.0));
+    }
+
+    #[test]
+    fn the_detail_sets_how_weak_and_short_a_note_may_be() {
+        let mut a = act(300);
+        note(&mut a, 69, 20, 80, 0.8, true);
+        // A weak note: its activation flickers around the frame threshold, its
+        // mean between the Include and Skip floors (0.25, 0.30).
+        note(&mut a, 72, 100, 140, 0.32, true);
+        for t in (101..140).step_by(2) {
+            a.note[t * N_NOTES + 72 - K] = 0.2;
+        }
+        // A short note: five frames (58 ms).
+        note(&mut a, 74, 200, 205, 0.8, true);
+        let at = |fast, quiet| transcribe(&a, StemKind::Guitar, 0.0, Detail { fast, quiet }, None);
+        let fewer = at(Fast::Fewer, false);
+        let normal = at(Fast::Normal, false);
+        let quiet = at(Fast::Normal, true);
+        let more = at(Fast::More, true);
+        for r in [&fewer, &normal, &quiet, &more] {
+            check(r);
+        }
+        assert_eq!(midis(&fewer), vec![69]);
+        assert_eq!(midis(&normal), vec![69, 74]);
+        assert_eq!(midis(&quiet), vec![69, 72, 74]);
+        assert_eq!(midis(&more), vec![69, 72, 74]);
+        // The weak note is still heard at Normal.
+        assert!(normal.others.iter().any(|h| h.midi == 72));
     }
 
     #[test]
@@ -753,7 +972,7 @@ mod tests {
         for l in &mut a.level_db[200..260] {
             *l = -75.0;
         }
-        let r = transcribe(&a, StemKind::Guitar, 0.0);
+        let r = transcribe(&a, StemKind::Guitar, 0.0, Detail::default(), None);
         assert_eq!(midis(&r), vec![64]);
     }
 
@@ -771,7 +990,7 @@ mod tests {
     fn pure_strumming_is_chordal() {
         let mut a = act(600);
         strums(&mut a, 20, 10);
-        let r = transcribe(&a, StemKind::Guitar, 0.0);
+        let r = transcribe(&a, StemKind::Guitar, 0.0, Detail::default(), None);
         check(&r);
         assert!(r.notes.is_empty(), "{:?}", midis(&r));
         let total: f64 = r.chordal.iter().map(|(s, e)| e - s).sum();
@@ -787,7 +1006,7 @@ mod tests {
             note(&mut a, m, s, s + 20, 0.8, true);
         }
         strums(&mut a, 30, 10);
-        let r = transcribe(&a, StemKind::Guitar, 0.0);
+        let r = transcribe(&a, StemKind::Guitar, 0.0, Detail::default(), None);
         check(&r);
         assert!(r.chordal.is_empty(), "{:?}", r.chordal);
         let want: Vec<u8> = lead.iter().map(|&m| m as u8).collect();
@@ -817,9 +1036,39 @@ mod tests {
             note(&mut a, m, s, s + 15, 0.8, true);
             s += 17;
         }
-        let r = transcribe(&a, StemKind::Guitar, 0.0);
+        let r = transcribe(&a, StemKind::Guitar, 0.0, Detail::default(), None);
         check(&r);
         assert_eq!(midis(&r), vec![74, 76, 74, 71, 74, 79, 76, 52, 74, 76]);
+    }
+
+    #[test]
+    fn a_high_run_over_a_riff_joins_the_lead() {
+        let mut a = act(600);
+        // A riff around A3, and a weak solo far above it (A6, G6, A6, C7;
+        // the model needs 0.3 to make an event)
+        // played over it; a lone weak A6 later stays out.
+        for i in 0..12 {
+            let s = 10 + 40 * i;
+            note(
+                &mut a,
+                if i % 2 == 0 { 57 } else { 55 },
+                s,
+                s + 30,
+                0.7,
+                true,
+            );
+        }
+        let mut s = 25;
+        for m in [93, 91, 93, 96] {
+            note(&mut a, m, s, s + 8, 0.32, true);
+            s += 20;
+        }
+        note(&mut a, 93, 400, 408, 0.32, true);
+        let r = transcribe(&a, StemKind::Guitar, 0.0, Detail::default(), None);
+        check(&r);
+        let high: Vec<u8> = midis(&r).into_iter().filter(|&m| m >= 84).collect();
+        assert_eq!(high, vec![93, 91, 93, 96]);
+        assert!(midis(&r).contains(&57));
     }
 
     #[test]
@@ -840,7 +1089,7 @@ mod tests {
             note(&mut a, m, s, s + 15, 0.8, true);
             s += 17;
         }
-        let r = transcribe(&a, StemKind::Guitar, 0.0);
+        let r = transcribe(&a, StemKind::Guitar, 0.0, Detail::default(), None);
         check(&r);
         assert_eq!(midis(&r), vec![74, 76, 74, 71, 55, 54, 55, 52, 74, 76]);
     }
@@ -870,7 +1119,7 @@ mod tests {
             };
             pitch_at(&mut a, t, p);
         }
-        let r = transcribe(&a, StemKind::Guitar, 0.0);
+        let r = transcribe(&a, StemKind::Guitar, 0.0, Detail::default(), None);
         check(&r);
         assert_eq!(midis(&r), vec![71], "{:?}", r.notes);
         let n = r.notes[0];
@@ -881,7 +1130,7 @@ mod tests {
         assert!((rel - 90.0 * bp::FRAME_S).abs() < 0.03, "{b:?}");
         assert!(n.end_s > 130.0 * bp::FRAME_S);
         // Keys don't bend: the glide gives separate notes.
-        let k = transcribe(&a, StemKind::Keys, 0.0);
+        let k = transcribe(&a, StemKind::Keys, 0.0, Detail::default(), None);
         check(&k);
         assert!(k.notes.len() >= 2 && k.notes.iter().all(|n| n.bend.is_none()));
     }
@@ -896,7 +1145,7 @@ mod tests {
         }
         note(&mut a, 43, 105, 117, 0.5, true);
         note(&mut a, 74, 120, 160, 0.8, true);
-        let r = transcribe(&a, StemKind::Guitar, 0.0);
+        let r = transcribe(&a, StemKind::Guitar, 0.0, Detail::default(), None);
         check(&r);
         assert_eq!(midis(&r), vec![60, 64, 67, 72, 74]);
         let t = |f: usize| a.time_of(f);
@@ -931,8 +1180,76 @@ mod tests {
                 && h.end_s > n.start_s + 1e-9));
         }
         // Named after the offset, as lead notes are.
-        let flat = transcribe(&a, StemKind::Guitar, -100.0);
+        let flat = transcribe(&a, StemKind::Guitar, -100.0, Detail::default(), None);
         assert_eq!(flat.others[0].midi, 61);
+    }
+
+    #[test]
+    fn a_fast_bend_in_the_audio_becomes_the_lower_note_bent() {
+        use crate::quick_bend::tests::{buffer, tone, SR};
+        // The model hears a plain D6, picked; the audio has C6 picked 60 ms
+        // earlier, held 30 ms and bent to D6 over 40 ms.
+        let mut a = act(110);
+        note(&mut a, 86, 50, 100, 0.8, true);
+        let at = a.time_of(50) - 0.06;
+        let mut x = buffer();
+        tone(
+            &mut x,
+            at,
+            1.2,
+            |t| 84.0 + 2.0 * ((t - 0.03) / 0.04).clamp(0.0, 1.0),
+            0.2,
+        );
+        let r = transcribe(&a, StemKind::Guitar, 0.0, Detail::default(), Some((&x, SR)));
+        check(&r);
+        assert_eq!(midis(&r), vec![84], "{:?}", r.notes);
+        let n = r.notes[0];
+        assert_eq!(n.attack, Attack::Picked);
+        let b = n.bend.expect("bend");
+        assert!((b.semitones - 2.0).abs() < 0.25, "{b:?}");
+        assert!(b.release_s.is_none());
+        assert!(
+            n.start_s >= at - 0.02 && n.start_s <= a.time_of(50),
+            "{n:?}"
+        );
+        assert!(b.start_s >= n.start_s && b.peak_s > b.start_s, "{b:?}");
+        assert!(b.peak_s <= a.time_of(50) + 0.03, "{b:?}");
+        // The lead note covers the model's D6, so nothing else is heard.
+        assert!(r.others.is_empty(), "{:?}", r.others);
+        // Keys don't bend; without the audio the note stays D6.
+        assert_eq!(
+            midis(&transcribe(
+                &a,
+                StemKind::Keys,
+                0.0,
+                Detail::default(),
+                Some((&x, SR))
+            )),
+            vec![86]
+        );
+        assert_eq!(
+            midis(&transcribe(
+                &a,
+                StemKind::Guitar,
+                0.0,
+                Detail::default(),
+                None
+            )),
+            vec![86]
+        );
+    }
+
+    #[test]
+    fn a_steady_note_with_a_sharp_attack_keeps_its_name() {
+        use crate::quick_bend::tests::{buffer, tone, SR};
+        let mut a = act(110);
+        note(&mut a, 86, 50, 100, 0.8, true);
+        let mut x = buffer();
+        tone(&mut x, a.time_of(50), 1.2, |_| 86.0, 1.5);
+        let r = transcribe(&a, StemKind::Guitar, 0.0, Detail::default(), Some((&x, SR)));
+        check(&r);
+        assert_eq!(midis(&r), vec![86]);
+        assert!(r.notes[0].bend.is_none());
     }
 
     #[test]
@@ -940,7 +1257,7 @@ mod tests {
         let mut a = act(200);
         note(&mut a, 71, 10, 50, 0.8, true);
         note(&mut a, 73, 50, 100, 0.8, false);
-        let r = transcribe(&a, StemKind::Guitar, 0.0);
+        let r = transcribe(&a, StemKind::Guitar, 0.0, Detail::default(), None);
         check(&r);
         assert_eq!(midis(&r), vec![71, 73]);
         assert!(r.notes[0].bend.is_none());
@@ -962,7 +1279,7 @@ mod tests {
             };
             pitch_at(&mut a, t, p);
         }
-        let r = transcribe(&a, StemKind::Guitar, 0.0);
+        let r = transcribe(&a, StemKind::Guitar, 0.0, Detail::default(), None);
         check(&r);
         assert_eq!(midis(&r), vec![64, 69]);
         assert_eq!(r.notes[1].attack, Attack::Slide);

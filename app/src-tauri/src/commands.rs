@@ -328,6 +328,25 @@ pub async fn set_refine_analysis(b: B<'_>, stem: Option<String>) -> R<()> {
 }
 
 #[tauri::command]
+pub async fn set_notes_options(b: B<'_>, fast: NotesFast, quiet: bool) -> R<()> {
+    let b = b.inner().clone();
+    blocking(move || b.set_notes_options(fast, quiet)).await
+}
+
+#[tauri::command]
+pub async fn detect_loop_notes(
+    b: B<'_>,
+    start: f64,
+    end: f64,
+    fast: NotesFast,
+    quiet: bool,
+    stem: String,
+) -> R<StemNotes> {
+    let b = b.inner().clone();
+    blocking(move || b.detect_loop_notes(start, end, fast, quiet, &stem)).await
+}
+
+#[tauri::command]
 pub async fn set_strength(b: B<'_>, strength: StrengthSetting) -> R<StrengthStarted> {
     let b = b.inner().clone();
     blocking(move || b.set_strength(strength).map(|job| StrengthStarted { job })).await

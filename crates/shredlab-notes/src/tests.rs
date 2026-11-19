@@ -6,7 +6,7 @@
 
 use std::f64::consts::TAU;
 
-use crate::{detect_notes, Attack, NoteAnalysis, NoteInput, StemKind};
+use crate::{detect_notes, Attack, Detail, Fast, NoteAnalysis, NoteInput, StemKind, Tuning};
 
 const SR: u32 = 44_100;
 
@@ -93,6 +93,7 @@ fn detect(kind: StemKind, x: &[f32], offset_cents: f64, beats: &[f64]) -> NoteAn
         kind,
         offset_cents,
         beats,
+        detail: Detail::default(),
     });
     for w in a.notes.windows(2) {
         assert!(w[0].start_s <= w[1].start_s, "notes sorted\n{}", show(&a));
@@ -458,6 +459,7 @@ fn keys_at_48k() {
         kind: StemKind::Keys,
         offset_cents: 0.0,
         beats: &[],
+        detail: Detail::default(),
     });
     assert_eq!(midis(&a), notes, "\n{}", show(&a));
 }
@@ -521,6 +523,7 @@ fn the_model_path_runs_windows_through_the_closure() {
         kind: StemKind::Guitar,
         offset_cents: 0.0,
         beats: &[],
+        detail: Detail::default(),
     };
     let a = crate::detect_notes_with_model(&input, &mut |w: &[f32]| {
         calls += 1;
@@ -548,6 +551,7 @@ fn the_bass_never_uses_the_model() {
         kind: StemKind::Bass,
         offset_cents: 0.0,
         beats: &[],
+        detail: Detail::default(),
     };
     let a = crate::detect_notes_with_model(&input, &mut |_: &[f32]| {
         panic!("the bass must not call the model")
@@ -557,4 +561,101 @@ fn the_bass_never_uses_the_model() {
     assert_eq!(midis(&a), vec![40, 43, 45]);
     // The tracker hears no other notes.
     assert!(a.others.is_empty());
+}
+
+#[test]
+fn detail_defaults_keep_the_standard_tuning() {
+    let normal = Tuning {
+        min_event_s: 0.05,
+        onset_threshold: 0.4,
+        frame_threshold: 0.3,
+        lead_min_amp: 0.3,
+        high_run_min_amp: 0.24,
+    };
+    assert_eq!(
+        Detail::default(),
+        Detail {
+            fast: Fast::Normal,
+            quiet: false
+        }
+    );
+    assert_eq!(Detail::default().tuning(), normal);
+    let quiet = Detail {
+        fast: Fast::Normal,
+        quiet: true,
+    }
+    .tuning();
+    assert_eq!((quiet.lead_min_amp, quiet.high_run_min_amp), (0.25, 0.2));
+    assert_eq!(quiet.onset_threshold, 0.4);
+    let fewer = Detail {
+        fast: Fast::Fewer,
+        quiet: false,
+    }
+    .tuning();
+    assert_eq!((fewer.min_event_s, fewer.onset_threshold), (0.07, 0.5));
+    let more = Detail {
+        fast: Fast::More,
+        quiet: false,
+    }
+    .tuning();
+    assert_eq!((more.min_event_s, more.onset_threshold), (0.05, 0.35));
+    assert_eq!(more.lead_min_amp, 0.3);
+    for t in [quiet, fewer, more] {
+        assert_eq!(t.frame_threshold, 0.3);
+    }
+}
+
+#[test]
+fn an_excerpt_finds_the_same_notes_as_the_whole_stem() {
+    // Twenty notes of 0.3 s from 0.3 s; the loop (4.05 to 4.95 s) cuts the
+    // notes at 3.9 and 4.8 s in half.
+    let notes = [
+        57, 60, 62, 64, 67, 69, 72, 76, 72, 69, 67, 64, 62, 60, 62, 64, 67, 69, 72, 69,
+    ];
+    let x = melody(&notes, 0.3, &GUITAR, 3.0);
+    let dur = x.len() as f64 / f64::from(SR);
+    let whole = detect(StemKind::Guitar, &x, 0.0, &[]);
+    let (s, e) = (4.05, 4.95);
+    let ex = crate::Excerpt::new(s, e, dur).unwrap();
+    // The context starts at the model window at or before 3.05 s (1.64 s)
+    // and ends 1 s after the loop.
+    assert!(ex.from_s > 1.6 && ex.from_s < 1.7, "{ex:?}");
+    assert!((ex.to_s - 5.95).abs() < 1e-9);
+    let part = &x[ex.samples(SR, x.len())];
+    let a = ex.finish(detect(StemKind::Guitar, part, 0.0, &ex.beats(&[])));
+    assert_eq!(
+        midis(&a),
+        notes[12..16],
+        "
+{}",
+        show(&a)
+    );
+    let inside: Vec<_> = whole
+        .notes
+        .iter()
+        .filter(|n| n.end_s > s && n.start_s < e)
+        .collect();
+    assert_eq!(
+        inside.len(),
+        a.notes.len(),
+        "
+{}",
+        show(&whole)
+    );
+    for (w, p) in inside.iter().zip(&a.notes) {
+        assert_eq!(w.midi, p.midi);
+        assert!(
+            (w.start_s.max(s) - p.start_s).abs() < 0.02,
+            "
+{}",
+            show(&a)
+        );
+        assert!(
+            (w.end_s.min(e) - p.end_s).abs() < 0.02,
+            "
+{}",
+            show(&a)
+        );
+    }
+    assert!(a.notes.iter().all(|n| n.start_s >= s && n.end_s <= e));
 }

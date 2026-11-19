@@ -15,10 +15,13 @@ import {
   noteIndexAt,
   noteViews,
   octaveName,
+  panelNoteSettings,
   parseHeard,
   pickNotesStem,
   refinedSide,
   rollRange,
+  sameSpan,
+  withLoopNotes,
 } from "../src/lib/notes.ts";
 import type { StemName, StemNotes } from "../src/lib/types.ts";
 
@@ -172,4 +175,116 @@ test("refined label and the default stem", () => {
   // A 4-stem set without guitar and bass picks the first with notes.
   assert.equal(pickNotesStem("guitar", ["vocals", "other"], (s) => s === "other", none), "other");
   assert.equal(pickNotesStem(null, [], none, none), null);
+});
+
+test("the panel's settings follow the loop while one is on", () => {
+  const song = { fast: "more" as const, quiet: false };
+  const loop = { start: 10, end: 20 };
+  // No loop: the song's.
+  assert.deepEqual(panelNoteSettings(song, null, null), { fast: "more", quiet: false, scope: "song", own: false });
+  assert.deepEqual(panelNoteSettings(song, null, { ...loop, fast: "fewer", quiet: true }), {
+    fast: "more",
+    quiet: false,
+    scope: "song",
+    own: false,
+  });
+  // A loop starts on the song's settings.
+  assert.deepEqual(panelNoteSettings(song, loop, null), { fast: "more", quiet: false, scope: "loop", own: false });
+  // Its own, when set on this loop (to the millisecond).
+  const own = { start: 10.0002, end: 19.9996, fast: "normal" as const, quiet: true };
+  assert.deepEqual(panelNoteSettings(song, loop, own), { fast: "normal", quiet: true, scope: "loop", own: true });
+  // Set on another loop: the song's again.
+  assert.deepEqual(panelNoteSettings(song, { start: 10, end: 21 }, own).own, false);
+  // Equal to the song's: nothing of its own to find.
+  assert.equal(panelNoteSettings(song, loop, { ...loop, ...song }).own, false);
+  assert.ok(sameSpan(loop, own));
+  assert.ok(!sameSpan(loop, null));
+});
+
+test("loop notes inside the loop, the song's outside it", () => {
+  const song: StemNotes = {
+    stem: "guitar",
+    source: "m_s1|st0",
+    notes: [
+      { start_s: 1, end_s: 2, midi: 60 },
+      // Crosses the loop's start; its bend starts before the loop, so it stays.
+      { start_s: 4.5, end_s: 5.5, midi: 62, bend: { start_s: 4.6, peak_s: 4.8, semitones: 2 } },
+      { start_s: 6, end_s: 7, midi: 64 },
+      // Crosses the loop's end; its bend starts after it, so it stays.
+      { start_s: 9.5, end_s: 11, midi: 65, bend: { start_s: 10.2, peak_s: 10.4, release_s: 10.8, semitones: 1 } },
+      // Spans the whole loop (overlapping the others, only to test the cut): both ends stay.
+      { start_s: 3, end_s: 12, midi: 40 },
+    ].sort((a, b) => a.start_s - b.start_s),
+    chordal: [
+      [0, 0.5],
+      [7, 8],
+      [9, 13],
+    ],
+    others: "1 2.5 55 0.4,5.2 5.8 57 0.3,8 12 59 0.2",
+  };
+  const loop: StemNotes = {
+    stem: "guitar",
+    source: "m_s1|st0|fmore|loop5000-10000",
+    notes: [
+      { start_s: 5, end_s: 5.4, midi: 61 },
+      { start_s: 5.4, end_s: 6, midi: 62, attack: "legato" },
+      { start_s: 8, end_s: 10, midi: 67 },
+    ],
+    chordal: [[6.5, 7]],
+    others: "5 5.5 50 0.5",
+  };
+  const range = { start: 5, end: 10 };
+  const m = withLoopNotes(song, loop, range)!;
+  const spans = m.notes.map((n) => [n.start_s, n.end_s, n.midi]);
+  assert.deepEqual(spans, [
+    [1, 2, 60],
+    [3, 5, 40],
+    [4.5, 5, 62],
+    [5, 5.4, 61],
+    [5.4, 6, 62],
+    [8, 10, 67],
+    [10, 12, 40],
+    [10, 11, 65],
+  ]);
+  // Cut notes keep a bend that starts in the part kept.
+  assert.deepEqual(m.notes[2].bend, { start_s: 4.6, peak_s: 4.8, release_s: null, semitones: 2 });
+  assert.deepEqual(m.notes[7].bend, { start_s: 10.2, peak_s: 10.4, release_s: 10.8, semitones: 1 });
+  assert.equal(m.notes[4].attack, "legato");
+  assert.deepEqual(m.chordal, [
+    [0, 0.5],
+    [6.5, 7],
+    [10, 13],
+  ]);
+  assert.deepEqual(
+    parseHeard(m.others).map((h) => [h.start_s, h.end_s, h.midi]),
+    [
+      [1, 2.5, 55],
+      [5, 5.5, 50],
+      [10, 12, 59],
+    ],
+  );
+  assert.equal(m.source, song.source);
+  // While the loop's notes are being found, the loop stays empty.
+  const busy = withLoopNotes(song, null, range)!;
+  assert.ok(busy.notes.every((n) => n.end_s <= 5 || n.start_s >= 10));
+  assert.ok(busy.chordal!.every(([a, b]) => b <= 5 || a >= 10));
+  // A bend whose rise the cut interrupts ends its rise at the cut; one starting in the loop goes.
+  const cut = withLoopNotes(
+    {
+      ...song,
+      notes: [
+        { start_s: 3, end_s: 6, midi: 50, bend: { start_s: 4, peak_s: 5.5, release_s: 5.8, semitones: 2 } },
+        { start_s: 9, end_s: 11, midi: 52, bend: { start_s: 9.5, peak_s: 9.7, semitones: 1 } },
+      ],
+    },
+    null,
+    range,
+  )!;
+  assert.deepEqual(cut.notes[0].bend, { start_s: 4, peak_s: 5, release_s: null, semitones: 2 });
+  assert.equal(cut.notes[1].bend, undefined);
+  // Without a loop: the song's notes as they are.
+  assert.equal(withLoopNotes(song, loop, null), song);
+  assert.equal(withLoopNotes(undefined, null, range), undefined);
+  // Notes views read the result like any stem's notes.
+  assert.equal(noteViews(m, chordFrame({ songSemitones: 0, confirmed: false, offsetCents: 0, shiftCents: 0, mySemitones: 0 }), null).length, 8);
 });

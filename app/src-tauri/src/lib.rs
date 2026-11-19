@@ -226,6 +226,8 @@ pub fn run() {
             commands::set_refine,
             commands::set_refine_analysis,
             commands::set_strength,
+            commands::set_notes_options,
+            commands::detect_loop_notes,
         ])
         .build(tauri::generate_context!());
     let app = match result {

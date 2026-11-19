@@ -7,15 +7,22 @@
   are shared, so bar lines line up). Names come from lib/notes.ts via the
   store, in the same frame as the chord names. The other notes the model
   heard (not in the lead line) are drawn faintly behind the lead notes
-  unless the header's "Also heard" box is cleared. While the chords panel is
-  closed, the header carries Fit/Follow and the tuning line itself.
+  unless the header's "Also heard" box is cleared. The header's Fast runs
+  (Fewer / Normal / More) and Quiet notes (Skip / Include) set how the
+  song's notes are found, and Reset puts both back to Normal and Skip in
+  one change (store.setNotesOptions). While a loop is on they apply to
+  the loop only (the label next to them says which): the loop's notes are
+  found for them and drawn inside the loop, the song's outside it, and
+  Reset puts the loop back on the song's settings.
+  While the chords panel is closed, the header carries Fit/Follow and the
+  tuning line itself.
 -->
 <script lang="ts">
   import { app, CHORD_ZOOMS } from "./store.svelte";
   import { barLength, isDark, rootFill, rootHighlight, spellingFor, type ChordView } from "./chords";
   import { bendWords, defaultRange, firstNoteFrom, loopBetween, nameIn, NOTE_STEM_LABEL, noteIndexAt, octaveName, refinedSide, rollRange, type HeardView, type NoteView } from "./notes";
   import { barAt } from "./meter";
-  import type { StemName } from "./types";
+  import type { NotesFast, StemName } from "./types";
 
   let canvas: HTMLCanvasElement;
   let wrap: HTMLDivElement;
@@ -25,6 +32,15 @@
   /** Width of the keyboard strip at the left edge (drawn over the roll, so
    * the timeline stays aligned with the chords panel). */
   const KEYS = 34;
+  const FASTS: [NotesFast, string][] = [
+    ["fewer", "Fewer"],
+    ["normal", "Normal"],
+    ["more", "More"],
+  ];
+  const QUIETS: [boolean, string][] = [
+    [false, "Skip"],
+    [true, "Include"],
+  ];
 
   type Hit = { v: NoteView; i: number; x0: number; x1: number; y0: number; y1: number };
   let hits: Hit[] = [];
@@ -44,8 +60,18 @@
     win.fitting ? Math.max(1, Math.round((win.end - win.start) / barLength(app.downbeats))) : app.chordsBars,
   );
   const stem = $derived(app.notesStem);
-  const data = $derived(stem ? app.notes[stem] : undefined);
+  const data = $derived(app.shownNotes);
   const pending = $derived(app.notesStemPending);
+  const opts = $derived(app.notesPanel);
+  /** Where the loop's notes are being found, in % of the panel's width. */
+  const loopBusy = $derived.by(() => {
+    const l = app.notesLoopSpan;
+    if (!app.notesLoopPending || !l || pending) return null;
+    const span = Math.max(1e-6, win.end - win.start);
+    const x0 = Math.max(0, (l.start - win.start) / span);
+    const x1 = Math.min(1, (l.end - win.start) / span);
+    return x1 > x0 ? { left: 100 * x0, width: 100 * (x1 - x0) } : null;
+  });
   const legend = $derived.by(() => {
     const v = app.noteViews.find((n) => n.second);
     return v ? { main: v.main, heard: v.second! } : line.legend;
@@ -650,6 +676,45 @@
       <input type="checkbox" checked={app.notesHeard} onchange={(e) => app.setNotesHeard(e.currentTarget.checked)} />
       Also heard
     </label>
+    <div class="opt" title="More splits quick runs into separate notes but can chop held notes">
+      <span class="opt-label" id="notes-fast-label">Fast runs</span>
+      <div class="seg detail" role="group" aria-labelledby="notes-fast-label">
+        {#each FASTS as [f, name] (f)}
+          <button
+            aria-pressed={opts.fast === f}
+            disabled={!app.notesStems.length}
+            onclick={() => app.setNotesOptions(f, opts.quiet)}>{name}</button
+          >
+        {/each}
+      </div>
+    </div>
+    <div class="opt" title="Include lets softer notes into the lead line">
+      <span class="opt-label" id="notes-quiet-label">Quiet notes</span>
+      <div class="seg detail" role="group" aria-labelledby="notes-quiet-label">
+        {#each QUIETS as [q, name] (name)}
+          <button
+            aria-pressed={opts.quiet === q}
+            disabled={!app.notesStems.length}
+            onclick={() => app.setNotesOptions(opts.fast, q)}>{name}</button
+          >
+        {/each}
+      </div>
+    </div>
+    <span
+      class="scope"
+      title={opts.scope === "loop"
+        ? "Fast runs and Quiet notes apply to the loop only; the rest of the song keeps its own"
+        : "Fast runs and Quiet notes apply to the whole song. Set a loop to change them for the loop only."}
+      >{opts.scope === "loop" ? "This loop" : "Whole song"}</span
+    >
+    {#if opts.scope === "loop" ? opts.own : app.notesFast !== "normal" || app.notesQuiet}
+      <button
+        class="reset"
+        title={opts.scope === "loop" ? "Back to the song's settings for this loop" : "Back to Normal and Skip"}
+        disabled={!app.notesStems.length}
+        onclick={() => app.resetNotesOptions()}>Reset</button
+      >
+    {/if}
     {#if !app.chordsOpen}
       <div class="seg" role="group" aria-label="Notes window">
         <button
@@ -706,6 +771,11 @@
     {:else if !stem}
       <div class="state muted">
         {#if app.stemsReady && !app.separating}No stem with notes in this stem set.{:else}Notes appear once the song is separated.{/if}
+      </div>
+    {:else if loopBusy}
+      <div class="state busy loop-busy" role="status" style:left="{loopBusy.left}%" style:width="{loopBusy.width}%">
+        <span class="spin"></span>
+        <span>Finding notes in the loop…</span>
       </div>
     {:else if data && !data.notes.length && !data.chordal?.length}
       <div class="state muted">No single notes found in the {label(stem).toLowerCase()} stem.</div>
@@ -872,6 +942,44 @@
     opacity: 0.45;
     cursor: default;
   }
+  .detail button {
+    padding: 0 7px;
+  }
+  .opt {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    flex-shrink: 0;
+  }
+  .opt-label {
+    font-size: 12px;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+  .scope {
+    flex-shrink: 0;
+    font-size: 11.5px;
+    color: var(--faint);
+    white-space: nowrap;
+    cursor: help;
+  }
+  .reset {
+    flex-shrink: 0;
+    border: 0;
+    background: none;
+    padding: 0 2px;
+    height: 24px;
+    font-size: 12px;
+    color: var(--accent);
+    cursor: pointer;
+  }
+  .reset:hover:not(:disabled) {
+    text-decoration: underline;
+  }
+  .reset:disabled {
+    opacity: 0.45;
+    cursor: default;
+  }
   .zoom {
     display: inline-flex;
     align-items: center;
@@ -942,6 +1050,11 @@
     pointer-events: none;
     font-size: 12.5px;
     color: var(--muted);
+  }
+  .loop-busy {
+    right: auto;
+    overflow: hidden;
+    white-space: nowrap;
   }
   .spin {
     width: 16px;

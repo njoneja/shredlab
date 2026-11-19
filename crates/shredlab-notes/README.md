@@ -17,8 +17,9 @@ stem keeps its notes where the tracker would mark it all chordal.
 
 Owns `detect_notes` (the pitch tracker), `detect_notes_with_model` (Basic
 Pitch for every stem but the bass), the input and result types
-(`NoteInput`, `StemKind`, `Attack`, `Bend`, `Note`, `Heard`,
-`NoteAnalysis`, `WindowOutput`), the model's window and frame constants (`basic_pitch`)
+(`NoteInput`, `StemKind`, `Detail`, `Fast`, `Attack`, `Bend`, `Note`, `Heard`,
+`NoteAnalysis`, `WindowOutput`), the model's window and frame constants (`basic_pitch`),
+`Excerpt` (detecting one stretch of a stem, such as a loop, on its own)
 and the algorithm `VERSION`. It
 does not name notes (sharps or flats, octaves), transpose them to the
 player's tuning, choose neck positions, quantize rhythm, or store results;
@@ -30,8 +31,9 @@ caller passes a closure that runs one window through the model
 of ONNX Runtime, like `shredlab-beats`. It takes no paths, opens no audio
 device and starts no threads (the caller may run stems in parallel).
 
-Dependencies: realfft, `shredlab-tuning`, whose `spectrum` module (the
-Hann analyzer with interpolated peaks) the tracker's chordal check uses,
+Dependencies: realfft (the fast-bend check's spectra), `shredlab-tuning`,
+whose `spectrum` module (the Hann analyzer with interpolated peaks) the
+tracker's chordal check uses,
 and `shredlab-beats`, whose resampler brings audio to the model's
 22,050 Hz. Results are plain structs without serde. The `notes_library`
 example also uses `ort` (same pin as `shredlab-separation`),
@@ -39,13 +41,17 @@ example also uses `ort` (same pin as `shredlab-separation`),
 
 ## Layout
 
-- `src/lib.rs`: public types, `VERSION`, the stem ranges,
-  `detect_notes`, which runs the tracker's stages below, and
+- `src/lib.rs`: public types, `VERSION`, the stem ranges, the
+  thresholds the note settings set (`Detail::tuning`), `detect_notes`, which runs the tracker's stages below, and
   `detect_notes_with_model`.
 - `src/basic_pitch.rs`: the model side: resampling, windows and stitching,
   upstream's note events, the contour helpers and the frame levels.
 - `src/lead.rs`: the lead line, bends, slides and chordal stretches from
   the model's note events, with tests on synthetic activations.
+- `src/quick_bend.rs`: the fast-bend check on the stem's audio at a lead
+  note's start.
+- `src/excerpt.rs`: `Excerpt`: the padded stretch to detect, its beats,
+  and the result moved back to song time and clipped to the stretch.
 - `src/signal.rs`: the analysis signal (low-passed, decimated, high-passed).
 - `src/pitch.rs`: probabilistic YIN candidates per frame and the Viterbi
   pitch track.
@@ -64,8 +70,10 @@ The bass always, and every stem when no model is passed.
 1. Signal. The stem is low-passed and decimated to at least 11 kHz (bass)
    or 16 kHz (other stems), then high-passed at 70 % of the lowest note
    searched (at most 40 Hz). Ranges: bass 29 to 400 Hz (a 5-string's low B
-   is 31 Hz), guitar 72 to 1400 Hz, vocals 80 to 1100 Hz, keys and other
-   29 to 2000 Hz.
+   is 31 Hz), guitar 72 to 2100 Hz (bends past the top of the neck reach
+   A6 and beyond; the model path keeps guitar notes over 1400 Hz only in a
+   high run, see below), vocals 80 to 1100 Hz, keys and other 29 to
+   2000 Hz.
 2. Pitch candidates (pYIN). One frame every 10 ms. The YIN difference
    function over a window of at least 25 ms and 1.2 of the longest period
    gives the cumulative mean normalized difference (CMNDF). Each of its
@@ -166,6 +174,19 @@ Guitar, vocals, keys and other stems when the caller passes the model
 (`detect_notes_with_model`; the bass goes to the tracker and the closure is
 never called).
 
+`NoteInput::detail` holds two independent settings for this path; the
+numbers below are the defaults'. `fast` (Fast runs) sets the onset
+threshold and the shortest event: Fewer keeps only clearly attacked notes
+(onsets of 0.5, events from 70 ms), More splits quick runs into separate
+notes (onsets of 0.35) but also chops held notes into repeats. `quiet`
+(Quiet notes: Include) lets softer notes into the lead line: lead
+candidates from a strength of 0.25 (high runs 0.2). On real solos the two
+added different notes and little noise came with the lower strength; a
+strength under 0.25 added nothing, a frame threshold under 0.3 merged
+notes and turned lines into chordal stretches, and shorter events or
+onsets under 0.35 mostly split held notes, so those stay. The tracker
+ignores both.
+
 1. Model. The stem is resampled to 22,050 Hz and cut into windows of
    43,844 samples (2 s) after 3,840 samples of zeros, overlapping by 30
    frames of 256 samples, the last one zero-padded, as upstream
@@ -177,9 +198,11 @@ never called).
    bin's center is the middle of its three (A0 is contour bin 1).
 2. Note events, as upstream `output_to_notes_polyphonic`: onsets (the
    model's, or a rise of the note activation scaled to them) of at least
-   0.5 start notes that last while the activation stays at 0.3 or more,
-   allowing 11 frames under it; then the remaining activation is tracked
-   from its maxima both ways. Events of 70 ms or less are dropped. An
+   0.4 (upstream 0.5; lower splits fast and legato runs) start notes that
+   last while the activation stays at 0.3 or more, allowing 11 frames
+   under it; then the remaining activation is tracked from its maxima both
+   ways. Events shorter than 50 ms are dropped (fast runs keep their
+   notes). An
    event's strength is its mean activation, its onset the model's onset
    activation at its start, and its pitch the median contour peak near its
    bin over its first half.
@@ -212,6 +235,13 @@ never called).
      it tops a strum. This keeps low strummed chord tones between phrases
      out and lets real jumps and licks on the low strings in. A run outside
      the register does not move it, so the line can return afterward.
+   - A high run is the same from C6 up with looser limits: three or more
+     notes of strength 0.24 or more, each within 500 ms of the last one's
+     end and 7 semitones of its pitch. The model hears a solo bent far
+     above a riff as short, weak notes; these join the lead line like a
+     run. For guitar, notes over 1400 Hz that are not in a high run are
+     dropped before notes starting together are compared, so an overtone
+     up there can't push the real lead note under it out.
    - A strum's top joins only within 3 semitones under the register, and
      never cuts a sounding lead note above it.
    Each lead note ends where the next starts; notes under 30 ms are
@@ -222,7 +252,44 @@ never called).
    still bent) at least a semitone into it, else `Legato`. `cents` is the
    pitch's distance from `midi` after the offset, `confidence` the
    strength. Vibrato is not detected on this path (always false).
-7. Chordal stretches. A frame is chordal when at least 60 % of the
+7. Fast bends (guitar, bass and other stems). The model misses a bend
+   that reaches its target within a few tens of milliseconds of the pick:
+   its contour stays flat under the target and it reports the target as a
+   plain note, often starting where the pitch arrives. So each lead note
+   from E4 up without a bend, not reached by a slide, is checked on the
+   stem's own audio from 150 ms before its start to 150 ms after (or its
+   end): a Hann spectrum of about 46 ms (2,048 samples at 44.1 or 48 kHz)
+   every 5 ms, and in each the strongest peak from 3 semitones under the
+   note to half a semitone over it, when within 20 dB of the frame's
+   strongest bin (60 Hz to 5 kHz). It is a fast bend when:
+   - a lower pitch 0.75 to 2.6 semitones under the note is that peak for
+     3 to 30 hops in a row, steady within 0.35 semitones, and new: not
+     that pitch in the hop before, and at least 6 dB louder at its loudest
+     than at its quietest in the 15 hops before;
+   - within 12 hops after it, without dipping under it, the note takes
+     over (within 0.3 semitones), no earlier than 80 ms before the model's
+     start, and holds for 4 hops at least as strong as the lower pitch
+     was;
+   - the lower pitch fades by 10 dB within 3 to 10 hops after that (the
+     string that sounded it now sounds the note; a note ringing on another
+     string does not fade);
+   - and the pitch moves: a hop on the way is between the two, or the
+     lower pitch lasts at most 12 hops and sits at least 20 cents off a
+     semitone after the offset (the string was already rising; a fretted
+     note sits on one).
+   Not when the lower pitch belongs to another note: an event at it
+   sounding since 50 ms before it, or a previous lead note ending there
+   when this one is not picked. The note becomes the semitone at or under
+   the lower pitch (allowing 20 cents flat): a string only bends up, and
+   the window catches the start of the rise, so the lower pitch reads
+   sharp. Its bend goes from where the pitch leaves the lower pitch to
+   where it arrives, its size from that semitone to the pitch reached
+   (`cents` keeps the model note's deviation). The note starts with the
+   lower pitch when that is more than a frame earlier, but not before the
+   previous lead note's end; the previous note may give up its end to it,
+   keeping 100 ms and its own bend's peak. The check computes about 60
+   spectra per lead note.
+8. Chordal stretches. A frame is chordal when at least 60 % of the
    sounding frames in a 300 ms window around it have three or more events
    sounding; runs at least 400 ms long, with gaps up to 250 ms joined, are
    chordal stretches when lead notes that are not a strum's top cover less
@@ -230,11 +297,11 @@ never called).
    notes start on their own), while pure strumming, whose only lead
    candidates are strum tops, shows as chordal. Lead notes at least half
    inside a stretch are dropped, the rest trimmed to it.
-8. Other notes heard (`others`). Every event left after the gates and
+9. Other notes heard (`others`). Every event left after the gates and
    bend merging (step 4) that is not a lead note, at its full length:
    overtones, quiet notes, chord tones, a rhythm part, and lead notes
    dropped as too short or inside a chordal stretch. Of an event that is a
-   lead note, the parts outside the lead note of at least 70 ms: a note
+   lead note, the parts outside the lead note of at least 50 ms: a note
    ringing on after the next lead note starts, or the part a chordal
    stretch trimmed. Named like lead notes (`midi` after the offset), with
    the event's strength as `confidence`. A guitar stem of four to five
@@ -242,7 +309,31 @@ never called).
 
 The model and decoding take about 1.3 to 1.6 s for a four- to
 five-minute stem on a desktop CPU with four threads, nearly all of it in
-the model.
+the model; the fast-bend check adds under 0.1 s.
+
+## How it works: one stretch (a loop)
+
+`Excerpt` lets the caller detect one stretch of a stem with other settings
+than the rest. The caller cuts the stem's samples to `Excerpt::samples`,
+passes `Excerpt::beats` (the beats inside, in the excerpt's time), runs
+either detector on that as if it were the whole stem, and
+`Excerpt::finish` moves the result back to song time and keeps the notes,
+chordal stretches and other notes heard that overlap the stretch, cut at
+its edges (a bend stays when it starts inside the part kept; a rise cut
+short ends at the cut). The detected audio reaches at least `PAD_S` (1 s)
+past each side of the stretch, clamped to the song, so the lead line has a
+register, a note ringing into the stretch is heard from its attack, and
+the fast-bend check can look back. Before the stretch it reaches further,
+back to the start of the whole stem's model window at or before that
+point (windows start every 36,164 samples, about 1.64 s at the model's
+rate): the model then sees the same windows as in a song-wide run, and the
+lead line inside the stretch matches the song-wide one with the same
+settings. With exactly 1 s of context the activations shifted with the
+window positions and borderline notes went the other way (on a 23 s solo
+at More fast runs with quiet notes, 62 notes against 81 song-wide; aligned,
+82, and the same 60 at the defaults). The alignment is exact in samples at
+44.1 kHz. The level gate's reference (step 3) is the excerpt's own level.
+A 23 s stretch takes about 0.2 s.
 
 ## Invariants and gotchas
 
@@ -266,8 +357,10 @@ the model.
   `cents` is within ±50 and relative to the song's offset, so a song 30
   cents flat reads as its intended notes. A guitar tuned down a half step
   still reads a half step down; the UI names shapes.
-- `Bend::semitones` is the measured size, not rounded. `release_s` is set
-  only when the pitch returns inside the note.
+- `Bend::semitones` is the measured size, not rounded, except for fast
+  bends found on the audio (step 7 of the model path), whose start is not
+  measured precisely: their size is from the note's semitone to the pitch
+  reached. `release_s` is set only when the pitch returns inside the note.
 - Beats only set the minimum note length and lower the onset threshold on
   the grid; they never move notes.
 - `Legato` and `Slide` notes follow the previous note of the same attack
@@ -284,6 +377,14 @@ section have no register yet, so a strum's top can start the line. Held
 notes are sometimes split into repeated notes where the model hears a new
 onset (vibrato, pick noise). Bends whose target carries a strong onset, or
 whose contour follows a rhythm note at the same pitch, stay two notes.
+The fast-bend check is conservative: a bend whose lower pitch sounds for
+under 15 ms, or that the model starts more than 80 ms after the pitch
+arrives, stays a plain note, and so do fast bends under E4 and bends of a
+minor third. Repeated bends where the string is not fully released
+between picks read from wherever the pick catches it, so a whole-step
+bend can read as a half-step bend from the semitone in between. A short
+grace note a half or whole step under the next note, picked between two
+semitones, can read as a fast bend.
 
 Known weaknesses of the tracker. The bend rule is a guess between bends and slides: a
 fast slide of up to 2.6 semitones whose fret steps the 10 ms frames blur
@@ -305,7 +406,7 @@ their root. Notes under 30 ms, grace notes and fast trills are merged.
 ```sh
 cargo test -p shredlab-notes
 cargo test -p shredlab-notes --release -- --nocapture four_minute
-cargo run --release -p shredlab-notes --example notes_library -- <library root> [title filter] [from-to] [stem] [--model <nmp.onnx>] [--pan <center>,<width>]
+cargo run --release -p shredlab-notes --example notes_library -- <library root> [title filter] [from-to] [stem] [--model <nmp.onnx>] [--pan <center>,<width>] [--fast fewer|normal|more] [--quiet] [--loop]
 ```
 
 The `notes_library` example runs the detector on every pitched stem of
@@ -322,8 +423,12 @@ name limits it to that stem. `--model` runs
 Basic Pitch through ONNX Runtime on the CPU for the stems that use it, as
 the app does (the repo's `models/basic_pitch/nmp.onnx` after
 `tools/setup_models.py`); `--pan` applies Refine's stereo mask (softness
-0.2) first, as the app does when the mask is on. Use it before and after a
-change, and before bumping `VERSION`.
+0.2) first, as the app does when the mask is on; `--fast` sets Fast runs
+(Normal by default) and `--quiet` includes quiet notes. `--loop` detects
+only the `from-to` stretch through `Excerpt`, as the app does for a loop
+with its own settings; compare its summary with the same run without it.
+Use it before and after a change, and
+before bumping `VERSION`.
 
 The tests synthesize plucked notes (harmonics, exponential decay, a pick
 noise burst) and sustained tones with pitch contours, and need no
@@ -348,24 +453,42 @@ notes), a lead over strumming (every lead note, no chordal stretch), low
 notes between phrases (skipped when short, kept when long and strong), a
 bend and release split by the model into three events (one note with the
 bend's size, start and release; separate notes on keys), a quick step (no
-bend, legato), a slow glide into a new note (slide), and the other notes
+bend, legato), a slow glide into a new note (slide), a fast bend in
+synthesized audio under a plain model note (renamed to the lower note
+with a whole-step bend, not on keys or without the audio) and a steady
+note with a loud pick attack (no bend), and the other notes
 heard (an arpeggio's ringing notes from where the next starts to their
 end, a skipped low note whole, no lead note repeated, named after the
-offset). `src/tests.rs`
+offset), and the note settings (a short note dropped at Fewer fast runs, a
+weak note kept only with quiet notes included). `src/tests.rs` also checks
+that the default settings keep the standard thresholds. `src/tests.rs`
 runs `detect_notes_with_model` with a fake model (window size and count,
 errors passed back) and checks that the bass never calls it (and hears no
 other notes).
 `src/basic_pitch.rs` checks the window count, frame count and times of
 the stitching, and that wrong output sizes are an error.
+`src/excerpt.rs` checks the padding (aligned to the model's windows,
+clamped to the song), the sample range and beats, and the clipping of
+notes, bends, chordal stretches and other notes heard; `src/tests.rs`
+checks that an excerpt of a synthesized melody gives the whole stem's
+notes cut to the stretch.
+`src/quick_bend.rs` checks the fast-bend check on synthesized tones: a
+glide from C6 to D6 over 40 ms (a bend from C6 with its times), a steady
+D6 with a loud pick (no bend), and a C6 still ringing when a D6 is picked
+(no bend).
 
 ## Common changes
 
-- Tuning a threshold, cost or window: change the constant in its module,
-  run the tests and `notes_library` on several songs (compare the counts
-  and look at a few stretches by ear; with `--model` for the model path),
-  and bump `VERSION`.
+- Tuning a threshold, cost or window: change the constant in its module
+  (the model path's event and lead thresholds follow the note settings,
+  in `Detail::tuning`), run the tests and `notes_library` on several songs
+  (compare the counts and look at a few stretches by ear; with `--model`
+  for the model path, and `--fast` and `--quiet` for each setting), and
+  bump `VERSION`, also when only a setting other than the defaults
+  changes: saved results don't record the thresholds they were found
+  with.
 - Changing the lead, chordal or other-notes rules of the model path:
-  update `src/lead.rs`, step 5, 7 or 8 above and the tests in
+  update `src/lead.rs`, step 5, 8 or 9 above and the tests in
   `src/lead.rs`, check a solo over rhythm guitar with and without Refine's
   stereo mask in `notes_library`, and bump `VERSION`.
 - Moving a stem between the detectors: `StemKind::uses_model`, this
@@ -376,4 +499,7 @@ the stitching, and that wrong output sizes are an error.
   `src/poly.rs`, and add it to the library example.
 - Changing the bend and slide rules: update the rule in `src/segment.rs`,
   this README's step 7, the bend, slide and legato tests, and bump
-  `VERSION`.
+  `VERSION`. On the model path, bends the model hears are in
+  `src/lead.rs` (step 4) and fast ones in `src/quick_bend.rs` (step 7);
+  check a solo with `notes_library` and compare the bend counts per stem
+  before and after.

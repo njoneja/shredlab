@@ -26,12 +26,12 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
-use shredlab_library::{BeatData, Library, NotesData, SongMeta, StemNotes, StemsInfo};
+use shredlab_library::{BeatData, Library, NotesData, NotesFast, SongMeta, StemNotes, StemsInfo};
 use shredlab_separation::selftest::Cache;
 use shredlab_separation::{
     BeatModel, DevicePref, Ep, LoadOptions, ModelEntry, ModelRegistry, ModelSource, NoteModel,
@@ -65,6 +65,11 @@ const NOTES_KEEP: usize = 4;
 /// The notes follow a changed Refine stereo mask this long after the last
 /// change (dragging the window does not start a job per step).
 const NOTES_DELAY: Duration = Duration::from_secs(1);
+/// Loop results kept per song in `loop_notes.json` (oldest dropped first).
+const LOOP_NOTES_KEEP: usize = 20;
+/// `detect_loop_notes` error of a request a newer one replaced before it
+/// started detecting.
+pub const LOOP_SUPERSEDED: &str = "Superseded by a newer loop request";
 const NO_DEVICE: &str =
     "No audio output device found. Connect speakers or headphones and restart ShredLab (separation and export still work).";
 
@@ -172,6 +177,8 @@ impl Song {
             refine: m.refine.clone(),
             strength: m.strength,
             strength_job: 0,
+            notes_fast: m.notes_fast,
+            notes_quiet: m.notes_quiet,
             tuning: m.tuning.clone(),
             chords: self.current_chords().cloned(),
             // Filled in by the caller, which holds the notes' stereo masks.
@@ -208,7 +215,8 @@ impl Song {
             .iter()
             .filter(|n| stems.iter().any(|t| t.name == **n))
             .map(|n| {
-                let src = notes_source(&key, self.loaded_strength, pans.get(*n));
+                let detail = notes_detail_for(n, &self.meta);
+                let src = notes_source(&key, self.loaded_strength, pans.get(*n), detail);
                 (n.to_string(), src)
             })
             .collect()
@@ -256,12 +264,55 @@ fn notes_kind(stem: &str) -> Option<shredlab_notes::StemKind> {
     })
 }
 
+/// The note detection settings that apply to `stem`: the song's for the
+/// stems on the note model, the defaults for the bass (the pitch tracker
+/// ignores them).
+fn notes_detail_for(stem: &str, meta: &SongMeta) -> shredlab_notes::Detail {
+    notes_detail(stem, meta.notes_fast, meta.notes_quiet)
+}
+
+/// The note detection settings `fast` and `quiet` as they apply to `stem`
+/// (the defaults for the bass).
+fn notes_detail(stem: &str, fast: NotesFast, quiet: bool) -> shredlab_notes::Detail {
+    use shredlab_notes::{Detail, Fast};
+    match notes_kind(stem) {
+        Some(k) if k.uses_model() => Detail {
+            fast: match fast {
+                NotesFast::Fewer => Fast::Fewer,
+                NotesFast::Normal => Fast::Normal,
+                NotesFast::More => Fast::More,
+            },
+            quiet,
+        },
+        _ => Detail::default(),
+    }
+}
+
+/// The offset the notes are named relative to: the measured one, or A440
+/// when the measurement is unreliable (it is noise then, as for chords).
+fn notes_offset(tuning: &shredlab_library::TuningData) -> f64 {
+    if tuning.confidence >= shredlab_tuning::MIN_CONFIDENCE
+        && tuning.peaks >= shredlab_tuning::MIN_PEAKS
+    {
+        tuning.offset_cents as f64
+    } else {
+        0.0
+    }
+}
+
 /// What a stem's notes are computed from (`StemNotes::source`): the stem
 /// set (`<model id>_s<shifts>`), the separation strength of the loaded
-/// stems (`|st<level>`, `s` added for smooth) and Refine's stereo mask when
-/// it is on (`|pan<center>:<width>:<softness>`, two decimals). Refine's EQ
-/// is not part of it: the notes ignore it.
-pub fn notes_source(stems_key: &str, strength: StrengthSetting, pan: Option<&PanParams>) -> String {
+/// stems (`|st<level>`, `s` added for smooth), Refine's stereo mask when
+/// it is on (`|pan<center>:<width>:<softness>`, two decimals), the Fast
+/// runs setting when it is not Normal (`|ffewer`, `|fmore`) and `|q` when
+/// quiet notes are included, so keys from before these settings stay
+/// valid. Refine's EQ is not part of it: the notes ignore it.
+pub fn notes_source(
+    stems_key: &str,
+    strength: StrengthSetting,
+    pan: Option<&PanParams>,
+    detail: shredlab_notes::Detail,
+) -> String {
     let mut s = format!("{stems_key}|st{}", strength.level);
     if strength.level > 0 && strength.smooth {
         s.push('s');
@@ -275,6 +326,14 @@ pub fn notes_source(stems_key: &str, strength: StrengthSetting, pan: Option<&Pan
             p.softness + 0.0
         );
     }
+    match detail.fast {
+        shredlab_notes::Fast::Normal => {}
+        shredlab_notes::Fast::Fewer => s += "|ffewer",
+        shredlab_notes::Fast::More => s += "|fmore",
+    }
+    if detail.quiet {
+        s += "|q";
+    }
     s
 }
 
@@ -282,18 +341,68 @@ pub fn notes_source(stems_key: &str, strength: StrengthSetting, pan: Option<&Pan
 /// stereo window of Refine's mask when one is set (the part the mask
 /// selects, whichever way the row's switch flips it for playback), mono.
 fn notes_input(t: &Track, pan: Option<&PanParams>) -> Vec<f32> {
-    let Some(p) = pan.filter(|p| p.enabled) else {
+    if !pan.is_some_and(|p| p.enabled) {
         return mono_of(t);
-    };
-    let n = t.len();
+    }
+    notes_input_range(t, pan, 0..t.len())
+}
+
+/// [`notes_input`] for the samples `range` of the stem only (a loop's
+/// excerpt; the stereo mask runs on the excerpt alone).
+fn notes_input_range(
+    t: &Track,
+    pan: Option<&PanParams>,
+    range: std::ops::Range<usize>,
+) -> Vec<f32> {
+    let n = range.len();
     let mut l = vec![0.0f32; n];
     let mut r = vec![0.0f32; n];
-    t.channels[0].read(0, &mut l);
-    t.channels[1].read(0, &mut r);
+    t.channels[0].read(range.start, &mut l);
+    t.channels[1].read(range.start, &mut r);
+    let Some(p) = pan.filter(|p| p.enabled) else {
+        return l.iter().zip(&r).map(|(a, b)| 0.5 * (a + b)).collect();
+    };
     let mut window = *p;
     window.invert = false;
     let [l, r] = shredlab_dsp::refine::pan_offline(&window, t.sample_rate, &l, &r);
     l.iter().zip(&r).map(|(a, b)| 0.5 * (a + b)).collect()
+}
+
+/// Source key of a loop's notes (`loop_notes.json`): the stem's source for
+/// the loop's settings ([`notes_source`]) and `|loop<start>-<end>` in
+/// whole milliseconds.
+pub fn loop_notes_source(source: &str, start_s: f64, end_s: f64) -> String {
+    let ms = |t: f64| (t * 1000.0).round() as i64;
+    format!("{source}|loop{}-{}", ms(start_s), ms(end_s))
+}
+
+/// The saved loop notes of `stem` for `source`, if current.
+fn find_loop_notes(d: &NotesData, stem: &str, source: &str) -> Option<StemNotes> {
+    if d.version != shredlab_notes::VERSION {
+        return None;
+    }
+    d.entries
+        .iter()
+        .rev()
+        .find(|e| e.stem == stem && e.source == source)
+        .cloned()
+}
+
+/// Adds a loop result to `loop_notes.json`: replaces the same (stem,
+/// source), keeps the newest [`LOOP_NOTES_KEEP`], and starts over when the
+/// saved entries are from another algorithm version.
+fn add_loop_notes_entry(d: &mut NotesData, entry: StemNotes) {
+    if d.version != shredlab_notes::VERSION {
+        *d = NotesData {
+            version: shredlab_notes::VERSION,
+            entries: Vec::new(),
+        };
+    }
+    d.entries
+        .retain(|e| !(e.stem == entry.stem && e.source == entry.source));
+    d.entries.push(entry);
+    let extra = d.entries.len().saturating_sub(LOOP_NOTES_KEEP);
+    d.entries.drain(..extra);
 }
 
 /// [`shredlab_notes::NoteAnalysis`] as stored.
@@ -489,8 +598,13 @@ pub struct Backend {
     separator: Mutex<Option<Separator>>,
     beat_model: Mutex<Option<BeatModel>>,
     /// Loaded by the first notes run that needs it; only the notes job
-    /// locks it.
+    /// and loop requests lock it.
     note_model: Mutex<Option<NoteModel>>,
+    /// Number of the newest `detect_loop_notes` request.
+    loop_notes_seq: AtomicU64,
+    /// Held while a loop request detects (one at a time, so a newer one
+    /// can supersede those still waiting).
+    loop_notes_lock: Mutex<()>,
     st: Mutex<State>,
     open_lock: Mutex<()>,
     /// The live tuner's input capture while it listens. Never locked
@@ -925,6 +1039,8 @@ impl Backend {
             separator: Mutex::new(None),
             beat_model: Mutex::new(None),
             note_model: Mutex::new(None),
+            loop_notes_seq: AtomicU64::new(0),
+            loop_notes_lock: Mutex::new(()),
             st: Mutex::new(State {
                 song: None,
                 generation: 0,
@@ -2315,7 +2431,8 @@ impl Backend {
     }
 
     /// Starts the notes job on the next pitched stem of the open song whose
-    /// notes for its current source (stem set, strength, stereo mask) are
+    /// notes for its current source (stem set, strength, stereo mask, note
+    /// detail) are
     /// not saved, once the stems, beats and a current tuning are in. One
     /// stem at a time: a running job starts the next one when it ends.
     /// Emits `notes-status` either way.
@@ -2338,18 +2455,20 @@ impl Backend {
                 .filter(|t| t.version >= shredlab_tuning::VERSION)?;
             let (stem, source) = song.notes_missing(&st.notes_pans).into_iter().next()?;
             let track = stems.iter().find(|t| t.name == stem)?.clone();
-            // An unreliable offset is noise; center on A440 then (as for chords).
-            let offset = if tuning.confidence >= shredlab_tuning::MIN_CONFIDENCE
-                && tuning.peaks >= shredlab_tuning::MIN_PEAKS
-            {
-                tuning.offset_cents as f64
-            } else {
-                0.0
-            };
+            let offset = notes_offset(tuning);
             let pan = st.notes_pans.get(&stem).copied();
-            Some((stem, source, track, beats.beats.clone(), offset, pan))
+            let detail = notes_detail_for(&stem, &song.meta);
+            Some((
+                stem,
+                source,
+                track,
+                beats.beats.clone(),
+                offset,
+                pan,
+                detail,
+            ))
         })();
-        let Some((stem, source, track, beats, offset, pan)) = start else {
+        let Some((stem, source, track, beats, offset, pan, detail)) = start else {
             drop(st);
             if let Some(s) = status {
                 self.emit("notes-status", &s);
@@ -2378,6 +2497,7 @@ impl Backend {
                 kind,
                 offset_cents: offset,
                 beats: &beats,
+                detail,
             };
             let a = b.detect_notes(&input);
             drop(samples);
@@ -2469,6 +2589,109 @@ impl Backend {
         }
     }
 
+    /// The notes of `stem` in the loop `start_s`..`end_s` of the open song,
+    /// found with the loop's own settings (`detect_loop_notes`): from
+    /// `loop_notes.json` when found before, else detected on the loop plus
+    /// [`shredlab_notes::EXCERPT_PAD_S`] on each side (the stem as the notes
+    /// job sees it, the song's beats and offset), clipped to the loop and
+    /// saved there. Only for stems on the note model. Requests detect one
+    /// at a time; one that a newer request replaced before it started
+    /// returns [`LOOP_SUPERSEDED`].
+    pub fn detect_loop_notes(
+        self: &Arc<Self>,
+        start_s: f64,
+        end_s: f64,
+        fast: NotesFast,
+        quiet: bool,
+        stem: &str,
+    ) -> Result<StemNotes, String> {
+        let seq = self.loop_notes_seq.fetch_add(1, Ordering::SeqCst) + 1;
+        let kind = notes_kind(stem)
+            .filter(|k| k.uses_model())
+            .ok_or_else(|| format!("No loop notes for the {stem} stem"))?;
+        let not_ready = || "The song's notes are not ready yet".to_string();
+        let (song_id, source, track, beats, offset, pan, detail, excerpt) = {
+            let st = lock(&self.st);
+            let song = st.song.as_ref().ok_or("No song open")?;
+            let (Some(stems), Some(key)) = (song.stems.as_ref(), song.chords_stems_key()) else {
+                return Err(not_ready());
+            };
+            let beats = song.beats.as_ref().ok_or_else(not_ready)?;
+            let tuning = song
+                .meta
+                .tuning
+                .as_ref()
+                .filter(|t| t.version >= shredlab_tuning::VERSION)
+                .ok_or_else(not_ready)?;
+            let track = stems
+                .iter()
+                .find(|t| t.name == stem)
+                .ok_or_else(|| format!("No {stem} stem"))?
+                .clone();
+            let duration = track.len() as f64 / f64::from(RATE);
+            let excerpt = shredlab_notes::Excerpt::new(start_s, end_s, duration)
+                .ok_or("The loop is too short or outside the song")?;
+            let pan = st.notes_pans.get(stem).copied();
+            let detail = notes_detail(stem, fast, quiet);
+            let source = loop_notes_source(
+                &notes_source(&key, song.loaded_strength, pan.as_ref(), detail),
+                excerpt.start_s,
+                excerpt.end_s,
+            );
+            (
+                song.meta.song_id.clone(),
+                source,
+                track,
+                beats.beats.clone(),
+                notes_offset(tuning),
+                pan,
+                detail,
+                excerpt,
+            )
+        };
+        let saved = || find_loop_notes(&self.library.load_loop_notes(&song_id), stem, &source);
+        if let Some(hit) = saved() {
+            return Ok(hit);
+        }
+        let _one = lock(&self.loop_notes_lock);
+        if self.loop_notes_seq.load(Ordering::SeqCst) != seq {
+            return Err(LOOP_SUPERSEDED.into());
+        }
+        // An identical request may have finished while this one waited.
+        if let Some(hit) = saved() {
+            return Ok(hit);
+        }
+        let t0 = Instant::now();
+        let samples = notes_input_range(&track, pan.as_ref(), excerpt.samples(RATE, track.len()));
+        drop(track);
+        let beats = excerpt.beats(&beats);
+        let input = shredlab_notes::NoteInput {
+            samples: &samples,
+            sample_rate: RATE,
+            kind,
+            offset_cents: offset,
+            beats: &beats,
+            detail,
+        };
+        let a = excerpt.finish(self.detect_notes(&input));
+        let entry = stem_notes(stem.to_string(), source, &a);
+        log!(
+            "loop notes for {song_id} {stem} ({}): {} notes, {} chordal stretches, {} others heard in {:.2}s",
+            entry.source,
+            entry.notes.len(),
+            entry.chordal.len(),
+            entry.others.len(),
+            t0.elapsed().as_secs_f64()
+        );
+        if let Err(e) = self
+            .library
+            .update_loop_notes(&song_id, |d| add_loop_notes_entry(d, entry.clone()))
+        {
+            log!("cannot save loop notes: {e}");
+        }
+        Ok(entry)
+    }
+
     /// Lets the notes follow changed Refine stereo masks, [`NOTES_DELAY`]
     /// after the last change (now with `force`): stems whose new source is
     /// saved get it at once (`notes-ready`), the others are queued.
@@ -2507,6 +2730,48 @@ impl Backend {
             self.emit("notes-ready", &r);
         }
         self.maybe_spawn_notes();
+    }
+
+    /// Sets the open song's note detection settings, Fast runs and Quiet
+    /// notes together (saved at once): stems whose notes for the new
+    /// settings are saved get them at once (`notes-ready`), the others are
+    /// queued (`notes-status`).
+    pub fn set_notes_options(self: &Arc<Self>, fast: NotesFast, quiet: bool) -> Result<(), String> {
+        let (song_id, ready) = {
+            let mut st = lock(&self.st);
+            let pans = st.notes_pans.clone();
+            let song = st.song.as_mut().ok_or("No song open")?;
+            if song.meta.notes_fast == fast && song.meta.notes_quiet == quiet {
+                return Ok(());
+            }
+            let old = song.notes_sources(&pans);
+            song.meta.notes_fast = fast;
+            song.meta.notes_quiet = quiet;
+            let ready = song
+                .notes_sources(&pans)
+                .into_iter()
+                .filter(|s| !old.contains(s))
+                .filter_map(|(stem, source)| {
+                    let notes = song.saved_notes(&stem, &source)?.clone();
+                    Some(NotesReady {
+                        song_id: song.meta.song_id.clone(),
+                        stem,
+                        source,
+                        notes,
+                    })
+                })
+                .collect::<Vec<_>>();
+            (song.meta.song_id.clone(), ready)
+        };
+        let saved = self.library.update(&song_id, |m| {
+            m.notes_fast = fast;
+            m.notes_quiet = quiet;
+        });
+        for r in ready {
+            self.emit("notes-ready", &r);
+        }
+        self.maybe_spawn_notes();
+        saved.map(|_| ()).map_err(|e| e.to_string())
     }
 
     // ------------------------------------------------------------ beats
@@ -4179,8 +4444,9 @@ mod tests {
     fn notes_source_keys() {
         use shredlab_dsp::refine::PanParams;
         let natural = StrengthSetting::default();
+        let normal = shredlab_notes::Detail::default();
         assert_eq!(
-            notes_source("htdemucs_6s_s2", natural, None),
+            notes_source("htdemucs_6s_s2", natural, None, normal),
             "htdemucs_6s_s2|st0"
         );
         let tight = StrengthSetting {
@@ -4189,16 +4455,45 @@ mod tests {
         };
         let left = PanParams::left();
         assert_eq!(
-            notes_source("m_s1", tight, Some(&left)),
+            notes_source("m_s1", tight, Some(&left), normal),
             "m_s1|st4s|pan-1.00:1.34:0.20"
         );
+        // The note settings are added when they are not the defaults.
+        use shredlab_notes::{Detail, Fast};
+        let more = Detail {
+            fast: Fast::More,
+            quiet: true,
+        };
+        assert_eq!(
+            notes_source("m_s1", tight, Some(&left), more),
+            "m_s1|st4s|pan-1.00:1.34:0.20|fmore|q"
+        );
+        let fewer = Detail {
+            fast: Fast::Fewer,
+            quiet: false,
+        };
+        assert_eq!(
+            notes_source("m_s1", natural, None, fewer),
+            "m_s1|st0|ffewer"
+        );
+        let quiet = Detail {
+            fast: Fast::Normal,
+            quiet: true,
+        };
+        assert_eq!(notes_source("m_s1", natural, None, quiet), "m_s1|st0|q");
+        // The bass ignores them.
+        let mut meta = SongMeta::new("x", std::path::Path::new("x.wav"), Default::default(), 1.0);
+        meta.notes_fast = NotesFast::More;
+        meta.notes_quiet = true;
+        assert_eq!(notes_detail_for("bass", &meta), normal);
+        assert_eq!(notes_detail_for("guitar", &meta), more);
         // Smooth means nothing at Natural; a disabled mask is no mask.
         let smooth0 = StrengthSetting {
             level: 0,
             smooth: true,
         };
         assert_eq!(
-            notes_source("m_s1", smooth0, Some(&PanParams::default())),
+            notes_source("m_s1", smooth0, Some(&PanParams::default()), normal),
             "m_s1|st0"
         );
         let center = PanParams {
@@ -4206,7 +4501,7 @@ mod tests {
             ..PanParams::center()
         };
         assert_eq!(
-            notes_source("m_s1", natural, Some(&center)),
+            notes_source("m_s1", natural, Some(&center), normal),
             "m_s1|st0|pan0.00:0.66:0.20"
         );
     }
@@ -4328,6 +4623,33 @@ mod tests {
         assert!(lock(&b.st).notes_job.is_none());
         assert!(lock(&events).iter().any(|e| e == "notes-ready"));
 
+        // More fast runs and quiet notes, set together: saved with the
+        // song, the guitar computed for them once; the bass (pitch tracker)
+        // keeps its notes.
+        b.set_notes_options(NotesFast::More, true).unwrap();
+        let m = b.library.load(&id).unwrap().unwrap();
+        assert_eq!((m.notes_fast, m.notes_quiet), (NotesFast::More, true));
+        wait(&b, "guitar", "test_s1|st0|fmore|q");
+        {
+            let st = lock(&b.st);
+            let song = st.song.as_ref().unwrap();
+            assert!(song.notes_missing(&st.notes_pans).is_empty());
+            let cur = song.current_notes(&st.notes_pans);
+            assert!(cur
+                .iter()
+                .any(|n| n.stem == "bass" && n.source == "test_s1|st0"));
+        }
+        // Back to the defaults: the saved notes, no new job.
+        lock(&events).clear();
+        b.set_notes_options(NotesFast::Normal, false).unwrap();
+        assert!(lock(&b.st).notes_job.is_none());
+        assert!(lock(&events).iter().any(|e| e == "notes-ready"));
+        assert!(b
+            .open_song(wav.to_str().unwrap())
+            .unwrap()
+            .notes_pending
+            .is_empty());
+
         // Another strength: the loaded stems change, so do the sources.
         b.set_strength(StrengthSetting {
             level: 2,
@@ -4337,5 +4659,126 @@ mod tests {
         wait_strength(&b);
         wait(&b, "guitar", "test_s1|st2");
         wait(&b, "bass", "test_s1|st2");
+    }
+
+    #[test]
+    fn loop_notes_keys_and_cache() {
+        assert_eq!(
+            loop_notes_source("m_s1|st0|fmore|q", 209.0004, 232.4996),
+            "m_s1|st0|fmore|q|loop209000-232500"
+        );
+        assert_eq!(
+            loop_notes_source("m_s1|st0", 1.2345, 2.0),
+            "m_s1|st0|loop1235-2000"
+        );
+        let entry = |stem: &str, src: &str| StemNotes {
+            stem: stem.into(),
+            source: src.into(),
+            ..Default::default()
+        };
+        let mut d = NotesData {
+            version: shredlab_notes::VERSION + 1,
+            entries: vec![entry("guitar", "old")],
+        };
+        // Another algorithm version: dropped, and never found.
+        assert!(find_loop_notes(&d, "guitar", "old").is_none());
+        for i in 0..LOOP_NOTES_KEEP + 5 {
+            add_loop_notes_entry(&mut d, entry("guitar", &format!("l{i}")));
+        }
+        // The same key again moves to the end instead of repeating.
+        add_loop_notes_entry(&mut d, entry("guitar", "l10"));
+        add_loop_notes_entry(&mut d, entry("vocals", "l10"));
+        assert_eq!(d.version, shredlab_notes::VERSION);
+        assert_eq!(d.entries.len(), LOOP_NOTES_KEEP);
+        let keys: Vec<String> = d
+            .entries
+            .iter()
+            .map(|e| format!("{}:{}", e.stem, e.source))
+            .collect();
+        assert_eq!(keys[0], "guitar:l6");
+        assert_eq!(keys[LOOP_NOTES_KEEP - 2..], ["guitar:l10", "vocals:l10"]);
+        assert!(find_loop_notes(&d, "guitar", "l5").is_none());
+        assert!(find_loop_notes(&d, "guitar", "l6").is_some());
+        assert!(find_loop_notes(&d, "bass", "l10").is_none());
+    }
+
+    #[test]
+    fn loop_notes_detect_the_loop_alone_and_are_cached() {
+        let (b, _) = test_backend("loop-notes");
+        let (id, wav) = song_with_stems(&b);
+        let beats: Vec<f64> = (0..6).map(|k| 0.25 + 0.5 * k as f64).collect();
+        b.library
+            .update(&id, |m| {
+                m.beats = Some(BeatData {
+                    downbeats: vec![beats[0], beats[4]],
+                    downbeat_scores: vec![0.0; beats.len()],
+                    downbeat_version: shredlab_beats::DOWNBEAT_DECODER_VERSION,
+                    bpm: Some(120.0),
+                    beats_per_bar: Some(4),
+                    beats,
+                });
+                m.tuning = Some(shredlab_library::TuningData {
+                    version: shredlab_tuning::VERSION,
+                    reference_hz: 440.0,
+                    ..Default::default()
+                });
+            })
+            .unwrap();
+        // Before a song is open, and for the bass: errors.
+        assert!(b
+            .detect_loop_notes(0.5, 2.0, NotesFast::More, true, "guitar")
+            .is_err());
+        b.open_song(wav.to_str().unwrap()).unwrap();
+        assert!(b
+            .detect_loop_notes(0.5, 2.0, NotesFast::More, true, "bass")
+            .is_err());
+        assert!(b
+            .detect_loop_notes(2.99, 9.0, NotesFast::More, true, "guitar")
+            .is_err());
+        let n = b
+            .detect_loop_notes(0.5, 2.0, NotesFast::More, true, "guitar")
+            .unwrap();
+        assert_eq!(n.stem, "guitar");
+        assert_eq!(n.source, "test_s1|st0|fmore|q|loop500-2000");
+        assert!(n
+            .notes
+            .iter()
+            .all(|x| x.start_s >= 0.5 && x.end_s <= 2.0 && x.start_s < x.end_s));
+        assert!(n.chordal.iter().all(|c| c[0] >= 0.5 && c[1] <= 2.0));
+        assert!(!n.notes.is_empty() || !n.chordal.is_empty());
+        // Saved beside song.json, not in it, and returned from there.
+        let saved = b.library.load_loop_notes(&id);
+        assert_eq!(saved.entries, vec![n.clone()]);
+        let again = b
+            .detect_loop_notes(0.5, 2.0, NotesFast::More, true, "guitar")
+            .unwrap();
+        assert_eq!(again, n);
+        assert_eq!(b.library.load_loop_notes(&id).entries.len(), 1);
+        let meta = b.library.load(&id).unwrap().unwrap();
+        assert_eq!(meta.notes_fast, NotesFast::Normal);
+        assert!(!meta.notes_quiet);
+        assert!(meta
+            .notes
+            .is_none_or(|d| d.entries.iter().all(|e| !e.source.contains("loop"))));
+        // Other settings or another range: another entry.
+        b.detect_loop_notes(0.5, 2.0, NotesFast::Normal, false, "guitar")
+            .unwrap();
+        b.detect_loop_notes(0.0, 1.0, NotesFast::More, true, "guitar")
+            .unwrap();
+        let keys: Vec<String> = b
+            .library
+            .load_loop_notes(&id)
+            .entries
+            .iter()
+            .map(|e| e.source.clone())
+            .collect();
+        assert_eq!(
+            keys,
+            [
+                "test_s1|st0|fmore|q|loop500-2000",
+                "test_s1|st0|loop500-2000",
+                "test_s1|st0|fmore|q|loop0-1000"
+            ]
+        );
     }
 }

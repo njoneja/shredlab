@@ -10,7 +10,7 @@
 
 import { noteOf, spellingFor, type ChordFrame } from "./chords.ts";
 import { quickOf } from "./refine.ts";
-import type { ChordsData, NoteSpan, PanParams, StemName, StemNotes } from "./types";
+import type { ChordsData, NotesFast, NoteSpan, PanParams, StemName, StemNotes } from "./types";
 
 /** Stems with notes, in the stem picker's order. */
 export const NOTE_STEMS: StemName[] = ["guitar", "bass", "vocals", "piano", "other"];
@@ -276,4 +276,110 @@ export function pickNotesStem(
   if (available.includes("guitar") && (hasNotes("guitar") || pending("guitar"))) return "guitar";
   if (available.includes("bass")) return "bass";
   return available.find(hasNotes) ?? available[0] ?? null;
+}
+
+/** A stretch of the song in seconds. */
+export interface Span {
+  start: number;
+  end: number;
+}
+
+/** The notes panel's two note settings (Fast runs, Quiet notes). */
+export interface NoteSettings {
+  fast: NotesFast;
+  quiet: boolean;
+}
+
+/** A loop's own note settings, for the loop they were set on. */
+export type LoopNoteSettings = NoteSettings & Span;
+
+/** The same stretch (to the millisecond, as the backend keys loop results). */
+export function sameSpan(a: Span | null | undefined, b: Span | null | undefined): boolean {
+  if (!a || !b) return false;
+  return Math.round(a.start * 1000) === Math.round(b.start * 1000) && Math.round(a.end * 1000) === Math.round(b.end * 1000);
+}
+
+/**
+ * What the panel's note settings apply to and show: with a loop on, the loop
+ * (its own settings when they were set on this loop, else the song's); with
+ * none, the song. `own` is true when the loop's settings differ from the
+ * song's, so its notes have to be found for it.
+ */
+export function panelNoteSettings(
+  song: NoteSettings,
+  loop: Span | null,
+  own: LoopNoteSettings | null,
+): NoteSettings & { scope: "loop" | "song"; own: boolean } {
+  if (!loop) return { ...song, scope: "song", own: false };
+  const s = own && sameSpan(own, loop) ? own : song;
+  const differs = s.fast !== song.fast || s.quiet !== song.quiet;
+  return { fast: s.fast, quiet: s.quiet, scope: "loop", own: differs };
+}
+
+/** The parts of `a`..`b` outside `range` (none, one or two). */
+function outside(a: number, b: number, range: Span): [number, number][] {
+  const out: [number, number][] = [];
+  if (a < range.start) out.push([a, Math.min(b, range.start)]);
+  if (b > range.end) out.push([Math.max(a, range.end), b]);
+  return out.filter(([x, y]) => y > x);
+}
+
+/** `a`..`b` cut to `range`, or null when they don't overlap. */
+function inside(a: number, b: number, range: Span): [number, number] | null {
+  const x = Math.max(a, range.start);
+  const y = Math.min(b, range.end);
+  return y > x ? [x, y] : null;
+}
+
+/** A note moved to `start`..`end`; its bend stays only if it starts there (its rise cut at the end). */
+function cutNote(n: NoteSpan, start: number, end: number): NoteSpan {
+  if (start === n.start_s && end === n.end_s) return n;
+  const out: NoteSpan = { ...n, start_s: start, end_s: end };
+  const b = n.bend;
+  if (b) {
+    if (b.start_s < start || b.start_s >= end) delete out.bend;
+    else out.bend = { ...b, peak_s: Math.min(b.peak_s, end), release_s: b.release_s != null && b.release_s < end ? b.release_s : null };
+  }
+  return out;
+}
+
+/**
+ * What the notes panel shows for one stem while a loop has its own note
+ * settings: the song's notes, chordal stretches and other notes heard
+ * outside `range` (cut at its edges), and the loop's inside it (`loop`, as
+ * `detect_loop_notes` returns it, already clipped). With `loop` null (its
+ * notes are still being found) the loop stays empty. Without a range, the
+ * song's notes as they are.
+ */
+export function withLoopNotes(song: StemNotes | null | undefined, loop: StemNotes | null, range: Span | null): StemNotes | undefined {
+  if (!range) return song ?? undefined;
+  if (!song && !loop) return undefined;
+  const notes: NoteSpan[] = [];
+  for (const n of song?.notes ?? []) for (const [a, b] of outside(n.start_s, n.end_s, range)) notes.push(cutNote(n, a, b));
+  for (const n of loop?.notes ?? []) {
+    const c = inside(n.start_s, n.end_s, range);
+    if (c) notes.push(cutNote(n, c[0], c[1]));
+  }
+  notes.sort((a, b) => a.start_s - b.start_s);
+  const chordal: [number, number][] = [];
+  for (const [s, e] of song?.chordal ?? []) chordal.push(...outside(s, e, range));
+  for (const [s, e] of loop?.chordal ?? []) {
+    const c = inside(s, e, range);
+    if (c) chordal.push(c);
+  }
+  chordal.sort((a, b) => a[0] - b[0]);
+  const heard: HeardSpan[] = [];
+  for (const h of parseHeard(song?.others)) for (const [a, b] of outside(h.start_s, h.end_s, range)) heard.push({ ...h, start_s: a, end_s: b });
+  for (const h of parseHeard(loop?.others)) {
+    const c = inside(h.start_s, h.end_s, range);
+    if (c) heard.push({ ...h, start_s: c[0], end_s: c[1] });
+  }
+  heard.sort((a, b) => a.start_s - b.start_s);
+  return {
+    stem: (song ?? loop)!.stem,
+    source: song?.source ?? loop!.source,
+    notes,
+    ...(chordal.length ? { chordal } : {}),
+    ...(heard.length ? { others: formatHeard(heard) } : {}),
+  };
 }
