@@ -56,7 +56,7 @@ xattr -dr com.apple.quarantine /Applications/ShredLab.app
 How to use it: [docs/HELP.md](docs/HELP.md). What's planned:
 [ROADMAP.md](ROADMAP.md).
 
-![ShredLab: waveform with bar numbers and an A–B loop, six stem rows with on/off switch, Refine, solo and volume, the Refine panel for guitar (stereo exception and EQ), and the transport with click, count-in, play, A–B loop, speed and pitch](docs/images/screenshot.webp)
+![ShredLab: waveform with bar numbers, an A–B loop and a chord lane; the Chords panel fitted to the loop; the Notes panel for the bass with Fast runs and Quiet notes; stem rows with on/off switch, Refine, solo and volume, and the Refine panel for guitar (stereo exception and EQ); and the transport with click, count-in, play, A–B loop, speed, tuning and pitch](docs/images/screenshot.webp)
 
 ## Repository layout
 
