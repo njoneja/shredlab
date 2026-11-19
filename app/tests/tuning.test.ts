@@ -9,6 +9,7 @@ import {
   driftSummary,
   holdStep,
   matchString,
+  noInputHint,
   tuneAdvice,
   tunerLowHz,
   tunerTarget,
@@ -250,4 +251,13 @@ test("tuning guess: candidates, headline and evidence", () => {
   assert.equal(guessEvidence(g(26, false)), "the bass goes down to D1");
   const note = (m: number) => guessEvidence(g(m, false)).split(" ").pop();
   assert.deepEqual([28, 25, 24, 23].map(note), ["E1", "C#1", "C1", "B0"]);
+});
+
+test("the no-input hint names each platform's microphone setting", () => {
+  const mac = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15";
+  const win = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Edg/131.0";
+  const linux = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/605.1.15";
+  assert.match(noInputHint(mac), /System Settings > Privacy & Security > Microphone/);
+  assert.match(noInputHint(win), /Let desktop apps access your microphone/);
+  assert.match(noInputHint(linux), /input device/);
 });

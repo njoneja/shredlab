@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!-- SPDX-FileCopyrightText: 2026 Navneet Joneja -->
+<!-- Merged into the macOS app's Info.plist by the Tauri bundler. Without
+     the usage text, macOS refuses or silences the live tuner's input. -->
+<plist version="1.0">
+<dict>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>ShredLab listens to your instrument for the live tuner.</string>
+</dict>
+</plist>

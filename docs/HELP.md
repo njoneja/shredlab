@@ -136,9 +136,12 @@ press `T`, to open the Tuning panel.
   the tuner listens, and pressing Play stops the tuner so the speakers
   don't feed the microphone; **Listen again** starts it again. The tuner
   stops when you switch tabs or close the panel.
-- If the level meter stays empty on Windows, the microphone may be blocked:
-  check Settings > Privacy & security > Microphone > Let desktop apps
-  access your microphone.
+- The first time the tuner listens on macOS, macOS asks whether ShredLab
+  may use the microphone; choose Allow.
+- If the level meter stays empty, the microphone may be blocked. On
+  Windows, check Settings > Privacy & security > Microphone > Let desktop
+  apps access your microphone. On macOS, check System Settings > Privacy &
+  Security > Microphone and turn on ShredLab.
 
 ## Chords
 

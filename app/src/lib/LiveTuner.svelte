@@ -15,6 +15,7 @@
     formatCents,
     formatHz,
     holdStep,
+    noInputHint,
     strings,
     tuneAdvice,
     tunerTarget,
@@ -26,6 +27,8 @@
   const LIVE_MS = 600;
   /** Needle smoothing per reading (about 30 a second). */
   const SMOOTH = 0.35;
+  /** What to check when the input stays silent, for this platform. */
+  const NO_INPUT_HINT = noInputHint(navigator.userAgent);
 
   const my = $derived(app.myTuning);
   const strs = $derived(strings(my));
@@ -180,7 +183,7 @@
         {/if}
       </div>
       {#if noInput}
-        <p class="msg small">No input. Check Settings &gt; Privacy &amp; security &gt; Microphone &gt; Let desktop apps access your microphone.</p>
+        <p class="msg small">No input. {NO_INPUT_HINT}</p>
       {/if}
     {/if}
   </div>

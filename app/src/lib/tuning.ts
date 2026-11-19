@@ -431,6 +431,19 @@ export const NO_INPUT_DB = -119;
 /** Digital silence this long shows the "No input" hint. */
 export const NO_INPUT_MS = 2000;
 
+/** What to check when the input is silent, for the platform the app runs
+ * on (from the webview's user agent): the microphone privacy setting on
+ * macOS and Windows, the device and its level elsewhere. */
+export function noInputHint(userAgent: string): string {
+  if (/Mac/.test(userAgent)) {
+    return "Check System Settings > Privacy & Security > Microphone and turn on ShredLab.";
+  }
+  if (/Windows/.test(userAgent)) {
+    return "Check Settings > Privacy & security > Microphone > Let desktop apps access your microphone.";
+  }
+  return "Check that the input device is connected and its level is up in the system sound settings.";
+}
+
 /** Cents from `targetHz` to `hz` (negative = flat). */
 export function centsOff(hz: number, targetHz: number): number {
   return 1200 * Math.log2(hz / targetHz);
